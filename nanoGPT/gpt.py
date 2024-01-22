@@ -20,6 +20,7 @@ elif torch.backends.mps.is_available():
     DEVICE = "mps"
 else:
     DEVICE = "cpu"
+N_EMBD = 32
 
 
 class BigramLanguageModel(nn.Module):
@@ -28,7 +29,11 @@ class BigramLanguageModel(nn.Module):
 
         # Each token will read the logits for the next token from a lookup table
         # Embedding table of size vocab_size x vocab_size
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size, N_EMBD)
+        # Positional embedding - not useful now, bigram is translation-invariant
+        self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
+        # Linear layer
+        self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
         """
@@ -39,12 +44,17 @@ class BigramLanguageModel(nn.Module):
             targets: target embedding, same size as idx
 
         Returns:
-            logits - row 'idx' of the token embedding table; size is BxTxC
+            logits - row 'idx' of the token embedding table; size is
+                BxTxvocab_size
         """
+        B, T = idx.shape
 
         # The logits returned are the ones in row idx of the table
-        # This is arranged in a tensor of size Batch x Time x Channel
-        logits = self.token_embedding_table(idx)
+        # This is arranged in a tensor of size Batch x Time x Channel(=N_EMBED)
+        tok_emb = self.token_embedding_table(idx)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=DEVICE))
+        x = tok_emb + pos_emb  # (B, T, C)
+        logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is not None:
             # Conform to PyTorch's specs
