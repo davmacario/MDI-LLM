@@ -15,10 +15,13 @@ LEARNING_RATE = 1e-3
 EVAL_INTERVAL = 500
 EVAL_ITERS = 200
 if torch.cuda.is_available():
+    print("Running on CUDA")
     DEVICE = "cuda"
 elif torch.backends.mps.is_available():
+    print("Running on MPS")
     DEVICE = "mps"
 else:
+    print("Running on CPU")
     DEVICE = "cpu"
 N_EMBD = 32
 
@@ -184,7 +187,7 @@ def main():
         x, y = x.to(DEVICE), y.to(DEVICE)
         return x, y
 
-    @torch.no_grad()
+    @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
     def estimate_loss():
         """
         Evaluate the mean loss over a fixed number of iterations during training.
