@@ -221,6 +221,9 @@ class GPT(nn.Module):
         return idx
 
 
+# -----------------------------------------------------------------------------
+
+
 def main():
     in_file = os.path.join(CURR_DIR, "input.txt")
     # in_file = os.path.join(CURR_DIR, "divina_commedia.txt")
@@ -338,6 +341,9 @@ def main():
     if VERB:
         print(f"Loss: {loss.item()}")
 
+    # Switch to eval mode and generate text
+    m.eval()
+    # Start generation by feeding tensor [[0]]
     idx = torch.zeros((1, 1), dtype=torch.long).to(DEVICE)
     gen_text = decode(m.generate(idx, max_new_tokens=10000)[0].tolist())
     if VERB:
