@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 VERB = True
 CURR_DIR = os.path.dirname(__file__)
-BLOCK_SIZE = 256  # (context length in chars)
+BLOCK_SIZE = 128  # (context length in chars)
 BATCH_SIZE = 64
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
