@@ -133,12 +133,12 @@ class Block(nn.Module):
         return x
 
 
-class BigramLanguageModel(nn.Module):
-    """Bigram language model using MHA"""
+class GPT(nn.Module):
+    """GPT implementation"""
 
     def __init__(self, vocab_size):
         """
-        Create BigramLanguageModel object.
+        Create GPT object.
 
         Args:
             vocab_size: size of the used vocabulary, necessary for token
@@ -222,8 +222,8 @@ class BigramLanguageModel(nn.Module):
 
 
 def main():
-    # in_file = os.path.join(CURR_DIR, "input.txt")
-    in_file = os.path.join(CURR_DIR, "divina_commedia.txt")
+    in_file = os.path.join(CURR_DIR, "input.txt")
+    # in_file = os.path.join(CURR_DIR, "divina_commedia.txt")
 
     with open(in_file, "r", encoding="utf-8") as f:
         text = f.read()
@@ -298,7 +298,7 @@ def main():
     xb, yb = get_batch("train")
 
     torch.manual_seed(1337)
-    model = BigramLanguageModel(vocab_size)
+    model = GPT(vocab_size)
     m = model.to(DEVICE)
     # Print number of parameters
     print(sum(p.numel() for p in m.parameters()) / 1e6, "M parameters")
