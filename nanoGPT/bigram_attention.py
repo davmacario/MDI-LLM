@@ -10,6 +10,9 @@ VERB = True
 CURR_DIR = os.path.dirname(__file__)
 BLOCK_SIZE = 8  # (context length)
 BATCH_SIZE = 32
+N_EMBD = 32
+N_HEADS = 4
+
 N_ITER_TRAIN = 20000
 LEARNING_RATE = 1e-3
 EVAL_INTERVAL = 500
@@ -23,7 +26,6 @@ elif torch.backends.mps.is_available():
 else:
     print("Running on CPU")
     DEVICE = "cpu"
-N_EMBD = 32
 
 
 class Head(nn.Module):
@@ -61,17 +63,64 @@ class Head(nn.Module):
         return out
 
 
-class BigramLanguageModel(nn.Module):
-    def __init__(self, vocab_size):
+class MultiHeadAttention(nn.Module):
+    """
+    Multi-Head Attention module: use multiple attention heads in parallel.
+    """
+
+    def __init__(self, num_heads, head_size):
         super().__init__()
 
+        # Create a Module List containing all the heads
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        # The output is the concatenation of the outputs from each head
+        # Concat. on "last" dim
+        return torch.cat([h(x) for h in self.heads], dim=-1)
+
+
+class FeedForward(nn.Module):
+    """Simple linear layer, used after MHA"""
+
+    def __init__(self, n_embd):
+        """
+        Create feed-forward layer.
+
+        Args:
+            n_embd: number of input and output embeddings (i.e., neurons)
+        """
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class BigramLanguageModel(nn.Module):
+    """Bigram language model using MHA"""
+
+    def __init__(self, vocab_size):
+        """
+        Create BigramLanguageModel object.
+
+        Args:
+            vocab_size: size of the used vocabulary, necessary for token
+                embedding
+        """
+        super().__init__()
         # Each token will read the logits for the next token from a lookup table
         # Embedding table of size vocab_size x vocab_size
         self.token_embedding_table = nn.Embedding(vocab_size, N_EMBD)
         # Positional embedding - not useful now, bigram is translation-invariant
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
-        # Attention head
-        self.sa_head = Head(N_EMBD)
+        # Multi-head attention (4 heads, 8-dim each)
+        self.sa_heads = MultiHeadAttention(N_HEADS, N_EMBD // N_HEADS)
+        # Feed-forward layer
+        self.ffwd = FeedForward(N_EMBD)
         # Linear layer
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
@@ -95,7 +144,8 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=DEVICE))
         x = tok_emb + pos_emb  # (B, T, C)
         # NOTE: pass the encoded token (token + position embeddings)
-        x = self.sa_head(x)
+        x = self.sa_heads(x)  # (B, T, C) - see def above
+        x = self.ffwd(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is not None:
