@@ -238,7 +238,7 @@ class BigramLanguageModel(nn.Module):
 
 
 def main():
-    in_file = os.path.join(CURR_DIR, "input.txt")
+    in_file = os.path.join(CURR_DIR, "..", "input.txt")
 
     with open(in_file, "r", encoding="utf-8") as f:
         text = f.read()
