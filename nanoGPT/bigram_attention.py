@@ -350,7 +350,7 @@ def main():
         print(f"Loss: {loss.item()}")
 
     idx = torch.zeros((1, 1), dtype=torch.long).to(DEVICE)
-    gen_text = decode(m.generate(idx, max_new_tokens=100)[0].tolist())
+    gen_text = decode(m.generate(idx, max_new_tokens=10000)[0].tolist())
     if VERB:
         print("After training:")
         print(gen_text)
