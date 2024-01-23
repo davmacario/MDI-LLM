@@ -6,12 +6,28 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from sub.config import (BATCH_SIZE, BLOCK_SIZE, DEVICE, DROPOUT, EVAL_INTERVAL,
-                        EVAL_ITERS, LEARNING_RATE, N_EMBD, N_HEADS,
-                        N_ITER_TRAIN, N_LAYER)
-
 VERB = True
 CURR_DIR = os.path.dirname(__file__)
+BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
+BATCH_SIZE = 64  # affects VRAM
+N_EMBD = 384  # Number of token embeddings processed at each time instant
+N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
+N_LAYER = 6  # Number of transformer blocks
+DROPOUT = 0.2  # Dropout probability
+
+N_ITER_TRAIN = 10000
+LEARNING_RATE = 3e-4
+EVAL_INTERVAL = 500
+EVAL_ITERS = 200
+if torch.cuda.is_available():
+    print("Running on CUDA")
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    print("Running on MPS")
+    DEVICE = "mps"
+else:
+    print("Running on CPU")
+    DEVICE = "cpu"
 
 
 class Head(nn.Module):
@@ -36,7 +52,7 @@ class Head(nn.Module):
     def forward(self, x: torch.Tensor):
         """Forward pass, single attention head"""
         _, T, _ = x.shape  # (B, T, C)
-        k = self.key(x)  # (B, T, hs) - hs: "head size"
+        k = self.key(x)  # (B, T, hs)
         q = self.query(x)  # (B, T, hs)
 
         # Compute attention scores
@@ -47,8 +63,8 @@ class Head(nn.Module):
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
         wei = self.dropout(wei)
         # Weighted aggregation
-        v = self.value(x)  # (B, T, hs)
-        out = wei @ v  # (B, T, T) @ (B, T, hs) -> (B, T, hs)
+        v = self.value(x)  # (B, T, C)
+        out = wei @ v  # (B, T, T) @ (B, T, C) -> (B, T, C)
 
         return out
 
