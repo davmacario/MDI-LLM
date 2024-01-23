@@ -15,7 +15,7 @@ N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
 N_LAYER = 6  # Number of transformer blocks
 DROPOUT = 0.2  # Dropout probability
 
-N_ITER_TRAIN = 5000
+N_ITER_TRAIN = 10000
 LEARNING_RATE = 3e-4
 EVAL_INTERVAL = 500
 EVAL_ITERS = 200
