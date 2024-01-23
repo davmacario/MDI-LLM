@@ -8,13 +8,15 @@ from torch.nn import functional as F
 
 VERB = True
 CURR_DIR = os.path.dirname(__file__)
-BLOCK_SIZE = 8  # (context length)
-BATCH_SIZE = 32
-N_EMBD = 32
-N_HEADS = 4
+BLOCK_SIZE = 256  # (context length in chars)
+BATCH_SIZE = 64
+N_EMBD = 384  # Number of token embeddings processed at each time instant
+N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
+N_LAYER = 6  # Number of transformer blocks
+DROPOUT = 0.2  # Dropout probability
 
-N_ITER_TRAIN = 20000
-LEARNING_RATE = 1e-3
+N_ITER_TRAIN = 5000
+LEARNING_RATE = 3e-4
 EVAL_INTERVAL = 500
 EVAL_ITERS = 200
 if torch.cuda.is_available():
@@ -45,6 +47,8 @@ class Head(nn.Module):
             "tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))
         )
 
+        self.dropout = nn.Dropout(DROPOUT)
+
     def forward(self, x: torch.Tensor):
         """Forward pass, single attention head"""
         B, T, C = x.shape
@@ -56,6 +60,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2, -1) * (C**-0.5)  # (B, T, C) @ (B, C, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
+        wei = self.dropout(wei)
         # Weighted aggregation
         v = self.value(x)  # (B, T, C)
         out = wei @ v  # (B, T, T) @ (B, T, C) -> (B, T, C)
@@ -76,12 +81,13 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         # Projection - linear transform. of the output of attention heads
         self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):
         # The output is the concatenation of the outputs from each head
         # Concat. on "last" dim
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 
@@ -103,6 +109,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),  # Projection layer
+            nn.Dropout(DROPOUT),
         )
 
     def forward(self, x):
@@ -160,11 +167,9 @@ class BigramLanguageModel(nn.Module):
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
         # Transformer blocks
         self.blocks = nn.Sequential(
-            Block(N_EMBD, N_HEADS),
-            Block(N_EMBD, N_HEADS),
-            Block(N_EMBD, N_HEADS),
-            nn.LayerNorm(N_EMBD),
+            *[Block(N_EMBD, N_HEADS) for _ in range(N_LAYER)]
         )
+        self.ln_f = nn.LayerNorm(N_EMBD)
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
