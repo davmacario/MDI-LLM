@@ -70,14 +70,19 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, num_heads, head_size):
         super().__init__()
+        n_embd = num_heads * head_size
 
         # Create a Module List containing all the heads
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        # Projection - linear transform. of the output of attention heads
+        self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(self, x):
         # The output is the concatenation of the outputs from each head
         # Concat. on "last" dim
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
 
 
 class FeedForward(nn.Module):
@@ -91,13 +96,49 @@ class FeedForward(nn.Module):
             n_embd: number of input and output embeddings (i.e., neurons)
         """
         super().__init__()
+        # The 4* comes from the Transformer paper + the final linear layer is
+        # necessary for residual connections & it brings the dimension down
+        # to the value we want (n_embd)
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),  # Projection layer
         )
 
     def forward(self, x):
         return self.net(x)
+
+
+class Block(nn.Module):
+    """
+    Transformer block - communication + computation
+
+    Note: decoder only
+    """
+
+    def __init__(self, n_embd, n_head):
+        """
+        Instantiate Transformer block
+
+        Args:
+            n_embd: number of token embeddings per time batch
+            n_head: number of attention heads (must be a divisor of n_embd, as
+                each head will work with dim. n_embd // n_head)
+        """
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        # LayerNorm
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x: torch.Tensor):
+        # NOTE: using residual connections (sum the inputs to the outputs)
+        # LayerNorm applied before each layer
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
 
 
 class BigramLanguageModel(nn.Module):
@@ -117,11 +158,12 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, N_EMBD)
         # Positional embedding - not useful now, bigram is translation-invariant
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMBD)
-        # Multi-head attention (4 heads, 8-dim each)
-        self.sa_heads = MultiHeadAttention(N_HEADS, N_EMBD // N_HEADS)
-        # Feed-forward layer
-        self.ffwd = FeedForward(N_EMBD)
-        # Linear layer
+        # Transformer blocks
+        self.blocks = nn.Sequential(
+            Block(N_EMBD, N_HEADS),
+            Block(N_EMBD, N_HEADS),
+            Block(N_EMBD, N_HEADS),
+        )
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
@@ -143,9 +185,7 @@ class BigramLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=DEVICE))
         x = tok_emb + pos_emb  # (B, T, C)
-        # NOTE: pass the encoded token (token + position embeddings)
-        x = self.sa_heads(x)  # (B, T, C) - see def above
-        x = self.ffwd(x)  # (B, T, C)
+        x = self.blocks(x)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is not None:
