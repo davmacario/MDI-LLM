@@ -163,6 +163,7 @@ class BigramLanguageModel(nn.Module):
             Block(N_EMBD, N_HEADS),
             Block(N_EMBD, N_HEADS),
             Block(N_EMBD, N_HEADS),
+            nn.LayerNorm(N_EMBD),
         )
         self.lm_head = nn.Linear(N_EMBD, vocab_size)
 
