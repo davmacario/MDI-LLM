@@ -81,13 +81,16 @@ def get_batch(
         device: the device on which to move the objects (default "cpu")
 
     Outputs:
-        x: context inputs
+        x: context inputs (each input is a block of size given by config)
         y: associated targets
     """
+    # ix is used to randomize the order in the data set
     ix = torch.randint(
         len(dataset) - model_conf.block_size, (model_conf.batch_size,)
     )
     x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
+    # The "target" of a sequence is the next generated token immediately after
+    # the considered block
     y = torch.stack(
         [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
     )
