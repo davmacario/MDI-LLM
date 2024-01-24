@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Iterable
+from typing import Iterable, List, Tuple
 
 import tiktoken  # TODO: add support for more complex tokenizers
+import torch
 
 from .char_tokenizer import CharacterTokenizer
+from .model import GPTConfig
 
 
-def load_dataset(input_path: str, tokenizer: CharacterTokenizer):
+def load_dataset(
+    input_path: str, tokenizer: CharacterTokenizer
+) -> Tuple[torch.Tensor, CharacterTokenizer]:
     """
     Load a data set from a text file and tokenize its content.
 
@@ -17,8 +21,8 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer):
         tokenizer (default: "char"): tokenizer to be used
 
     Returns:
-        data: tokenized data
-
+        data: tensor containing the tokenized data
+        tokenizer: the updated tokenizer (FIXME - see 24 below)
     """
     if not os.path.isfile(input_path):
         raise ValueError(f"Could not find {input_path}")
@@ -38,15 +42,54 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer):
         tokenizer.tokenize(text)
 
         # Encode
-        data = tokenizer.encode(text)
+        data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
 
+    # FIXME: returning the updated tokenizer may not be necessary
+    # (maybe try to use callbacks to update the internal state of the tokenizer)
     return data, tokenizer
 
 
-def split_dataset(data: Iterable, frac_train: float = 0.9):
+def split_dataset(
+    data: List | torch.Tensor, frac_train: float = 0.9
+) -> Tuple[List | torch.Tensor, List | torch.Tensor]:
     """
-    Split the data set into training and validation set
+    Split the data set into training and validation set.
+
+    Args:
+        data: data set to be split
+        frac_train: fraction of training elements
     """
-    pass
+    assert 0 <= frac_train <= 1
+    n = int(frac_train * len(data))
+    train_data = data[:n]
+    val_data = data[n:]
+
+    return (train_data, val_data)
+
+
+def get_batch(
+    dataset: torch.Tensor, model_conf: GPTConfig, device: str = "cpu"
+):
+    """
+    Create batches (x - inputs and y - outputs) of contexts and targets.
+
+    Args:
+        dataset: the data set to be loaded to a tensor
+        model_conf: the GPT configuration object
+        device: the device on which to move the objects (default "cpu")
+
+    Outputs:
+        x: context inputs
+        y: associated targets
+    """
+    ix = torch.randint(
+        len(dataset) - model_conf.block_size, (model_conf.batch_size,)
+    )
+    x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
+    y = torch.stack(
+        [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
+    )
+    x, y = x.to(device), y.to(device)
+    return x, y
