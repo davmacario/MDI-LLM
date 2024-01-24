@@ -243,7 +243,7 @@ class GPT(nn.Module):
         """
         device = idx.device
 
-        b, t = idx.shape  # Batch x (Time dimension)
+        _, t = idx.shape  # Batch x (Time dimension)
         if t > self.config.block_size:
             raise ValueError(
                 f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
@@ -398,7 +398,7 @@ class GPT(nn.Module):
     @torch.no_grad()
     def generate(
         self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0
-    ):
+    ) -> torch.Tensor:
         """
         Generate new tokens using GPT, provided the input sequence of integers
         "idx".
