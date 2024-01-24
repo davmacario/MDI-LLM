@@ -5,3 +5,8 @@ torch
 torchvision
 torchaudio
 matplotlib
+transformers
+datasets
+tiktoken
+wandb
+tqdm
