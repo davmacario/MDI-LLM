@@ -34,11 +34,8 @@ N_ITER_TRAIN = 10000
 EVAL_INTERVAL = 500
 EVAL_ITERS = 200
 if torch.cuda.is_available():
-    print("Running on CUDA")
     DEVICE = "cuda"
 elif torch.backends.mps.is_available():
-    print("Running on MPS")
     DEVICE = "mps"
 else:
-    print("Running on CPU")
     DEVICE = "cpu"
