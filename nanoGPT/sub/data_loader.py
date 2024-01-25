@@ -3,20 +3,22 @@
 import os
 from typing import Iterable, List, Tuple
 
-import tiktoken  # TODO: add support for more complex tokenizers
+import tiktoken
 import torch
 
 from .char_tokenizer import CharacterTokenizer
 from .model import GPTConfig
 
 
-def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
+def load_dataset(
+    input_path: str, tokenizer: CharacterTokenizer | tiktoken.Encoding
+) -> List:
     """
     Load a data set from a text file and tokenize its content.
 
     Args:
         input_path: path of the text file
-        tokenizer: tokenizer to be used
+        tokenizer: tokenizer to be used (can be char-based or from tiktoken)
 
     Returns:
         data: List containing the tokens
@@ -38,6 +40,8 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
         # Encode and move to tensor
         # NOTE: the tokenizer gets updated automatically
         data = tokenizer.encode(text)
+    elif isinstance(tokenizer, tiktoken.Encoding):
+        data = tokenizer.encode_ordinary(text)
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
 
@@ -49,6 +53,9 @@ def split_dataset(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Split the data set into training and validation set.
+
+    NOTE: data is split in-place - i.e., not shuffled (should not lose
+    relationship between consecutive tokens)
 
     Args:
         data: data set to be split
