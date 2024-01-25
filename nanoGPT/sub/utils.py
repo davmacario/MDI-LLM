@@ -21,6 +21,11 @@ def estimate_loss(
     This allows to remove possible noise and provide more meaningful
     results.
 
+    Args:
+        model: the model on which to measure the loss
+        train: training data set (tensor)
+        val: validation data set (tensor)
+
     Returns:
         Dict containing the keys:
             "train": mean loss over EVAL_ITERS iterations for training set
