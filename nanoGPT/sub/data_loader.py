@@ -3,6 +3,7 @@
 import os
 from typing import Iterable, List, Tuple
 
+import numpy as np
 import tiktoken
 import torch
 
@@ -89,12 +90,35 @@ def get_batch(
     ix = torch.randint(
         len(dataset) - model_conf.block_size, (model_conf.batch_size,)
     )
-    x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
-    # The "target" of a sequence is the next generated token immediately after
-    # the considered block
-    y = torch.stack(
-        [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
-    )
+    if type(dataset) == torch.Tensor:
+        x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
+        # The "target" of a sequence is the next generated token immediately after
+        # the considered block
+        y = torch.stack(
+            [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
+        )
+    elif type(dataset) in {np.memmap or np.ndarray}:
+        x = torch.stack(
+            [
+                torch.from_numpy(
+                    (dataset[i : i + model_conf.block_size]).astype(np.int64)
+                )
+                for i in ix
+            ]
+        )
+        y = torch.stack(
+            [
+                torch.from_numpy(
+                    (dataset[i + 1 : i + 1 + model_conf.block_size]).astype(
+                        np.int64
+                    )
+                )
+                for i in ix
+            ]
+        )
+    else:
+        raise TypeError(f"Unsuppoerted data type {type(dataset)}")
+
     if model_conf.device == "cuda":
         x, y = x.pin_memory().to(
             model_conf.device, non_blocking=True
