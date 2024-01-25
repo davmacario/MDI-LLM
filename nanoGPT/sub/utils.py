@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
+import math
+
 import torch
 
-from .config import EVAL_ITERS  # N. of elements over which loss is averaged
+from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
+                     WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
 
@@ -40,3 +43,23 @@ def estimate_loss(
     # Re-set the model to training mode
     model.train()
     return out
+
+
+def get_lr(
+    it,
+    lr: float = LEARNING_RATE,
+    min_lr: float = MIN_LR,
+    warmup_it: int = WARMUP_ITERS,
+    lr_decay_it: int = LR_DECAY_ITERS,
+):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_it:
+        return lr * it / warmup_it
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_it:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_it) / (lr_decay_it - warmup_it)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+    return min_lr + coeff * (lr - min_lr)
