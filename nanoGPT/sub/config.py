@@ -41,8 +41,8 @@ else:
     DEVICE = "cpu"
 
 # ---- Training configuration --------------------
+MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
-N_ITER_TRAIN = 10000
 EVAL_INTERVAL = 2000
 EVAL_ITERS = 200
 LOG_INTERVAL = 1
@@ -50,7 +50,6 @@ EVAL_ONLY = False  # if True, script exits right after the first eval
 ALWAYS_SAVE_CHECKPOINT = True  # T: always save a checkpoint after each eval
 
 # Optimizer settings (AdamW)
-MAX_ITERS = 600000  # total number of training iterations - TODO: review
 WEIGHT_DECAY = 1e-1
 BETA1 = 0.9
 BETA2 = 0.95
