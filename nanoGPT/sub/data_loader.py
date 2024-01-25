@@ -10,9 +10,7 @@ from .char_tokenizer import CharacterTokenizer
 from .model import GPTConfig
 
 
-def load_dataset(
-    input_path: str, tokenizer: CharacterTokenizer
-) -> Tuple[torch.Tensor, CharacterTokenizer]:
+def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
     """
     Load a data set from a text file and tokenize its content.
 
@@ -38,17 +36,15 @@ def load_dataset(
         f.close()
 
     if isinstance(tokenizer, CharacterTokenizer):
-        # Initialize tokenizer
-        tokenizer.tokenize(text)
-
-        # Encode
-        data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+        # Encode and move to tensor
+        # NOTE: the tokenizer gets updated automatically
+        data = tokenizer.encode(text)
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
 
     # FIXME: returning the updated tokenizer may not be necessary
     # (maybe try to use callbacks to update the internal state of the tokenizer)
-    return data, tokenizer
+    return data
 
 
 def split_dataset(
@@ -70,14 +66,14 @@ def split_dataset(
 
 
 def get_batch(
-    dataset: torch.Tensor,
+    dataset,
     model_conf: GPTConfig,
 ):
     """
     Create batches (x - inputs and y - outputs) of contexts and targets.
 
     Args:
-        dataset: the data set to be loaded to a tensor
+        dataset: the data set to be loaded to a tensor (tensor/np array/...)
         model_conf: the GPT configuration object
         device: the device on which to move the objects (default "cpu")
 
@@ -95,5 +91,10 @@ def get_batch(
     y = torch.stack(
         [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
     )
-    x, y = x.to(model_conf.device), y.to(model_conf.device)
+    if model_conf.device == "cuda":
+        x, y = x.pin_memory().to(
+            model_conf.device, non_blocking=True
+        ), y.pin_memory().to(model_conf.device, non_blocking=True)
+    else:
+        x, y = x.to(model_conf.device), y.to(model_conf.device)
     return x, y

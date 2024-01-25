@@ -15,7 +15,7 @@ class CharacterTokenizer:
     def tokenize(self, text: str | Iterable):
         # Create dictionary (characters)
         self.dictionary = sorted(list(set(text)))
-        self.vocab_size = len(self.dictionary)
+        self.n_vocab = len(self.dictionary)
 
         # String to integer mapping
         self.stoi = {ch: i for i, ch in enumerate(self.dictionary)}
@@ -25,9 +25,9 @@ class CharacterTokenizer:
         self.init = True
 
     def encode(self, in_str: str) -> List:
-        assert (
-            self.init
-        ), "Tokenizer was not initialized - this tokenizer infers thedictionary from the text"
+        if not self.init:
+            # "Train" tokenizer on passed sequence
+            self.tokenize(in_str)
         return [self.stoi[c] for c in in_str]
 
     def decode(self, line: Iterable) -> str:
