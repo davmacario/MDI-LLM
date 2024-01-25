@@ -22,20 +22,58 @@ Configuration file - GPT
     DEVICE: PyTorch device used for training ('cuda'/'mps'/'cpu')
 """
 
+# ---- Model configuration -----------------------
 BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
-BATCH_SIZE = 64  # affects VRAM
+BATCH_SIZE = 12  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
 N_LAYER = 6  # Number of transformer blocks
 DROPOUT = 0.2  # Dropout probability
-LEARNING_RATE = 3e-4
+BIAS = True  # do we use bias inside LayerNorm and Linear layers?
 
-N_ITER_TRAIN = 10000
-EVAL_INTERVAL = 500
-EVAL_ITERS = 200
+GRADIENT_ACCUMULATION_STEPS = 5 * 8  # used to simulate larger batch sizes
+
 if torch.cuda.is_available():
     DEVICE = "cuda"
 elif torch.backends.mps.is_available():
     DEVICE = "mps"
 else:
     DEVICE = "cpu"
+
+# ---- Training configuration --------------------
+# Loss evaluation
+N_ITER_TRAIN = 10000
+EVAL_INTERVAL = 2000
+EVAL_ITERS = 200
+LOG_INTERVAL = 1
+EVAL_ONLY = False  # if True, script exits right after the first eval
+ALWAYS_SAVE_CHECKPOINT = True  # T: always save a checkpoint after each eval
+
+# Optimizer settings (AdamW)
+MAX_ITERS = 600000  # total number of training iterations - TODO: review
+WEIGHT_DECAY = 1e-1
+BETA1 = 0.9
+BETA2 = 0.95
+GRAD_CLIP = 1.0  # clip gradients at this value, or disable if == 0.0
+
+# Learning rate (& decay)
+LEARNING_RATE: float = 3e-4
+DECAY_LR: bool = True
+WARMUP_ITERS: int = 2000
+LR_DECAY_ITERS: int = 600000
+MIN_LR: float = 6e-5  # ~= .1*lr
+
+# ---- System configuration ----------------------
+DTYPE = (
+    "bfloat16"
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    else "float16"
+)  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+COMPILE = True  # use PyTorch 2.0 to compile the model to be faster
+# DDP settings
+BACKEND = "nccl"  # 'nccl', 'gloo', etc.
+
+
+# ---- Runtime configuration ---------------------
+VERB = True
+DEBUG = True

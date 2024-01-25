@@ -34,78 +34,30 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from sub import CharacterTokenizer
-from sub.config import (BLOCK_SIZE, DEBUG, DEVICE, EVAL_INTERVAL, EVAL_ITERS,
-                        LEARNING_RATE, N_EMBD, N_HEADS, N_ITER_TRAIN, N_LAYER,
-                        VERB)
+from sub.config import (ALWAYS_SAVE_CHECKPOINT, BACKEND, BLOCK_SIZE, COMPILE,
+                        DEBUG, DEVICE, DTYPE, EVAL_INTERVAL, EVAL_ITERS,
+                        EVAL_ONLY, LEARNING_RATE, LOG_INTERVAL, N_EMBD,
+                        N_HEADS, N_ITER_TRAIN, N_LAYER, VERB)
 from sub.data_loader import get_batch, load_dataset, split_dataset
 from sub.model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O configuration
-# TODO: add (most of) these settings to sub/config.py
 script_dir = os.path.dirname(__file__)
 out_dir = os.path.join(script_dir, "out")  # Checkpoints
-# eval_interval = 2000
-log_interval = 1
-# eval_iters = 200
-eval_only = False  # if True, script exits right after the first eval
-always_save_checkpoint = (
-    True  # if True, always save a checkpoint after each eval
-)
+
 init_from = "scratch"  # 'scratch' or 'resume' or 'gpt2*'
-# wandb logging
+
+# TODO: decide what to do with wandb logging
 wandb_log = False  # disabled by default
 wandb_project = "owt"
 wandb_run_name = "gpt2"  # 'run' + str(time.time())
 
 # DATA
 # dataset = "openwebtext"
-dataset = "shakespeare.txt"
-dataset = "divina_commedia.txt"
-
-gradient_accumulation_steps = 5 * 8  # used to simulate larger batch sizes
-batch_size = (
-    12  # if gradient_accumulation_steps > 1, this is the micro-batch size
-)
-# block_size = 1024
-
-# MODEL - see config.py
-# n_layer = 12
-# n_head = 12
-# n_embd = 768
-# dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
-# bias = False  # do we use bias inside LayerNorm and Linear layers?
-
-# AdamW optimizer
-# learning_rate = 6e-4  # max learning rate
-max_iters = 600000  # total number of training iterations
-weight_decay = 1e-1
-beta1 = 0.9
-beta2 = 0.95
-grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
-
-# learning rate decay settings
-decay_lr = True  # whether to decay the learning rate
-warmup_iters = 2000  # how many steps to warm up for
-lr_decay_iters = 600000  # should be ~= max_iters per Chinchilla
-min_lr = (
-    6e-5  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-)
-
-# DDP settings
-backend = "nccl"  # 'nccl', 'gloo', etc.
-
-# System
-# device = "cuda"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-dtype = (
-    "bfloat16"
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    else "float16"
-)  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True  # use PyTorch 2.0 to compile the model to be faster
-
-# TODO: maybe move most of the above in the config file
+dataset = "shakespeare"
+# dataset = "divina_commedia"
 
 # -----------------------------------------------------------------------------
 config_keys = [
@@ -199,7 +151,7 @@ val_data = np.memmap(
 iter_num = 0
 best_val_loss = 1e9
 
-# Attempt to derive vocab_size from the dataset - FIXME: what's going on??
+# Iff char-based tokenizer was used, look for metadata
 meta_path = os.path.join(data_dir, "meta.pkl")
 meta_vocab_size = None
 if os.path.exists(meta_path):
@@ -207,7 +159,6 @@ if os.path.exists(meta_path):
         meta = pickle.load(f)
     meta_vocab_size = meta["vocab_size"]
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
-# ENDFIX
 
 # ----------------------------------------------------
 
@@ -239,7 +190,7 @@ if init_from == "scratch":
     )
     model = GPT(gptconf)
 elif init_from == "resume":
-    # Resume training from a checkpoint.
+    # Resume training from a checkpoint (fine-tune).
     print(f"Resuming training from {out_dir}")
 
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
