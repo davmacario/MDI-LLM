@@ -73,7 +73,6 @@ COMPILE = True  # use PyTorch 2.0 to compile the model to be faster
 # DDP settings
 BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 
-
 # ---- Runtime configuration ---------------------
 VERB = True
 DEBUG = True
