@@ -2,6 +2,7 @@
 
 import os
 
+import tiktoken
 import torch
 
 from sub import CharacterTokenizer
@@ -18,7 +19,8 @@ def main():
     in_file = os.path.join(CURR_DIR, "data", "shakespeare", "shakespeare.txt")
     # in_file = os.path.join(CURR_DIR, "data", "divina_commedia", "divina_commedia.txt")
 
-    tokenizer = CharacterTokenizer()
+    # tokenizer = CharacterTokenizer()
+    tokenizer = tiktoken.get_encoding("gpt2")
     data_lst = load_dataset(in_file, tokenizer)  # data_lst is a list
     # Move to tensor here
     data = torch.tensor(data_lst, dtype=torch.long)
