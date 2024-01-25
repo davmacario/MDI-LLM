@@ -42,8 +42,6 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
 
-    # FIXME: returning the updated tokenizer may not be necessary
-    # (maybe try to use callbacks to update the internal state of the tokenizer)
     return data
 
 
