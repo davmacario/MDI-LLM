@@ -16,11 +16,10 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
 
     Args:
         input_path: path of the text file
-        tokenizer (default: "char"): tokenizer to be used
+        tokenizer: tokenizer to be used
 
     Returns:
-        data: tensor containing the tokenized data
-        tokenizer: the updated tokenizer (FIXME - see 24 below)
+        data: List containing the tokens
     """
     if not os.path.isfile(input_path):
         raise ValueError(f"Could not find {input_path}")
