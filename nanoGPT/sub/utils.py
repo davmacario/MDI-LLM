@@ -3,6 +3,8 @@
 import math
 
 import torch
+from numpy.typing import NDArray
+from torch import nn
 
 from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      WARMUP_ITERS)
@@ -12,9 +14,9 @@ from .model import GPT
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
 def estimate_loss(
-    model: GPT,
-    train: torch.Tensor,
-    val: torch.Tensor,
+    model: GPT | nn.Module,
+    train: torch.Tensor | NDArray,
+    val: torch.Tensor | NDArray,
 ):
     """
     Evaluate the mean loss over a fixed number of iterations during training.
