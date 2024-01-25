@@ -211,3 +211,6 @@ Temporary Items
 *.bin
 # Tokenizer metadata
 meta.pkl
+# Pretrained models
+*.pt
+*.pth
