@@ -3,11 +3,9 @@
 import os
 
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
 
-from sub import (DEVICE, EVAL_INTERVAL, EVAL_ITERS, LEARNING_RATE, N_EMBD,
-                 N_HEADS, N_ITER_TRAIN, N_LAYER, CharacterTokenizer)
+from sub import CharacterTokenizer
+from sub.config import DEVICE, EVAL_INTERVAL, LEARNING_RATE, N_ITER_TRAIN
 from sub.data_loader import get_batch, load_dataset, split_dataset
 from sub.model import GPT, GPTConfig
 from sub.utils import estimate_loss
@@ -17,8 +15,8 @@ CURR_DIR = os.path.dirname(__file__)
 
 
 def main():
-    in_file = os.path.join(CURR_DIR, "input.txt")
-    # in_file = os.path.join(CURR_DIR, "divina_commedia.txt")
+    in_file = os.path.join(CURR_DIR, "raw_data", "shakespeare.txt")
+    # in_file = os.path.join(CURR_DIR, "raw_data", "divina_commedia.txt")
 
     tokenizer = CharacterTokenizer()
     data, tokenizer = load_dataset(in_file, tokenizer)  # data is a tensor
