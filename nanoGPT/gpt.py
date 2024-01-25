@@ -15,12 +15,16 @@ CURR_DIR = os.path.dirname(__file__)
 
 
 def main():
-    in_file = os.path.join(CURR_DIR, "raw_data", "shakespeare.txt")
-    # in_file = os.path.join(CURR_DIR, "raw_data", "divina_commedia.txt")
+    in_file = os.path.join(CURR_DIR, "data", "shakespeare", "shakespeare.txt")
+    # in_file = os.path.join(CURR_DIR, "data", "divina_commedia", "divina_commedia.txt")
 
     tokenizer = CharacterTokenizer()
-    data, tokenizer = load_dataset(in_file, tokenizer)  # data is a tensor
-    vocab_size = tokenizer.vocab_size
+    data_lst = load_dataset(in_file, tokenizer)  # data_lst is a list
+    # Move to tensor here
+    data = torch.tensor(data_lst, dtype=torch.long)
+    vocab_size = tokenizer.n_vocab
+    if VERB:
+        print(f"Vocabulary size - char tokenizer: {vocab_size}")
 
     train_data, val_data = split_dataset(data, 0.9)
 
