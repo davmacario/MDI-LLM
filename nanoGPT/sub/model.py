@@ -139,13 +139,23 @@ class Block(nn.Module):
 class GPTConfig:
     """Wrapper for GPT configuration parameters"""
 
-    block_size: int = 1024  # Context length
+    # block_size: int = 1024  # Context length
+    # vocab_size: int = 50304  # from GPT-2: 50257 (round to multiple of 64)
+    # n_layer: int = 12  # Number of transformer blocks
+    # n_head: int = 12
+    # n_embd: int = 768
+    # dropout: float = 0.0
+    # bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+
+    batch_size: int = BATCH_SIZE  # FIXME: it wasn't here before, see if needed
+    block_size: int = BLOCK_SIZE  # Context length
     vocab_size: int = 50304  # from GPT-2: 50257 (round to multiple of 64)
-    n_layer: int = 12  # Number of transformer blocks
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
+    n_layer: int = N_LAYER  # Number of transformer blocks
+    n_head: int = N_HEADS
+    n_embd: int = N_EMBD
+    dropout: float = DROPOUT
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    device: str = DEVICE  # FIXME: new - where to put this?
 
 
 class GPT(nn.Module):
@@ -162,7 +172,7 @@ class GPT(nn.Module):
         assert config.block_size is not None
 
         super().__init__()
-        self.config = config
+        self.config: GPTConfig = config
         self.transformer = nn.ModuleDict(
             dict(
                 # Each token will read the logits for the next token from a lookup table
@@ -193,10 +203,13 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(N_EMBD, config.vocab_size)
 
         # Weight-Tying: share weights of embedding and output layers
-        self.transformer.token_embedding.weights = self.lm_head.weights
+        self.transformer.token_embedding.weight = self.lm_head.weight
 
         # Initialization
         self.apply(self._init_weights)
+
+        # FIXME: needed here? it depends on whether the device is in the config
+        self = self.to(self.config.device)
 
         # NOTE: from original implementation:
         # # apply special scaled init to the residual projections, per GPT-2 paper
@@ -219,12 +232,16 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def get_num_params(self, non_embedding: bool = True):
-        """Return the number of parameters of the model"""
+        """
+        Return the number of parameters in the model.
+        For non-embedding count (default), the position embeddings get subtracted.
+        The token embeddings would too, except due to the parameter sharing these
+        params are actually used as weights in the final layer, so we include them.
+        """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
-        else:
-            return n_params
+            n_params -= self.transformer.position_embedding.weight.numel()
+        return n_params
 
     def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
         """

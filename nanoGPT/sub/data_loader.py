@@ -52,8 +52,8 @@ def load_dataset(
 
 
 def split_dataset(
-    data: List | torch.Tensor, frac_train: float = 0.9
-) -> Tuple[List | torch.Tensor, List | torch.Tensor]:
+    data: torch.Tensor, frac_train: float = 0.9
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Split the data set into training and validation set.
 
@@ -70,7 +70,8 @@ def split_dataset(
 
 
 def get_batch(
-    dataset: torch.Tensor, model_conf: GPTConfig, device: str = "cpu"
+    dataset: torch.Tensor,
+    model_conf: GPTConfig,
 ):
     """
     Create batches (x - inputs and y - outputs) of contexts and targets.
@@ -94,5 +95,5 @@ def get_batch(
     y = torch.stack(
         [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
     )
-    x, y = x.to(device), y.to(device)
+    x, y = x.to(model_conf.device), y.to(model_conf.device)
     return x, y
