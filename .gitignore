@@ -206,3 +206,6 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Ignore data .bin files (data sets)
+*.bin
