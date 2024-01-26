@@ -12,7 +12,7 @@ class CharacterTokenizer:
 
     init = False
 
-    def tokenize(self, text: str | Iterable):
+    def tokenize(self, text):
         # Create dictionary (characters)
         self.dictionary = sorted(list(set(text)))
         self.n_vocab = len(self.dictionary)
