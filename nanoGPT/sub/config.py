@@ -41,6 +41,8 @@ else:
     DEVICE = "cpu"
 
 # ---- Training configuration --------------------
+INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
+
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
 EVAL_INTERVAL = 2000

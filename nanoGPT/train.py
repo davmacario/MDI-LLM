@@ -15,7 +15,7 @@ import torch
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BATCH_SIZE, BETA1, BETA2, BIAS,
                         BLOCK_SIZE, COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE,
                         EVAL_INTERVAL, EVAL_ONLY, GRAD_CLIP,
-                        GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE,
+                        GRADIENT_ACCUMULATION_STEPS, INIT_FROM, LEARNING_RATE,
                         LOG_INTERVAL, MAX_ITERS, N_EMBD, N_HEADS, N_LAYER,
                         VERB, WEIGHT_DECAY)
 from sub.data_loader import get_batch
@@ -27,8 +27,6 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 out_dir = os.path.join(script_dir, "out")  # Checkpoints
-
-init_from = "scratch"  # 'scratch' or 'resume' or 'gpt2*'
 
 # TODO: decide what to do with wandb logging
 wandb_log = False  # disabled by default
@@ -92,7 +90,7 @@ val_data = np.memmap(
     os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r"
 )
 
-# Init these up here, can override if init_from='resume' (i.e. from a checkpoint)
+# Init these up here, can override if INIT_FROM='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
 
@@ -118,7 +116,7 @@ model_args = dict(
     dropout=DROPOUT,
 )
 
-if init_from == "scratch":
+if INIT_FROM == "scratch":
     # Init a new model from scratch
     print("Initializing a new model from scratch")
 
@@ -132,7 +130,7 @@ if init_from == "scratch":
     )
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
-elif init_from == "resume":
+elif INIT_FROM == "resume":
     # Resume training from a checkpoint (fine-tune).
     print(f"Resuming training from {out_dir}")
 
@@ -166,7 +164,7 @@ elif init_from == "resume":
     iter_num = checkpoint["iter_num"]
     best_val_loss = checkpoint["best_val_loss"]
 else:
-    raise ValueError(f"Invalid initialization: {init_from}")
+    raise ValueError(f"Invalid initialization: {INIT_FROM}")
 
 # Crop down the model block size if desired, using model surgery
 if BLOCK_SIZE < model.config.block_size:
@@ -187,7 +185,7 @@ scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
 optimizer = model.configure_optimizers(
     WEIGHT_DECAY, LEARNING_RATE, (BETA1, BETA2), device_type
 )
-if init_from == "resume":
+if INIT_FROM == "resume":
     optimizer.load_state_dict(checkpoint["optimizer"])
 checkpoint = None  # free up memory
 
