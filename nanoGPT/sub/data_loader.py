@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Union
 
 import numpy as np
 import tiktoken
@@ -12,7 +12,7 @@ from .model import GPTConfig
 
 
 def load_dataset(
-    input_path: str, tokenizer: CharacterTokenizer | tiktoken.Encoding
+    input_path: str, tokenizer: Union[CharacterTokenizer, tiktoken.Encoding]
 ) -> List:
     """
     Load a data set from a text file and tokenize its content.
