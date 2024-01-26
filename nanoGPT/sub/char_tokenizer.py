@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Iterable, List
+from typing import Iterable, List, Union
 
 
 class CharacterTokenizer:
@@ -12,7 +12,7 @@ class CharacterTokenizer:
 
     init = False
 
-    def tokenize(self, text):
+    def tokenize(self, text: Union[str, Iterable]):
         # Create dictionary (characters)
         self.dictionary = sorted(list(set(text)))
         self.n_vocab = len(self.dictionary)

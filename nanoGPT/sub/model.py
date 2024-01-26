@@ -3,6 +3,7 @@
 import inspect
 import os
 from dataclasses import dataclass
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -150,9 +151,9 @@ class GPTConfig:
 
     batch_size: int = BATCH_SIZE  # FIXME: it wasn't here before, see if needed
     block_size: int = BLOCK_SIZE  # Context length
-    vocab_size: int | None = (
-        50304  # from GPT-2: 50257 (round to multiple of 64)
-    )
+    vocab_size: Union[
+        int, None
+    ] = 50304  # from GPT-2: 50257 (round to multiple of 64)
     n_layer: int = N_LAYER  # Number of transformer blocks
     n_head: int = N_HEADS
     n_embd: int = N_EMBD
@@ -306,7 +307,9 @@ class GPT(nn.Module):
         mfu = flops_achieved / flops_promised
         return mfu
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+    def forward(
+        self, idx: torch.Tensor, targets: Union[torch.Tensor, None] = None
+    ):
         """
         Forward pass in GPT.
 
@@ -481,7 +484,7 @@ class GPT(nn.Module):
         idx: torch.Tensor,
         max_new_tokens: int,
         temperature: float = 1.0,
-        top_k: int | None = None,
+        top_k: Union[int, None] = None,
     ) -> torch.Tensor:
         """
         Generate new tokens using GPT, provided the input sequence of integers
