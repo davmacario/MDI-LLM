@@ -477,7 +477,11 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(
-        self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
     ) -> torch.Tensor:
         """
         Generate new tokens using GPT, provided the input sequence of integers
@@ -507,6 +511,10 @@ class GPT(nn.Module):
             logits, _ = self(idx_cond)
             # Focus only on last time step (dim: (B, C)), scale by temperature
             logits = logits[:, -1, :] / temperature  # B x C
+            # From original: optionally crop the logits to only the top k
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float("Inf")
             # Apply softmax to get probabilities of tokens in the last time step
             probs = F.softmax(logits, dim=1)
             # Sample p.m.f, get output token representation (need to decode)

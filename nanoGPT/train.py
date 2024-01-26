@@ -59,8 +59,6 @@ tokens_per_iter = (
 if VERB:
     print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
-if master_process:
-    os.makedirs(out_dir, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
@@ -78,11 +76,18 @@ ptdtype = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
 }[DTYPE]
-ctx = nullcontext()
+ctx = (
+    nullcontext()
+    if device_type in {"cpu", "mps"}
+    else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+)
 
-# poor man's data loader
+# Poor man's data loader
 dataset_name = os.path.splitext(dataset)[0]
 data_dir = os.path.join(script_dir, "data", dataset_name)
+out_dir = os.path.join(data_dir, "out")
+if master_process:
+    os.makedirs(out_dir, exist_ok=True)
 train_data = np.memmap(
     os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
 )
@@ -134,9 +139,15 @@ elif INIT_FROM == "resume":
     # Resume training from a checkpoint (fine-tune).
     print(f"Resuming training from {out_dir}")
 
+    # TODO: review position of .pt
+    # ckpt_path = os.path.join(out_dir, "ckpt.pt")
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
     checkpoint = torch.load(ckpt_path, map_location=DEVICE)
     checkpoint_model_args = checkpoint["model_args"]
+    if meta_vocab_size is not None:
+        assert (
+            checkpoint_model_args["vocab_size"] == meta_vocab_size
+        ), "The vocab sizes do not match!"
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in [
@@ -233,7 +244,9 @@ while iter_num <= MAX_ITERS:
                     "best_val_loss": best_val_loss,
                     "config": config,
                 }
-                print(f"saving checkpoint to {out_dir}")
+                print(
+                    f"saving checkpoint to {os.path.join(out_dir, 'ckpt.pt')}"
+                )
                 torch.save(checkpoint, os.path.join(out_dir, "ckpt.pt"))
     if iter_num == 0 and EVAL_ONLY:
         break
