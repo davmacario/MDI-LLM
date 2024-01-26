@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+from typing import Union
 
 import torch
 from numpy.typing import NDArray
@@ -14,9 +15,9 @@ from .model import GPT
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
 def estimate_loss(
-    model: GPT | nn.Module,
-    train: torch.Tensor | NDArray,
-    val: torch.Tensor | NDArray,
+    model: Union[GPT, nn.Module],
+    train: Union[torch.Tensor, NDArray],
+    val: Union[torch.Tensor, NDArray],
 ):
     """
     Evaluate the mean loss over a fixed number of iterations during training.
