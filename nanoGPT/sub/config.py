@@ -6,13 +6,13 @@ import torch
 Configuration file - GPT
 
 ### Parameters description:
-    BLOCK_SIZE: context length (max distance between 2 tokens over which
+    BLOCK_SIZE: context length (max distance between 2 tokens over which 
         attention is evaluated)
     BATCH_SIZE: batch size
     N_EMBD: dimension of the embedding (token representation) - [$d_{model}$]
     N_HEADS: number of attention heads - [$n_{heads}$]
         "Head size" [$d_{head}$] = N_EMBD / N_HEADS: size of Q, K, V
-    N_LAYER: number of layers in the transformer (n.times block is repeated) -
+    N_LAYER: number of layers in the transformer (n.times block is repeated) - 
         [$n_{layers}$]
     DROPOUT: fraction of dropped connections
     N_ITER_TRAIN: number of training iterations (epochs)
@@ -41,7 +41,7 @@ else:
     DEVICE = "cpu"
 
 # ---- Training configuration --------------------
-INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
+INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
