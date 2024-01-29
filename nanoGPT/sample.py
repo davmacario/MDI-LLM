@@ -7,14 +7,13 @@ Perform inference on a pre-trained model
 import os
 import pickle
 
-import tiktoken
+# import tiktoken
 import torch
 
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K
 from sub.model import GPT, GPTConfig
 
 # from contextlib import nullcontext
-
 
 
 # -----------------------------------------------------------------------------
@@ -105,6 +104,7 @@ if load_meta:
     encode = lambda s: [stoi[c] for c in s]
     decode = lambda l: "".join([itos[i] for i in l])
 else:
+    raise ValueError
     # ok let's assume gpt-2 encodings by default
     print("No meta.pkl found, assuming GPT-2 encodings...")
     enc = tiktoken.get_encoding("gpt2")
