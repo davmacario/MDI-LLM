@@ -15,9 +15,17 @@ from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
 
 
 class LayerNorm(nn.Module):
-    """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
+    """
+    LayerNorm but with an optional bias. PyTorch doesn't support simply
+    bias=False (actually, in newer versions, it does)
+    """
 
     def __init__(self, ndim: int, bias: bool = True):
+        """
+        Args:
+            ndim: dimension of the input (n. weights)
+            bias: if true, use bias, else don't
+        """
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
