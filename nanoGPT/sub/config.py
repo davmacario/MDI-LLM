@@ -33,18 +33,12 @@ BIAS = True  # do we use bias inside LayerNorm and Linear layers?
 
 GRADIENT_ACCUMULATION_STEPS = 5 * 8  # used to simulate larger batch sizes
 
-try:
-    if torch.cuda.is_available():
-        DEVICE = "cuda"
-    elif torch.backends.mps.is_available():
-        DEVICE = "mps"
-    else:
-        DEVICE = "cpu"
-except:
-    if torch.cuda.is_available():
-        DEVICE = "cuda"
-    else:
-        DEVICE = "cpu"
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
 
 # ---- Training configuration --------------------
 INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
