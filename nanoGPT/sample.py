@@ -10,7 +10,7 @@ import pickle
 # import tiktoken
 import torch
 
-from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
+from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K
 from sub.model import GPT, GPTConfig
 
 # from contextlib import nullcontext
@@ -43,13 +43,10 @@ torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 # for later use in torch.autocast:
 if "cuda" in DEVICE:
-    print("Using GPU")
     device_type = "cuda"
 elif "mps" in DEVICE:
-    print("Using MPS")
     device_type = "mps"
 else:
-    print("Using CPU")
     device_type = "cpu"
 ptdtype = {
     "float32": torch.float32,
@@ -63,8 +60,6 @@ ptdtype = {
 # )
 
 # model
-if VERB:
-    print("Initialization")
 if INIT_FROM == "resume":
     # init from a model saved in a specific directory
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
@@ -89,8 +84,6 @@ model.to(DEVICE)
 #     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
 
 # Look for the meta pickle in case it is available in the dataset folder
-if VERB:
-    print("Looking for tokenizer metadata")
 load_meta = False
 if (
     INIT_FROM == "resume"
@@ -120,8 +113,6 @@ else:
 
 # ---- GENERATION -------------------------------------------------------------
 # Encode the beginning of the prompt
-if VERB:
-    print("Starting generation")
 if start.startswith("FILE:"):
     with open(start[5:], "r", encoding="utf-8") as f:
         start = f.read()
