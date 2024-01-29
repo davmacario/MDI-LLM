@@ -6,16 +6,13 @@ Perform inference on a pre-trained model
 
 import os
 import pickle
+from contextlib import nullcontext
 
 import tiktoken
 import torch
 
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K
 from sub.model import GPT, GPTConfig
-
-# from contextlib import nullcontext
-
-
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
@@ -54,11 +51,11 @@ ptdtype = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
 }[DTYPE]
-# ctx = (
-#     nullcontext()
-#     if device_type in {"cpu", "mps"}
-#     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-# )
+ctx = (
+    nullcontext()
+    if device_type in {"cpu", "mps"}
+    else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+)
 
 # model
 if INIT_FROM == "resume":
@@ -121,10 +118,10 @@ x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
 # Run generation
 with torch.no_grad():
-    # with ctx:
-    for k in range(num_samples):
-        y = model.generate(
-            x, max_new_tokens, temperature=temperature, top_k=TOP_K
-        )
-        print(decode(y[0].tolist()))
-        print("---------------")
+    with ctx:
+        for k in range(num_samples):
+            y = model.generate(
+                x, max_new_tokens, temperature=temperature, top_k=TOP_K
+            )
+            print(decode(y[0].tolist()))
+            print("---------------")
