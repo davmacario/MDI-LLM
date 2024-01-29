@@ -38,9 +38,9 @@ seed = 1337
 # -----------------------------------------------------------------------------
 
 torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+# torch.cuda.manual_seed(seed)
+# torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+# torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 # for later use in torch.autocast:
 if "cuda" in DEVICE:
     print("Using GPU")
