@@ -10,6 +10,7 @@ import pickle
 # import tiktoken
 import torch
 
+print("importing config")
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
 from sub.model import GPT, GPTConfig
 
