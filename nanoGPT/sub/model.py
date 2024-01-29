@@ -14,6 +14,20 @@ from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
                         N_HEADS, N_ITER_TRAIN, N_LAYER)
 
 
+class LayerNorm(nn.Module):
+    """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
+
+    def __init__(self, ndim, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        return F.layer_norm(
+            input, self.weight.shape, self.weight, self.bias, 1e-5
+        )
+
+
 class Head(nn.Module):
     """Single self-attention head"""
 
@@ -113,6 +127,7 @@ class Block(nn.Module):
     """
 
     def __init__(self, n_embd, n_head):
+        # TODO: pass config instead of these + use LayerNorm, not nn.LayerNorm
         """
         Instantiate Transformer block
 
@@ -200,7 +215,7 @@ class GPT(nn.Module):
                 #         for _ in range(config.n_layer)
                 #     ]
                 # ),
-                ln_f=nn.LayerNorm(config.n_embd, bias=config.bias),
+                ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
         # Output linear layer, producing logits before softmax
