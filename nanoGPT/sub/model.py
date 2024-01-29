@@ -17,7 +17,7 @@ from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
 class LayerNorm(nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
 
-    def __init__(self, ndim, bias):
+    def __init__(self, ndim: int, bias: bool = True):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
@@ -126,8 +126,7 @@ class Block(nn.Module):
     Note: decoder only
     """
 
-    def __init__(self, n_embd, n_head):
-        # TODO: pass config instead of these + use LayerNorm, not nn.LayerNorm
+    def __init__(self, config):
         """
         Instantiate Transformer block
 
@@ -137,12 +136,12 @@ class Block(nn.Module):
                 each head will work with dim. n_embd // n_head)
         """
         super().__init__()
-        head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedForward(n_embd)
+        head_size = config.n_embd // config.n_head
+        self.sa = MultiHeadAttention(config.n_head, head_size)
+        self.ffwd = FeedForward(config.n_embd)
         # LayerNorm
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.ln1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln2 = LayerNorm(config.n_embd, bias=config.bias)
 
     def forward(self, x: torch.Tensor):
         # NOTE: using residual connections (sum the inputs to the outputs)
@@ -204,10 +203,7 @@ class GPT(nn.Module):
                 drop=nn.Dropout(config.dropout),
                 # Multi-Head Attention
                 mha=nn.ModuleList(
-                    [
-                        Block(config.n_embd, config.n_head)
-                        for _ in range(config.n_layer)
-                    ]
+                    [Block(config) for _ in range(config.n_layer)]
                 ),
                 # mha=nn.Sequential(
                 #     *[
