@@ -4,17 +4,16 @@ import os
 from typing import Iterable, List, Tuple, Union
 
 import numpy as np
-# import tiktoken
+import tiktoken
 import torch
 
 from .char_tokenizer import CharacterTokenizer
 from .model import GPTConfig
 
 
-# def load_dataset(
-#     input_path: str, tokenizer: Union[CharacterTokenizer, tiktoken.Encoding]
-# ) -> List:
-def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
+def load_dataset(
+    input_path: str, tokenizer: Union[CharacterTokenizer, tiktoken.Encoding]
+) -> List:
     """
     Load a data set from a text file and tokenize its content.
 
@@ -42,8 +41,8 @@ def load_dataset(input_path: str, tokenizer: CharacterTokenizer) -> List:
         # Encode and move to tensor
         # NOTE: the tokenizer gets updated automatically
         data = tokenizer.encode(text)
-    # elif isinstance(tokenizer, tiktoken.Encoding):
-    #     data = tokenizer.encode_ordinary(text)
+    elif isinstance(tokenizer, tiktoken.Encoding):
+        data = tokenizer.encode_ordinary(text)
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
 
