@@ -56,6 +56,8 @@ def main():
     train_ids.tofile(os.path.join(data_set_dir, "train.bin"))
     val_ids.tofile(os.path.join(data_set_dir, "val.bin"))
 
+    # Store tokenizer metadata if of type CharacterTokenizer (alphabet and
+    # encodings change with data set)
     if type(tokenizer) == CharacterTokenizer:
         if VERB:
             print("Dumping character-based tokenizer metadata")
