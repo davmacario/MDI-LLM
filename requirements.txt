@@ -2,8 +2,6 @@ numpy
 pandas
 scikit-learn
 torch
-torchvision
-torchaudio
 matplotlib
 transformers
 datasets
