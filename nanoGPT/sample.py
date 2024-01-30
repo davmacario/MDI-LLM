@@ -66,7 +66,7 @@ if INIT_FROM == "resume":
     gptconf = GPTConfig(**checkpoint["model_args"])
     model = GPT(gptconf)
     state_dict = checkpoint["model"]
-    unwanted_prefix = "_orig_mod."
+    unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
     for k, v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
