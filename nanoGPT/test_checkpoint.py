@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+
+"""
+Test contents of checkpoint
+"""
+
+import os
+import pickle
+from contextlib import nullcontext
+
+import tiktoken
+import torch
+
+from sub.char_tokenizer import CharacterTokenizer
+from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
+from sub.model import GPT, GPTConfig
+
+script_dir = os.path.dirname(__file__)
+
+dataset = "shakespeare"
+dataset_name = os.path.splitext(dataset)[0]
+data_dir = os.path.join(script_dir, "data", dataset_name)
+out_dir = os.path.join(data_dir, "out")
+
+if "cuda" in DEVICE:
+    device_type = "cuda"
+elif "mps" in DEVICE:
+    device_type = "mps"
+else:
+    device_type = "cpu"
+
+if __name__ == "__main__":
+    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    checkpoint = torch.load(ckpt_path)  # , map_location=DEVICE)
+
+    print("Checkpoint breakdown:\n", checkpoint.keys())
+    # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
+    print("Printing infor about `checkpoint['config']`")
+    print("> Elements: ", checkpoint["config"])
+    print("Printing info about `checkpoint['model']`")
+    print("> Length: ", len(checkpoint["model"]))
+    print("> Type: ", type(checkpoint["model"]))
+    mod_keys = list(checkpoint["model"].keys())
+    # print("> Keys: ", mod_keys)
+    keys_begin = [k.split(".")[0] for k in mod_keys]
+    begin_once = list(set(keys_begin))
+    print("> Beginnings of keys: ", begin_once)
+
+    # Print first element (first key)
+    print(f"First key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
+
+    gptconf = GPTConfig(**checkpoint["model_args"])
