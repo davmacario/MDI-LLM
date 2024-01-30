@@ -145,7 +145,7 @@ class Block(nn.Module):
         """
         super().__init__()
         head_size = config.n_embd // config.n_head
-        self.sa = MultiHeadAttention(config.n_head, head_size)
+        self.mha = MultiHeadAttention(config.n_head, head_size)
         self.ffwd = FeedForward(config.n_embd)
         # LayerNorm
         self.ln1 = LayerNorm(config.n_embd, bias=config.bias)
@@ -154,7 +154,7 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor):
         # NOTE: using residual connections (sum the inputs to the outputs)
         # LayerNorm applied before each layer
-        x = x + self.sa(self.ln1(x))
+        x = x + self.mha(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
 
@@ -207,13 +207,13 @@ class GPT(nn.Module):
                 position_embedding=nn.Embedding(
                     config.block_size, config.n_embd
                 ),
-                # Dropout layer before MHA
+                # Dropout layer before transformer layers
                 drop=nn.Dropout(config.dropout),
-                # Multi-Head Attention
-                mha=nn.ModuleList(
+                # Multi-Head Attention + FC layers
+                layers=nn.ModuleList(
                     [Block(config) for _ in range(config.n_layer)]
                 ),
-                # mha=nn.Sequential(
+                # layers=nn.Sequential(
                 #     *[
                 #         Block(config.n_embd, config.n_head)
                 #         for _ in range(config.n_layer)
@@ -361,9 +361,9 @@ class GPT(nn.Module):
         )
 
         x = self.transformer.drop(tok_emb + pos_emb)  # (B, T, C)
-        # x = self.transformer.mha(x)  # (B, T, C)
-        # Fix use of MHA - using nn.ModuleList
-        for block in self.transformer.mha:
+        # x = self.transformer.layers(x)  # (B, T, C)
+        # Fix use of transformer layers - using nn.ModuleList
+        for block in self.transformer.layers:
             x = block(x)
         x = self.transformer.ln_f(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
@@ -401,7 +401,7 @@ class GPT(nn.Module):
             self.transformer.position_embedding.weight[:block_size]
         )
         # FIXME: does this only work if the bias is used??
-        for block in self.transformer.mha:
+        for block in self.transformer.layers:
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[
                     :, :, :block_size, :block_size

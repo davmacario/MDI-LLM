@@ -47,6 +47,6 @@ if __name__ == "__main__":
     print("> Beginnings of keys: ", begin_once)
 
     # Print first element (first key)
-    print(f"First key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
+    print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
     gptconf = GPTConfig(**checkpoint["model_args"])
