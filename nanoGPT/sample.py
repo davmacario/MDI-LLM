@@ -11,6 +11,7 @@ from contextlib import nullcontext
 import tiktoken
 import torch
 
+from sub.char_tokenizer import CharacterTokenizer
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K
 from sub.model import GPT, GPTConfig
 
@@ -98,11 +99,11 @@ if load_meta:
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
     # TODO want to make this more general to arbitrary encoder/decoder schemes
-    stoi, itos = meta["stoi"], meta["itos"]
-    encode = lambda s: [stoi[c] for c in s]
-    decode = lambda l: "".join([itos[i] for i in l])
+    tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+    encode = lambda s: tok.encode(s)
+    decode = lambda l: tok.decode(l)
 else:
-    # ok let's assume gpt-2 encodings by default
+    # Assume gpt-2 encodings by default FIXME
     print("No meta.pkl found, assuming GPT-2 encodings...")
     enc = tiktoken.get_encoding("gpt2")
     encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
