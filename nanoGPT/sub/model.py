@@ -9,9 +9,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
-                        EVAL_INTERVAL, EVAL_ITERS, LEARNING_RATE, N_EMBD,
-                        N_HEADS, N_ITER_TRAIN, N_LAYER)
+from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
+                        N_HEADS, N_LAYER)
 
 
 class LayerNorm(nn.Module):
@@ -163,15 +162,7 @@ class Block(nn.Module):
 class GPTConfig:
     """Wrapper for GPT configuration parameters"""
 
-    # block_size: int = 1024  # Context length
-    # vocab_size: int = 50304  # from GPT-2: 50257 (round to multiple of 64)
-    # n_layer: int = 12  # Number of transformer blocks
-    # n_head: int = 12
-    # n_embd: int = 768
-    # dropout: float = 0.0
-    # bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
-    batch_size: int = BATCH_SIZE  # FIXME: it wasn't here before, see if needed
+    batch_size: int = BATCH_SIZE  # NOTE: value can be overwritten by parser
     block_size: int = BLOCK_SIZE  # Context length
     vocab_size: Union[
         int, None
@@ -181,7 +172,8 @@ class GPTConfig:
     n_embd: int = N_EMBD
     dropout: float = DROPOUT
     bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    device: str = DEVICE  # FIXME: new - where to put this?
+    #
+    device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
 
 
 class GPT(nn.Module):

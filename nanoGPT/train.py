@@ -12,14 +12,14 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 
-from sub.config import (ALWAYS_SAVE_CHECKPOINT, BATCH_SIZE, BETA1, BETA2, BIAS,
-                        BLOCK_SIZE, COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE,
+from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
+                        COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE,
                         EVAL_INTERVAL, EVAL_ONLY, GRAD_CLIP,
-                        GRADIENT_ACCUMULATION_STEPS, INIT_FROM, LEARNING_RATE,
-                        LOG_INTERVAL, MAX_ITERS, N_EMBD, N_HEADS, N_LAYER,
-                        VERB, WEIGHT_DECAY)
+                        GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE, N_EMBD,
+                        N_HEADS, N_LAYER, WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
+from sub.parser import parse_args
 from sub.utils import estimate_loss, get_lr
 
 # -----------------------------------------------------------------------------
@@ -28,24 +28,29 @@ from sub.utils import estimate_loss, get_lr
 script_dir = os.path.dirname(__file__)
 out_dir = os.path.join(script_dir, "out")  # Checkpoints
 
-# TODO: decide what to do with wandb logging
-wandb_log = False  # disabled by default
-wandb_project = "owt"
-wandb_run_name = "gpt2"  # 'run' + str(time.time())
-
-# DATA
-# dataset = "openwebtext"
-dataset = "shakespeare"
+# Valid datasets:
+# dataset = "shakespeare"
 # dataset = "divina_commedia"
 
 # -----------------------------------------------------------------------------
+# OVERRIDE with arguments
+
+args = parse_args()
+print(f"Args: {args}")
+
+DATASET = args.dataset
+BATCH_SIZE = args.batch_size
+INIT_FROM = args.init
+MAX_ITERS = args.max_iters
+LOG_INTERVAL = args.log_interval
+VERB = args.verb
+
 # Store global configuration parameters (all of the above)
 config_keys = [
     k
     for k, v in globals().items()
     if not k.startswith("_") and isinstance(v, (int, float, bool, str))
 ]
-# exec(open("configurator.py").read())  # overrides from cmd or config file
 config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 
@@ -84,7 +89,7 @@ ctx = (
 )
 
 # Poor man's data loader
-dataset_name = os.path.splitext(dataset)[0]
+dataset_name = os.path.splitext(DATASET)[0]
 data_dir = os.path.join(script_dir, "data", dataset_name)
 out_dir = os.path.join(data_dir, "out")
 if master_process:
@@ -113,6 +118,7 @@ if os.path.exists(meta_path):
 
 # Model init
 model_args = dict(
+    batch_size=BATCH_SIZE,
     n_layer=N_LAYER,
     n_head=N_HEADS,
     n_embd=N_EMBD,
@@ -140,7 +146,6 @@ elif INIT_FROM == "resume":
     # Resume training from a checkpoint (fine-tune).
     print(f"Resuming training from {out_dir}")
 
-    # TODO: review position of .pt
     # ckpt_path = os.path.join(out_dir, "ckpt.pt")
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
     checkpoint = torch.load(ckpt_path, map_location=DEVICE)
@@ -158,6 +163,7 @@ elif INIT_FROM == "resume":
         "block_size",
         "bias",
         "vocab_size",
+        "batch_size",
     ]:
         model_args[k] = checkpoint_model_args[k]
     # Create the model
