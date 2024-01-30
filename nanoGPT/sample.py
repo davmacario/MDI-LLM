@@ -98,7 +98,6 @@ if load_meta:
     print(f"Loading meta from {meta_path}...")
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
-    # TODO want to make this more general to arbitrary encoder/decoder schemes
     tok = CharacterTokenizer(meta["stoi"], meta["itos"])
     encode = lambda s: tok.encode(s)
     decode = lambda l: tok.decode(l)
