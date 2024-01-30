@@ -30,18 +30,23 @@ else:
     device_type = "cpu"
 
 if __name__ == "__main__":
-    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    ckpt_path = os.path.join(out_dir, "ckpt_6layers.pt")
     checkpoint = torch.load(ckpt_path)  # , map_location=DEVICE)
 
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
-    print("Printing infor about `checkpoint['config']`")
+    print("")
+    print("Printing info about `checkpoint['config']`")
     print("> Elements: ", checkpoint["config"])
+    print("")
+    print("Printing info about `checkpoint['model_args']`")
+    print("> Elements: ", checkpoint["model_args"])
+    print("")
     print("Printing info about `checkpoint['model']`")
     print("> Length: ", len(checkpoint["model"]))
     print("> Type: ", type(checkpoint["model"]))
     mod_keys = list(checkpoint["model"].keys())
-    # print("> Keys: ", mod_keys)
+    print("> Keys: ", mod_keys)
     keys_begin = [k.split(".")[0] for k in mod_keys]
     begin_once = list(set(keys_begin))
     print("> Beginnings of keys: ", begin_once)
