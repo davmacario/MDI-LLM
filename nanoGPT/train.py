@@ -39,6 +39,7 @@ dataset = "shakespeare"
 # dataset = "divina_commedia"
 
 # -----------------------------------------------------------------------------
+# Store global configuration parameters (all of the above)
 config_keys = [
     k
     for k, v in globals().items()
