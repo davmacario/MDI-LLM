@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Iterable, List, Union
+from typing import Dict, Iterable, List, Union
 
 
 class CharacterTokenizer:
@@ -10,7 +10,28 @@ class CharacterTokenizer:
     Each character is encoded with a specific token.
     """
 
-    init = False
+    def __init__(
+        self, stoi: Union[Dict, None] = None, itos: Union[Dict, None] = None
+    ):
+        """
+        Instantiate a character tokenizer.
+
+        If no itos-stoi mappings are provided, the tokenizer is left
+        uninitialized, but it can be initialized by running 'self.tokenize' on a
+        piece of text.
+
+        Args:
+            stoi: mapping string (char) -> int, default None
+            stoi: mapping int -> string (char), default None
+        """
+        if stoi is None or itos is None:
+            self.init = False
+        else:
+            self.stoi = stoi
+            self.itos = itos
+            self.dictionary = list(stoi.keys())
+            self.n_vocab = len(self.dictionary)
+            self.init = True
 
     def tokenize(self, text: Union[str, Iterable]):
         # Create dictionary (characters)
