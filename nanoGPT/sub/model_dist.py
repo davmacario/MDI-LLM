@@ -9,9 +9,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
-                        EVAL_INTERVAL, EVAL_ITERS, LEARNING_RATE, N_EMBD,
-                        N_HEADS, N_ITER_TRAIN, N_LAYER)
+from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, CKPT_INTERVAL, DEVICE,
+                        DROPOUT, EVAL_ITERS, LEARNING_RATE, N_EMBD, N_HEADS,
+                        N_ITER_TRAIN, N_LAYER)
 from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
                        MultiHeadAttention)
 

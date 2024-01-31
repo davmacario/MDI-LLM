@@ -45,7 +45,7 @@ INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
-EVAL_INTERVAL = 2000
+CKPT_INTERVAL = 2000
 EVAL_ITERS = 200
 LOG_INTERVAL = 10
 EVAL_ONLY = False  # if True, script exits right after the first eval
