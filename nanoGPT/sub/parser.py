@@ -20,21 +20,23 @@ def parse_args():
         "--dataset",
         type=str,
         default="shakespeare",
-        help="Name of the data set used for training",
+        help="Name of the data set used for training; it must be the name of one of the subfolders of `data`",
     )
     parser.add_argument(
         "--max-iters",
         type=int,
         default=MAX_ITERS,
-        help="Maximum number of iterations for the training loop",
+        help="Maximum number of iterations for the training loop (epochs)",
     )
     parser.add_argument(
         "--log-interval",
         type=int,
         default=LOG_INTERVAL,
-        help="Number of iterations between each printed log",
+        help="Number of iterations between each printed log (stdout)",
     )
     parser.add_argument(
         "--verb", default=False, action="store_true", help="Enable verbose mode"
     )
+    # TODO: path for checkpoint if init=resume
+    # TODO: dataset path - not just name
     return parser.parse_args()
