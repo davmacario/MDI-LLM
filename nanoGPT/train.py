@@ -35,7 +35,7 @@ def main() -> int:
 
     # OVERRIDE globals with arguments
     args = parse_args()
-    print(f"Args: {args}")
+    # print(f"Args: {args}")
 
     DATASET = args.dataset
     if DATASET not in os.listdir(os.path.join(script_dir, "data")):
