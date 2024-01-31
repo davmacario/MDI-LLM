@@ -188,7 +188,6 @@ class GPT(nn.Module):
             config: GPTConfig object with all the configuration parameters
         """
         assert config.vocab_size is not None
-        assert config.block_size is not None
 
         super().__init__()
         self.config: GPTConfig = config
