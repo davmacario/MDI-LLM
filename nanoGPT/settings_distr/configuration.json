@@ -1,7 +1,24 @@
 {
   "nodes": {
-    "starter": "172.0.0.1",
+    "starter": {
+      "addr": "172.0.0.1",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port": 5088
+      }
+    },
     "intermediate": [],
-    "finisher": "172.0.0.1"
+    "finisher": {
+      "addr": "172.0.0.1",
+      "communication": {
+        "starter_addr": "172.0.0.1",
+        "port": 8087
+      },
+      "inference": {
+        "port": 5087
+      }
+    }
   }
 }
