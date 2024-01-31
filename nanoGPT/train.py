@@ -13,10 +13,9 @@ import numpy as np
 import torch
 
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
-                        CKPT_INTERVAL, COMPILE, DECAY_LR, DEVICE, DROPOUT,
-                        DTYPE, EVAL_ONLY, GRAD_CLIP,
-                        GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE, N_EMBD,
-                        N_HEADS, N_LAYER, WEIGHT_DECAY)
+                        COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
+                        GRAD_CLIP, GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE,
+                        N_EMBD, N_HEADS, N_LAYER, WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
