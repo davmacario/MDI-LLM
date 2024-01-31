@@ -35,10 +35,28 @@ class LayerNorm(nn.Module):
         )
 
 
+@dataclass
+class GPTConfig:
+    """Wrapper for GPT configuration parameters"""
+
+    batch_size: int = BATCH_SIZE  # NOTE: value can be overwritten by parser
+    block_size: int = BLOCK_SIZE  # Context length
+    vocab_size: Union[
+        int, None
+    ] = 50304  # from GPT-2: 50257 (round to multiple of 64)
+    n_layer: int = N_LAYER  # Number of transformer blocks
+    n_head: int = N_HEADS
+    n_embd: int = N_EMBD
+    dropout: float = DROPOUT
+    bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    #
+    device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
+
+
 class Head(nn.Module):
     """Single self-attention head"""
 
-    def __init__(self, head_size: int):
+    def __init__(self, config: GPTConfig):
         """
         Instantiate single attention head.
 
@@ -46,17 +64,18 @@ class Head(nn.Module):
             head_size: size of the Query, Key and Value vectors [$d_{head}$]
         """
         super().__init__()
+        head_size = config.n_embd // config.n_head
 
         # Linear projection
-        self.key = nn.Linear(N_EMBD, head_size, bias=False)
-        self.query = nn.Linear(N_EMBD, head_size, bias=False)
-        self.value = nn.Linear(N_EMBD, head_size, bias=False)
+        self.key = nn.Linear(config.n_embd, head_size, bias=False)
+        self.query = nn.Linear(config.n_embd, head_size, bias=False)
+        self.value = nn.Linear(config.n_embd, head_size, bias=False)
         # 'tril' is not a parameter - assign it to a buffer
         self.register_buffer(
-            "tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))
+            "tril", torch.tril(torch.ones(config.block_size, config.block_size))
         )
 
-        self.dropout = nn.Dropout(DROPOUT)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor):
         """Forward pass, single attention head"""
@@ -83,15 +102,15 @@ class MultiHeadAttention(nn.Module):
     Multi-Head Attention module: use multiple attention heads in parallel.
     """
 
-    def __init__(self, num_heads, head_size):
+    def __init__(self, config: GPTConfig):
         super().__init__()
-        n_embd = num_heads * head_size
 
         # Create a Module List containing all the heads
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        # TODO: add n_embd as parameters of Head
+        self.heads = nn.ModuleList([Head(config) for _ in range(config.n_head)])
         # Projection - linear transform. of the output of attention heads
-        self.proj = nn.Linear(n_embd, n_embd)
-        self.dropout = nn.Dropout(DROPOUT)
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         # The output is the concatenation of the outputs from each head
@@ -104,7 +123,7 @@ class MultiHeadAttention(nn.Module):
 class FeedForward(nn.Module):
     """Simple linear layer, used after MHA"""
 
-    def __init__(self, n_embd):
+    def __init__(self, config: GPTConfig):
         """
         Create feed-forward layer.
 
@@ -116,10 +135,10 @@ class FeedForward(nn.Module):
         # necessary for residual connections & it brings the dimension down
         # to the value we want (n_embd)
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
+            nn.Linear(config.n_embd, 4 * config.n_embd),
             nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),  # Projection layer
-            nn.Dropout(DROPOUT),
+            nn.Linear(4 * config.n_embd, config.n_embd),  # Projection layer
+            nn.Dropout(config.dropout),
         )
 
     def forward(self, x):
@@ -143,12 +162,10 @@ class Block(nn.Module):
                 each head will work with dim. n_embd // n_head)
         """
         super().__init__()
-        head_size = config.n_embd // config.n_head
-        self.mha = MultiHeadAttention(config.n_head, head_size)
-        self.ffwd = FeedForward(config.n_embd)
-        # LayerNorm
         self.ln1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mha = MultiHeadAttention(config)
         self.ln2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ffwd = FeedForward(config)
 
     def forward(self, x: torch.Tensor):
         # NOTE: using residual connections (sum the inputs to the outputs)
@@ -156,24 +173,6 @@ class Block(nn.Module):
         x = x + self.mha(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
-
-
-@dataclass
-class GPTConfig:
-    """Wrapper for GPT configuration parameters"""
-
-    batch_size: int = BATCH_SIZE  # NOTE: value can be overwritten by parser
-    block_size: int = BLOCK_SIZE  # Context length
-    vocab_size: Union[
-        int, None
-    ] = 50304  # from GPT-2: 50257 (round to multiple of 64)
-    n_layer: int = N_LAYER  # Number of transformer blocks
-    n_head: int = N_HEADS
-    n_embd: int = N_EMBD
-    dropout: float = DROPOUT
-    bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    #
-    device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
 
 
 class GPT(nn.Module):
@@ -215,7 +214,7 @@ class GPT(nn.Module):
             )
         )
         # Output linear layer, producing logits before softmax
-        self.lm_head = nn.Linear(N_EMBD, config.vocab_size)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
 
         # Weight-Tying: share weights of embedding and output layers
         self.transformer.token_embedding.weight = self.lm_head.weight
