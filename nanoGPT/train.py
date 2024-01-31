@@ -13,8 +13,8 @@ import numpy as np
 import torch
 
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
-                        COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE,
-                        EVAL_INTERVAL, EVAL_ONLY, GRAD_CLIP,
+                        CKPT_INTERVAL, COMPILE, DECAY_LR, DEVICE, DROPOUT,
+                        DTYPE, EVAL_ONLY, GRAD_CLIP,
                         GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE, N_EMBD,
                         N_HEADS, N_LAYER, WEIGHT_DECAY)
 from sub.data_loader import get_batch
@@ -28,6 +28,11 @@ script_dir = os.path.dirname(__file__)
 
 
 def main() -> int:
+    # various inits, derived attributes, I/O setup
+    master_process = True
+    seed_offset = 0
+    ddp_world_size = 1
+
     # OVERRIDE globals with arguments
     args = parse_args()
     print(f"Args: {args}")
@@ -41,6 +46,17 @@ def main() -> int:
     MAX_ITERS = args.max_iters
     LOG_INTERVAL = args.log_interval
     VERB = args.verb
+    CKPT_INTERVAL = args.ckpt_interval
+
+    data_dir = os.path.join(script_dir, "data", DATASET)  # FIXME: generalize
+    if args.out is not None:
+        out_dir = args.out
+    else:
+        out_dir = os.path.join(data_dir, "out")
+
+    # Setting up paths
+    if master_process:
+        os.makedirs(out_dir, exist_ok=True)
 
     # Store global configuration parameters (all of the above)
     config_keys = [
@@ -50,11 +66,6 @@ def main() -> int:
     ]
     config = {k: globals()[k] for k in config_keys}  # useful for logging
     # -------------------------------------------------------------------------
-
-    # various inits, derived attributes, I/O setup
-    master_process = True
-    seed_offset = 0
-    ddp_world_size = 1
 
     tokens_per_iter = (
         GRADIENT_ACCUMULATION_STEPS * ddp_world_size * BATCH_SIZE * BLOCK_SIZE
@@ -85,12 +96,7 @@ def main() -> int:
         else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     )
 
-    # Poor man's data loader
-    dataset_name = os.path.splitext(DATASET)[0]
-    data_dir = os.path.join(script_dir, "data", dataset_name)
-    out_dir = os.path.join(data_dir, "out")
-    if master_process:
-        os.makedirs(out_dir, exist_ok=True)
+    # Data loader
     train_data = np.memmap(
         os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
     )
@@ -224,7 +230,7 @@ def main() -> int:
             param_group["lr"] = lr
 
         # evaluate the loss on train/val sets and write checkpoints
-        if iter_num % EVAL_INTERVAL == 0 and master_process:
+        if iter_num % CKPT_INTERVAL == 0 and master_process:
             losses = estimate_loss(model, train_data, val_data)
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
