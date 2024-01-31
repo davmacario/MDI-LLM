@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from . import config, configurator, data_loader, model, model_dist, parser
+from . import config, data_loader, model, model_dist, parser
 from .char_tokenizer import CharacterTokenizer
 
 __all__ = [
@@ -10,5 +10,4 @@ __all__ = [
     "model",
     "model_dist",
     "parser",
-    "configurator",
 ]
