@@ -71,6 +71,8 @@ class Head(nn.Module):
         self.query = nn.Linear(config.n_embd, head_size, bias=False)
         self.value = nn.Linear(config.n_embd, head_size, bias=False)
         # 'tril' is not a parameter - assign it to a buffer
+        # It contains the info about the triangular matrix used to compute
+        # attention
         self.register_buffer(
             "tril", torch.tril(torch.ones(config.block_size, config.block_size))
         )
