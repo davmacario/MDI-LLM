@@ -228,6 +228,24 @@ class CommunicationServer:
         pass
 
 
+def remove_prefix(text: str, prefix: str) -> str:
+    """
+    Remove the specified prefix from the given string.
+    NOTE: starting Python 3.9, use text.removeprefix(prefix)
+
+    Args:
+        text
+        prefix
+
+    Returns:
+        if the prefix is present, the string without it, else the full given
+        string
+    """
+    if text.startswith(prefix):
+        return text[len(prefix) :]
+    return text
+
+
 def split_parameters(
     model_params: StateDict, n_nodes: int
 ) -> Dict[str, Mapping[str, Any]]:
@@ -242,11 +260,120 @@ def split_parameters(
         - Intermediate: 2xTransformer Layer
         - Finisher: 2xTransformer Layer, LayerNorm
     """
+    # TODO: make more efficient (too many nested loops) - maybe
+    # Set up some parameters - they are used to gather the relevant keys
+    base_name_transformer = "transformer"
+    tok_emb = "token_embedding"
+    pos_emb = "position_embedding"
+    layer_name = "layers"
+    transformer_last = f"{base_name_transformer}.ln_f"
+    output_layer = "lm_head"
+
     assert n_nodes >= 2
 
     out_chunks = {}  # TODO: add same keys as config["nodes"]
 
-    # Do stuff
+    # 1. Select params for Starter
+    out_chunks["starter"] = {}
+    out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params[
+        f"{base_name_transformer}.{tok_emb}.weight"
+    ]
+    out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params[
+        f"{base_name_transformer}.{pos_emb}.weight"
+    ]
+    try:
+        out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params[
+            f"{base_name_transformer}.{tok_emb}.bias"
+        ]
+    except:
+        # Here if no bias - no problem
+        pass
+
+    try:
+        out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params[
+            f"{base_name_transformer}.{pos_emb}.bias"
+        ]
+    except:
+        # Here if no bias - no problem
+        pass
+
+    # 2. Select params for every Intermediate
+    out_chunks["intermediate"] = []
+    for i in range(1, n_nodes - 1):
+        curr_params = {}
+
+        # Complicated pythonic list call to select the correct keys to be
+        # transferred to the intermediate node
+        # As reference, the keys for the layers all start with:
+        #       transformer.layer.<layer_ind>.[...]
+        # so we need to select the correct layer indices
+        valid_layer_ind = list(
+            range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM)
+        )
+        relevant_keys = [
+            k
+            for k in list(model_params.keys())
+            if (
+                k.startswith(f"{base_name_transformer}.{layer_name}")
+                and int(k.split(".")[2]) in valid_layer_ind
+            )
+        ]
+
+        # Iterate over old keys, select correct ones, create new keys, transfer values
+        local_layer_ind = 0
+        for ind in valid_layer_ind:
+            prefix = f"{base_name_transformer}.{layer_name}.{ind}"
+            for k in relevant_keys:
+                if k.startswith(prefix):
+                    new_k = f"intermediate_model.layers.{local_layer_ind}.{remove_prefix(k, prefix)}"
+                    curr_params[new_k] = model_params[k]
+            local_layer_ind += 1
+
+        out_chunks["intermediate"].append(curr_params)
+
+    # 3. Select params for Finisher
+    out_chunks["finisher"] = {}
+
+    # Layers:
+    valid_layer_ind = list(
+        range((n_nodes - 1) * N_LAYERS_FINISH, n_nodes * N_LAYERS_FINISH)
+    )
+    relevant_keys = [
+        k
+        for k in list(model_params.keys())
+        if (
+            k.startswith(f"{base_name_transformer}.{layer_name}")
+            and int(k.split(".")[2]) in valid_layer_ind
+        )
+    ]
+    local_layer_ind = 0
+    for ind in valid_layer_ind:
+        prefix = f"{base_name_transformer}.{layer_name}.{ind}"
+        for k in relevant_keys:
+            if k.startswith(prefix):
+                new_k = f"finisher_model.layers.{local_layer_ind}.{remove_prefix(k, prefix)}"
+                out_chunks["finisher"][new_k] = model_params[k]
+        local_layer_ind += 1
+
+    out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params[
+        f"{transformer_last}.weight"
+    ]
+    try:
+        out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params[
+            f"{transformer_last}.bias"
+        ]
+    except:
+        pass
+
+    out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params[
+        f"{output_layer}.weight"
+    ]
+    try:
+        out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params[
+            f"{output_layer}.weight"
+        ]
+    except:
+        pass
 
     return out_chunks
 

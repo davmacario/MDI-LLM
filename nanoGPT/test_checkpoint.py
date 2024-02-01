@@ -14,6 +14,7 @@ import torch
 from sub.char_tokenizer import CharacterTokenizer
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
 from sub.model import GPT, GPTConfig
+from sub.model_dist import split_parameters
 
 script_dir = os.path.dirname(__file__)
 
@@ -30,28 +31,33 @@ else:
     device_type = "cpu"
 
 if __name__ == "__main__":
-    ckpt_path = os.path.join(out_dir, "ckpt_6layers.pt")
-    checkpoint = torch.load(ckpt_path)  # , map_location=DEVICE)
+    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
 
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
     print("")
-    print("Printing info about `checkpoint['config']`")
-    print("> Elements: ", checkpoint["config"])
-    print("")
-    print("Printing info about `checkpoint['model_args']`")
-    print("> Elements: ", checkpoint["model_args"])
-    print("")
+    # print("Printing info about `checkpoint['config']`")
+    # print("> Elements: ", checkpoint["config"])
+    # print("")
+    # print("Printing info about `checkpoint['model_args']`")
+    # print("> Elements: ", checkpoint["model_args"])
+    # print("")
     print("Printing info about `checkpoint['model']`")
     print("> Length: ", len(checkpoint["model"]))
     print("> Type: ", type(checkpoint["model"]))
     mod_keys = list(checkpoint["model"].keys())
-    print("> Keys: ", mod_keys)
+    fname = os.path.join(script_dir, "tmp", "model_keys.txt")
+    print("> Keys: ")
+    with open(fname, "w") as f:
+        for k in mod_keys:
+            print(k)
+            f.write(str(k) + "\n")
     keys_begin = [k.split(".")[0] for k in mod_keys]
     begin_once = list(set(keys_begin))
-    print("> Beginnings of keys: ", begin_once)
+    # print("> Beginnings of keys: ", begin_once)
 
     # Print first element (first key)
-    print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
+    # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
-    gptconf = GPTConfig(**checkpoint["model_args"])
+    print(split_parameters(checkpoint["model"], 2))
