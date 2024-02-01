@@ -3,6 +3,7 @@
 import inspect
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Union
 
@@ -14,7 +15,7 @@ from torch.nn import functional as F
 
 from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, CKPT_INTERVAL, DEVICE,
                         DROPOUT, EVAL_ITERS, LEARNING_RATE, N_EMBD, N_HEADS,
-                        N_ITER_TRAIN, N_LAYER)
+                        N_ITER_TRAIN, N_LAYER, VERB)
 from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
                        MultiHeadAttention)
 
@@ -54,180 +55,6 @@ N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
 N_LAYERS_FINISH = 2
 
 
-class StateDict(Mapping[str, Any]):
-    def __init__(self):
-        super().__init__()
-
-
-class StarterNode(nn.Module):
-    """Starter node"""
-
-    params_init = False
-
-    def __init__(self, config: GPTConfig):
-        super().__init__()
-        assert config.vocab_size is not None
-
-        self.config = config
-
-        self.starter_model = nn.ModuleDict(
-            dict(
-                token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
-                position_embedding=nn.Embedding(
-                    config.block_size, config.n_embd
-                ),
-                drop=nn.Dropout(config.dropout),
-            )
-        )
-        pass
-
-    def load_weights(self, params: StateDict) -> int:
-        """Load weights"""
-        self.load_state_dict(params)
-        self.params_init = True
-        return 1
-
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        """Forward pass - starter"""
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-
-        device = idx.device
-
-        _, t = idx.shape  # Batch x (Time dimension)
-        if t > self.config.block_size:
-            raise ValueError(
-                f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
-            )
-
-        # The logits returned are the ones in row idx of the table
-        # This is arranged in a tensor of size Batch x Time x Channel(=N_EMBED)
-        tok_emb = self.starter_model.token_embedding(idx)
-
-        # Obtain positional embeddings by encoding values (0, ..., t)
-        pos_emb = self.starter_model.position_embedding(
-            torch.arange(t, device=device)
-        )
-
-        x = self.starter_model.drop(tok_emb + pos_emb)  # (B, T, C)
-
-        return x
-
-
-class IntermediateNode(nn.Module):
-    """Intermediate node"""
-
-    params_init = False
-
-    def __init__(self, config: GPTConfig):
-        super().__init__()
-        assert config.vocab_size is not None
-
-        self.config = config
-
-        # Follow naming convention
-        self.intermediate_model = nn.ModuleDict(
-            dict(
-                layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_INTERM)]
-                )
-            )
-        )
-
-    def load_weights(self, params: StateDict) -> int:
-        """Load weights"""
-        self.load_state_dict(params)
-        self.params_init = True
-        return 1
-
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        """Forward pass - intermediate node"""
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-        x = idx
-        for block in self.intermediate_model.layers:
-            x = block(x)
-        return x
-
-
-class FinisherNode(nn.Module):
-    """Finisher node"""
-
-    params_init = False
-
-    def __init__(self, config: GPTConfig):
-        super().__init__()
-        assert config.vocab_size is not None
-
-        self.config = config
-
-        self.finisher_model = nn.ModuleDict(
-            dict(
-                layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_FINISH)]
-                ),
-                ln_f=LayerNorm(config.n_head, bias=config.bias),
-                lm_head=nn.Linear(config.n_embd, config.vocab_size),
-            )
-        )
-
-    def load_weights(self, params: StateDict) -> int:
-        """Load weights"""
-        self.load_state_dict(params)
-        self.params_init = True
-        return 1
-
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        """Forward pass - finisher node"""
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-        x = idx
-        for block in self.finisher_model.layers:
-            x = block(x)
-        x = self.finisher_model.ln_f(x)
-        logits = self.finisher_model.lm_head(x)
-
-        return logits
-
-
-class CommunicationServer:
-    """
-    Communication server - Cherrypy-based webserver used for exchanging
-    (receiving) setup and control information
-    """
-
-    exposed = True
-
-    def __init__(self, node_type: str, node_config: Dict):
-        self.own_addr = node_config["addr"]
-        self.own_comm_port = node_config["communication"]["port"]
-
-        # FIXME: maybe the following configuration should be called outside
-        cp.tree.mount(self, "/")
-        cp.config.update(
-            {
-                "server.socket_host": self.own_addr,
-                "server.socket_port": self.own_comm_port,
-            }
-        )
-        if node_type.lower() == "starter":
-            # Configuration of starter node
-            pass
-        else:
-            # Configuration of "secondary" (intermediate or finisher) node
-            self.starter_addr = node_config["communication"]["starter_addr"]
-        pass
-
-    def GET(self, *path, **params):
-        pass
-
-    def POST(self, *path, **params):
-        pass
-
-    def PUT(self, *path, **params):
-        pass
-
-
 def remove_prefix(text: str, prefix: str) -> str:
     """
     Remove the specified prefix from the given string.
@@ -247,8 +74,8 @@ def remove_prefix(text: str, prefix: str) -> str:
 
 
 def split_parameters(
-    model_params: StateDict, n_nodes: int
-) -> Dict[str, Mapping[str, Any]]:
+    model_params: Mapping[str, Any], n_nodes: int
+) -> Dict[str, Any]:
     """
     Split the model parameters (contained in a state dict) among the different
     available nodes.
@@ -259,6 +86,17 @@ def split_parameters(
         - Starter: token embedding, positional embedding
         - Intermediate: 2xTransformer Layer
         - Finisher: 2xTransformer Layer, LayerNorm
+
+    Args:
+        model_params: complete model parameters (state dict)
+        n_nodes: number of nodes among which to divide the parameters; must be
+        greater or equal to 2 (at least starter and finisher)
+
+    Returns:
+        dict containing the following k-v pairs:
+            "starter": dict with the starter state dict
+            "intermediate": list containing the intermediate state dicts
+            "finisher": dict with the finisher state dict
     """
     # TODO: make more efficient (too many nested loops) - maybe
     # Set up some parameters - they are used to gather the relevant keys
@@ -378,7 +216,268 @@ def split_parameters(
     return out_chunks
 
 
+class StarterNode(nn.Module):
+    """Starter node"""
+
+    params_init = False
+
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.vocab_size is not None
+
+        self.config = config
+
+        self.starter_model = nn.ModuleDict(
+            dict(
+                token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
+                position_embedding=nn.Embedding(
+                    config.block_size, config.n_embd
+                ),
+                drop=nn.Dropout(config.dropout),
+            )
+        )
+        pass
+
+    def load_weights(self, params: Mapping[str, Any]) -> int:
+        """Load weights"""
+        self.load_state_dict(params)
+        self.params_init = True
+        return 1
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        """Forward pass - starter"""
+        if not self.params_init:
+            raise ValueError("The model parameters have not been initialized!")
+
+        device = idx.device
+
+        _, t = idx.shape  # Batch x (Time dimension)
+        if t > self.config.block_size:
+            raise ValueError(
+                f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
+            )
+
+        # The logits returned are the ones in row idx of the table
+        # This is arranged in a tensor of size Batch x Time x Channel(=N_EMBED)
+        tok_emb = self.starter_model.token_embedding(idx)
+
+        # Obtain positional embeddings by encoding values (0, ..., t)
+        pos_emb = self.starter_model.position_embedding(
+            torch.arange(t, device=device)
+        )
+
+        x = self.starter_model.drop(tok_emb + pos_emb)  # (B, T, C)
+
+        return x
+
+
+class IntermediateNode(nn.Module):
+    """Intermediate node"""
+
+    params_init = False
+
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.vocab_size is not None
+
+        self.config = config
+
+        # Follow naming convention
+        self.intermediate_model = nn.ModuleDict(
+            dict(
+                layers=nn.ModuleList(
+                    [Block(config) for _ in range(N_LAYERS_INTERM)]
+                )
+            )
+        )
+
+    def load_weights(self, params: Mapping[str, Any]) -> int:
+        """Load weights"""
+        self.load_state_dict(params)
+        self.params_init = True
+        return 1
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        """Forward pass - intermediate node"""
+        if not self.params_init:
+            raise ValueError("The model parameters have not been initialized!")
+        x = idx
+        for block in self.intermediate_model.layers:
+            x = block(x)
+        return x
+
+
+class FinisherNode(nn.Module):
+    """Finisher node"""
+
+    params_init = False
+
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.vocab_size is not None
+
+        self.config = config
+
+        self.finisher_model = nn.ModuleDict(
+            dict(
+                layers=nn.ModuleList(
+                    [Block(config) for _ in range(N_LAYERS_FINISH)]
+                ),
+                ln_f=LayerNorm(config.n_head, bias=config.bias),
+                lm_head=nn.Linear(config.n_embd, config.vocab_size),
+            )
+        )
+
+    def load_weights(self, params: Mapping[str, Any]) -> int:
+        """Load weights"""
+        self.load_state_dict(params)
+        self.params_init = True
+        return 1
+
+    def forward(self, idx: torch.Tensor) -> torch.Tensor:
+        """Forward pass - finisher node"""
+        if not self.params_init:
+            raise ValueError("The model parameters have not been initialized!")
+        x = idx
+        for block in self.finisher_model.layers:
+            x = block(x)
+        x = self.finisher_model.ln_f(x)
+        logits = self.finisher_model.lm_head(x)
+
+        return logits
+
+
+# -----------------------------------------------------------------------------
+
+
+class GPTServer:
+    """
+    Communication server - Cherrypy-based webserver used for exchanging
+    (receiving) setup and control information
+    """
+
+    # TODO: add model initialization for the different node types
+
+    exposed = True
+    model: Union[None, StarterNode, IntermediateNode, FinisherNode] = None
+    next_node: Union[None, Dict] = None
+    prev_node: Union[None, Dict] = None
+    model_params: Union[None, Dict] = None
+    model_config: Union[None, GPTConfig] = None
+
+    def __init__(
+        self,
+        node_type: str,
+        node_config: Dict,
+        **kwargs,
+    ):
+        self.own_addr = node_config["addr"]
+        self.own_comm_port = node_config["communication"]["port"]
+
+        # FIXME: maybe the following configuration should be called outside
+        cp.tree.mount(self, "/")
+        cp.config.update(
+            {
+                "server.socket_host": self.own_addr,
+                "server.socket_port": self.own_comm_port,
+            }
+        )
+
+        self.node_type = node_type
+        self.node_config = node_config
+        if node_type.lower() == "starter":
+            # Configuration of starter node
+            assert len(kwargs) >= 3  # There should be params, next & prev
+
+            if "next_node" in kwargs:  # FIXME: check this works
+                self.next_node = dict(kwargs["next_node"])
+            else:
+                raise ValueError("Missig 'next_node' information")
+
+            if "prev_node" in kwargs:  # FIXME: check this works
+                self.prev_node = dict(kwargs["prev_node"])
+            else:
+                raise ValueError("Missig 'prev_node' information")
+
+            if "params" in kwargs:  # FIXME: check this works
+                self.model_params = dict(kwargs["params"])
+            else:
+                raise ValueError("Missig 'prev_node' information")
+
+            if "model_config" in kwargs:
+                # Create object as done in train/sample scripts
+                self.model_config = GPTConfig(**kwargs["model_config"])
+            else:
+                raise ValueError("Missing model configuration")
+
+            self.init_model()
+
+        else:
+            # Configuration of "secondary" (intermediate or finisher) node
+            self.starter_addr = node_config["communication"]["starter_addr"]
+        pass
+
+    # ----- PRIVATE -----------------------------------------------------------
+
+    def init_model(self):
+        """
+        Initialize the node's model chunk, passing the parameters, the next and
+        previous nodes in the network
+        """
+        # NOTE: use self.
+        assert self.model_params is not None, "No model parameters were found!"
+        assert self.model is None, "The model was already initialized!"
+        assert (
+            self.model_config is not None
+        ), "No model configuration was found!"
+
+        if self.node_type == "starter":
+            self.model = StarterNode(self.model_config)
+
+    # ----- PUBLIC ------------------------------------------------------------
+
+    def GET(self, *path, **params):
+        """
+        Functions
+            Return node information (port numbers, [capabilities]?)
+            Used for pinging "neighbor" nodes
+        """
+        if len(path) == 0:
+            return json.dumps(self.node_config)
+
+    def POST(self, *path, **params):
+        """
+        Functions:
+        - Non-starters:
+            Receive configuration info from the starter node and start
+            connection, with previous and next, then wait for incoming
+            transmission (from prev), process values (forward), and send them
+            over to the next one
+        """
+        pass
+
+    def PUT(self, *path, **params):
+        """
+        Functions:
+            ?
+        """
+        pass
+
+
 class GPTDistributed:
+    """
+    Distributed implementation of a minimal GPT2 instance
+    """
+
+    # Syntax of the message used to initialize other nodes
+    init_msg = {
+        "role": "",
+        "params": {},
+        "model_config": {}
+        "prev_node": {"addr": "", "port": 8088},  # NOTE: INFERENCE port
+        "next_node": {"addr": "", "port": 8088},
+    }
+
     def __init__(
         self,
         config: GPTConfig,
@@ -416,30 +515,121 @@ class GPTDistributed:
         self.own_inference_port = self.own_config["inference"]["port"]
 
         # Get the model parameters and split them based on n. of nodes
-        self.n_total_nodes = 2 + len(self.nodes_info["nodes"]["intermediate"])
-        self.model_ckpt = torch.load(ckpt_path)
+        self.n_intermediate = len(self.nodes_info["nodes"]["intermediate"])
+        self.n_total_nodes = 2 + self.n_intermediate
+        try:
+            self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
+        except:
+            # It may be that the model does not fit all in the device
+            self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
         self.complete_model = self.model_ckpt["model"]  # State dict
         self.model_chunks = split_parameters(
             model_params=self.complete_model, n_nodes=self.n_total_nodes
         )
 
-        # Create webserver
-        self.webserv = CommunicationServer(
-            node_type="starter", node_config=self.own_config
-        )
-
-        # Create 'StarterNode' object
         self.config = config
-        self.starter_node = StarterNode(config)
-        self.starter_node.load_weights(self.model_chunks["starter"])
+
+        # Create webserver
+        starter_config = self.init_msg.copy()
+        del starter_config["role"]  # FIXME: necessary?
+        starter_config["params"] = self.model_chunks["starter"]
+        starter_config["model_config"] = self.config.asdict()
+        starter_config["prev_node"] = {
+            "addr": self.nodes_info["finisher"]["addr"],
+            "port": self.nodes_info["finisher"]["inference"]["port"],
+        }
+        if self.n_intermediate:
+            starter_config["next_node"] = {
+                "addr": self.nodes_info["intermediate"][0]["addr"],
+                "port": self.nodes_info["intermediate"][0]["inference"]["port"],
+            }
+        else:
+            starter_config["next_node"] = starter_config["prev_node"]
+
+        self.webserv = GPTServer(
+            node_type="starter",
+            node_config=self.own_config,
+            **starter_config,
+        )
 
     def configure_nodes(self):
         """
         Send POST requests to the other nodes to inform them of their role and
         including their chunk of model.
         """
+        # TODO: add also communication information to prev/next node information
+        # This way it is possible to ping the nodes (check alive)
+
+        # Store the prev and next in a smart way
+        prev = self.nodes_info["starter"]
+        n_interm = len(self.nodes_info["intermediate"])
+        if n_interm == 0:
+            next = prev
+        elif n_interm == 1:
+            next = self.nodes_info["finisher"]
+        else:
+            next = self.nodes_info["intermediate"][1]
+
         # Intermediate config
-        for int_node in self.nodes_info:
-            pass
-        # Finisher config
+        for i, int_node in enumerate(self.nodes_info["intermediate"]):
+            curr_msg = self.init_msg.copy()
+            curr_msg["role"] = "intermediate"
+            curr_msg["model_config"] = self.config.asdict()
+            curr_msg["params"] = self.model_chunks["intermediate"][i]
+
+            curr_msg["prev_node"]["addr"] = prev["addr"]
+            curr_msg["prev_node"]["port"] = prev["inference"]["port"]
+            curr_msg["next_node"]["addr"] = next["addr"]
+            curr_msg["next_node"]["port"] = next["inference"]["port"]
+
+            # Update next and prev for next iteration
+            prev = int_node
+            if i == n_interm - 1:
+                next = self.nodes_info["starter"]
+            elif i == n_interm - 2:
+                next = self.nodes_info["finisher"]
+            else:
+                next = self.nodes_info["intermediate"][i + 2]
+
+            # Send POST request
+            target_addr = int_node["addr"]
+            target_port = int_node["communication"]["port"]
+
+            addr = f"http://{target_addr}:{target_port}/init"
+            ret = requests.post(addr, json=curr_msg)
+            while not ret.status_code == 200:
+                if VERB:
+                    print("Unable to reach node - retrying in 3s")
+                time.sleep(3)
+                ret = requests.post(addr, json=curr_msg)
+
+        # Finisher config - can use next/prev from last loop iteration
+        curr_msg = self.init_msg.copy()
+        curr_msg["role"] = "finisher"
+        curr_msg["model_config"] = self.config.asdict()
+
+        curr_msg["prev_node"]["addr"] = prev["addr"]
+        curr_msg["prev_node"]["port"] = prev["inference"]["port"]
+        curr_msg["next_node"]["addr"] = next["addr"]
+        curr_msg["next_node"]["port"] = next["inference"]["port"]
+
+        target_addr = self.nodes_info["finisher"]["addr"]
+        target_port = self.nodes_info["finisher"]["communication"]["port"]
+        addr = f"http://{target_addr}:{target_port}/init"
+        ret = requests.post(addr, json=curr_msg)
+        while not ret.status_code == 200:
+            if VERB:
+                print("Unable to reach node - retrying in 3s")
+            time.sleep(3)
+            ret = requests.post(addr, json=curr_msg)
+
+        return 1
+
+    def start(self):
+        """
+        Start the operation - webserver + model
+
+        Stop when the model finished running, i.e., all tokens have been
+        generated
+        """
         pass
