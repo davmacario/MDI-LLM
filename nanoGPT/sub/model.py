@@ -52,6 +52,19 @@ class GPTConfig:
     #
     device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
 
+    def asdict(self):
+        return {
+            "batch_size": self.batch_size,
+            "block_size": self.block_size,
+            "vocab_size": self.vocab_size,
+            "n_layer": self.n_layer,
+            "n_head": self.n_head,
+            "n_embd": self.n_embd,
+            "dropout": self.dropout,
+            "bias": self.bias,
+            "device": self.device,
+        }
+
 
 class Head(nn.Module):
     """Single self-attention head"""
