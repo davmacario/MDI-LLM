@@ -614,6 +614,8 @@ class GPTServer:
                     out_tx = pickle.dumps(idx_cond)
                     self.sock_to_next.sendall(out_tx)
 
+                print(self.tok_decode(idx[0].tolist()))
+
         else:
             # TODO: socket creation
             # Intermediate is client for prev node, server for next
@@ -682,7 +684,6 @@ class GPTDistributed:
 
     def __init__(
         self,
-        config: GPTConfig,
         ckpt_path: str,
         nodes_info_path: Union[str, None] = None,
     ):
@@ -710,6 +711,9 @@ class GPTDistributed:
             self.nodes_info = json.load(f)
             f.close()
 
+        if VERB:
+            print("Nodes information:\n", json.dumps(self.nodes_info))
+
         # Store important parameters:
         self.own_config = self.nodes_info["nodes"]["starter"]
         self.own_addr = self.own_config["addr"]
@@ -723,38 +727,59 @@ class GPTDistributed:
         try:
             self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
         except:
+            if VERB:
+                print("Loading full model on RAM - not enough VRAM")
             # It may be that the model does not fit all in the VRAM
             self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
+
+        if VERB:
+            print(self.model_ckpt["config"].keys())
+
+        # Extract state dict & remove problematic keys
         self.complete_model = self.model_ckpt["model"]  # State dict
+        unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
+        for k, _ in list(self.complete_model.items()):
+            if k.startswith(unwanted_prefix):
+                self.complete_model[
+                    k[len(unwanted_prefix) :]
+                ] = self.complete_model.pop(k)
+        # Split model
         self.model_chunks = split_parameters(
             model_params=self.complete_model, n_nodes=self.n_total_nodes
         )
 
         # Extract tokenizer metadata information and check it exists
         if (
-            "config" in self.model_ckpt
-            and "dataset" in self.model_ckpt["config"]
+            "config"
+            in self.model_ckpt
+            # and "dataset" in self.model_ckpt["config"]
         ):
             self.tok_meta_path = os.path.join(
                 script_dir,
+                "..",
                 "data",
-                self.model_ckpt["config"]["dataset"],
+                # self.model_ckpt["config"]["dataset"],
+                "shakespeare",
                 "meta.pkl",
             )
-            assert os.path.exists(self.tok_meta_path)
+            assert os.path.exists(
+                self.tok_meta_path
+            ), f"Unable to find tokenizer data at {self.tok_meta_path}"
         else:
             raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
 
-        self.model_config = config
+        self.model_config = GPTConfig(**self.model_ckpt["model_args"])
 
         # Create webserver
         starter_config = self.init_msg.copy()
         starter_config["role"] = "starter"
         starter_config["params"] = self.model_chunks["starter"]
         starter_config["model_config"] = self.model_config
-        starter_config["prev_node"] = self.nodes_info["finisher"]
+        starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
         if self.n_intermediate:
-            starter_config["next_node"] = self.nodes_info["intermediate"][0]
+            starter_config["next_node"] = self.nodes_info["nodes"][
+                "intermediate"
+            ][0]
         else:
             starter_config["next_node"] = starter_config["prev_node"]
 
@@ -775,17 +800,17 @@ class GPTDistributed:
         # This way it is possible to ping the nodes (check alive)
 
         # Store the prev and next in a smart way
-        prev = self.nodes_info["starter"]
-        n_interm = len(self.nodes_info["intermediate"])
+        prev = self.nodes_info["nodes"]["starter"]
+        n_interm = len(self.nodes_info["nodes"]["intermediate"])
         if n_interm == 0:
             next = prev
         elif n_interm == 1:
-            next = self.nodes_info["finisher"]
+            next = self.nodes_info["nodes"]["finisher"]
         else:
-            next = self.nodes_info["intermediate"][1]
+            next = self.nodes_info["nodes"]["intermediate"][1]
 
         # Intermediate config
-        for i, int_node in enumerate(self.nodes_info["intermediate"]):
+        for i, int_node in enumerate(self.nodes_info["nodes"]["intermediate"]):
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
             curr_msg["model_config"] = self.model_config
@@ -797,11 +822,11 @@ class GPTDistributed:
             # Update next and prev for next iteration
             prev = int_node
             if i == n_interm - 1:  # Last iter in loop
-                next = self.nodes_info["starter"]
+                next = self.nodes_info["nodes"]["starter"]
             elif i == n_interm - 2:  # Second to last iter
-                next = self.nodes_info["finisher"]
+                next = self.nodes_info["nodes"]["finisher"]
             else:
-                next = self.nodes_info["intermediate"][i + 2]
+                next = self.nodes_info["nodes"]["intermediate"][i + 2]
 
             # Send POST request
             target_addr = int_node["addr"]
@@ -823,8 +848,10 @@ class GPTDistributed:
         curr_msg["prev_node"] = prev
         curr_msg["next_node"] = next
 
-        target_addr = self.nodes_info["finisher"]["addr"]
-        target_port = self.nodes_info["finisher"]["communication"]["port"]
+        target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
+        target_port = self.nodes_info["nodes"]["finisher"]["communication"][
+            "port"
+        ]
         addr = f"http://{target_addr}:{target_port}/init"
         ret = requests.post(addr, json=curr_msg)
         while not ret.status_code == 200:
