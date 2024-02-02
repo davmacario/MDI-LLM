@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Union
 
@@ -52,7 +53,7 @@ Functioning:
 """
 
 N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 2
+N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
 
 
 def remove_prefix(text: str, prefix: str) -> str:
@@ -392,17 +393,17 @@ class GPTServer:
             if "next_node" in kwargs:  # FIXME: check this works
                 self.next_node = dict(kwargs["next_node"])
             else:
-                raise ValueError("Missig 'next_node' information")
+                raise ValueError("Missing 'next_node' information")
 
             if "prev_node" in kwargs:  # FIXME: check this works
                 self.prev_node = dict(kwargs["prev_node"])
             else:
-                raise ValueError("Missig 'prev_node' information")
+                raise ValueError("Missing 'prev_node' information")
 
             if "params" in kwargs:  # FIXME: check this works
                 self.model_params = dict(kwargs["params"])
             else:
-                raise ValueError("Missig 'prev_node' information")
+                raise ValueError("Missing 'prev_node' information")
 
             if "model_config" in kwargs:
                 # Create object as done in train/sample scripts
@@ -415,24 +416,44 @@ class GPTServer:
         else:
             # Configuration of "secondary" (intermediate or finisher) node
             self.starter_addr = node_config["communication"]["starter_addr"]
+
+            # NOTE: the model will be initialized once config info is received
         pass
 
     # ----- PRIVATE -----------------------------------------------------------
 
     def init_model(self):
         """
-        Initialize the node's model chunk, passing the parameters, the next and
-        previous nodes in the network
+        Initialize the node's model chunk, passing the parameters
         """
-        # NOTE: use self.
         assert self.model_params is not None, "No model parameters were found!"
-        assert self.model is None, "The model was already initialized!"
         assert (
             self.model_config is not None
         ), "No model configuration was found!"
+        assert self.model is None, "The model was already initialized!"
 
         if self.node_type == "starter":
             self.model = StarterNode(self.model_config)
+        elif self.node_type == "intermediate":
+            self.model = IntermediateNode(self.model_config)
+        elif self.node_type == "finisher":
+            self.model = FinisherNode(self.model_config)
+        else:
+            raise ValueError(f"Unsupported node type {self.node_type}")
+
+        self.model.load_weights(self.model_params)
+
+    def start(self):
+        """
+        Perform normal operation (open sockets, wait for communication from
+        previous node and forward activations to next one)
+
+        This function launches an infinite loop, interrupted by the receival of
+        a special message (PUT) over the communication channel that triggers a
+        change in a class attribute
+        """
+
+        # TODO
 
     # ----- PUBLIC ------------------------------------------------------------
 
@@ -454,14 +475,28 @@ class GPTServer:
             transmission (from prev), process values (forward), and send them
             over to the next one
         """
-        pass
+        if self.node_type != "starter" and self.model is None:
+            init_msg = json.loads(cp.request.body.read())
+            self.node_type = init_msg["role"]
+            self.prev_node = init_msg["prev_node"]
+            self.next_node = init_msg["next_node"]
+            self.model_config = init_msg["node_config"]
+            self.model_params = init_msg["params"]
+            # Set up the node
+            self.init_model()
+        elif self.model is None:
+            raise cp.HTTPError(
+                403,
+                "Failed to configure node - the model was already initialized",
+            )
 
-    def PUT(self, *path, **params):
-        """
-        Functions:
-            ?
-        """
-        pass
+    def PUT(self):
+        """Not implemented"""
+        raise cp.HTTPError(501, "PUT not implemented!")
+
+    def DELETE(self):
+        """Not implemented"""
+        raise cp.HTTPError(501, "PUT not implemented!")
 
 
 class GPTDistributed:
@@ -473,7 +508,7 @@ class GPTDistributed:
     init_msg = {
         "role": "",
         "params": {},
-        "model_config": {}
+        "model_config": {},
         "prev_node": {"addr": "", "port": 8088},  # NOTE: INFERENCE port
         "next_node": {"addr": "", "port": 8088},
     }
