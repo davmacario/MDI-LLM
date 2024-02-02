@@ -25,6 +25,8 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
+DATASET = "shakespeare"  # Default value
+
 
 def main() -> int:
     # various inits, derived attributes, I/O setup
@@ -36,6 +38,7 @@ def main() -> int:
     args = parse_args()
     # print(f"Args: {args}")
 
+    global DATASET
     DATASET = args.dataset
     if DATASET not in os.listdir(os.path.join(script_dir, "data")):
         raise ValueError(f"Invalid data set name: {DATASET}")
