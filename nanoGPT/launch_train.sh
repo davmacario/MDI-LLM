@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python3 ./nanoGPT/train.py --batch-size 24 --verb --init scratch --ckpt-interval 500
+python3 ./train.py --batch-size 24 --verb --init scratch --ckpt-interval 500
