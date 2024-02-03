@@ -732,9 +732,6 @@ class GPTDistributed:
             # It may be that the model does not fit all in the VRAM
             self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
 
-        if VERB:
-            print(self.model_ckpt["config"].keys())
-
         # Extract state dict & remove problematic keys
         self.complete_model = self.model_ckpt["model"]  # State dict
         unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
@@ -750,16 +747,15 @@ class GPTDistributed:
 
         # Extract tokenizer metadata information and check it exists
         if (
-            "config"
-            in self.model_ckpt
-            # and "dataset" in self.model_ckpt["config"]
+            "config" in self.model_ckpt
+            and "DATASET" in self.model_ckpt["config"]
         ):
             self.tok_meta_path = os.path.join(
                 script_dir,
                 "..",
                 "data",
-                # self.model_ckpt["config"]["dataset"],
-                "shakespeare",
+                self.model_ckpt["config"]["DATASET"],
+                # "shakespeare",
                 "meta.pkl",
             )
             assert os.path.exists(
