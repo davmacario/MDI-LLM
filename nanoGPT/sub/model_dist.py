@@ -26,7 +26,7 @@ from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
 from sub.server_config import MAX_TRIES
 
 """
-Distributed implementation of nanoGPT - using the same blocks defined in the 
+Distributed implementation of nanoGPT - using the same blocks defined in the
 original model.
 
 Rationale:
@@ -34,10 +34,10 @@ Rationale:
         a. Starter: embedding (tok + pos), dropout,
         [b. Intermediate: 2 transformer layers]
         c. Finisher: 2 transformer layers, layer norm
-    - The "Starter" is the main node - it will initiate inference and receive 
+    - The "Starter" is the main node - it will initiate inference and receive
     the final logits (outputs of the model) from the "Finisher"
     - The Starter is also the only one to possess all the model parameters
-    
+
     - Each node opens 2 ports: one for communication (roles setup and weight
     exchange), the other one for the actual inference (i.e., exchange of
     activations)
@@ -50,11 +50,11 @@ Functioning:
         exchange any type of information (config and inference)
     - Main node instantiates GPTDistributed object, which in turn instantiates
     the GPTServer on the same device
-    - Main node (through GPTDistributed) sends HTTP messages about their role to 
+    - Main node (through GPTDistributed) sends HTTP messages about their role to
     each other node in the network (role + weights + model_config + next_node +
     predecessor)
     - The other nodes instantiate the corresponding object (Intermediate/
-    Finisher) and open sockets to/from the corresponding nodes, then start 
+    Finisher) and open sockets to/from the corresponding nodes, then start
     waiting for the information to arrive
 """
 
