@@ -14,7 +14,7 @@ import torch
 from sub.char_tokenizer import CharacterTokenizer
 from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
 from sub.model import GPT, GPTConfig
-from sub.model_dist import split_parameters
+from sub.model_dist import FinisherNode, split_parameters
 
 script_dir = os.path.dirname(__file__)
 
@@ -48,16 +48,25 @@ if __name__ == "__main__":
     print("> Type: ", type(checkpoint["model"]))
     mod_keys = list(checkpoint["model"].keys())
     fname = os.path.join(script_dir, "tmp", "model_keys.txt")
-    print("> Keys: ")
+    # print("> Keys: ")
     with open(fname, "w") as f:
         for k in mod_keys:
-            print(k)
+            # print(k)
             f.write(str(k) + "\n")
     keys_begin = [k.split(".")[0] for k in mod_keys]
     begin_once = list(set(keys_begin))
+
+    print(
+        f"\nProblematic keys:\nlm_head.weight: {checkpoint['model']['lm_head.weight'].shape}\nlm_head.bias: {checkpoint['model']['lm_head.bias'].shape}\n"
+    )
     # print("> Beginnings of keys: ", begin_once)
 
     # Print first element (first key)
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
-    print(split_parameters(checkpoint["model"], 2))
+    par_split = split_parameters(checkpoint["model"], 2)
+    print(par_split["finisher"].keys())
+
+    fn = FinisherNode(GPTConfig(**checkpoint["model_args"]))
+
+    fn.load_weights(par_split["finisher"])

@@ -5,6 +5,7 @@ import json
 import os
 import pickle
 import socket
+import threading
 import time
 import warnings
 from contextlib import nullcontext
@@ -152,7 +153,7 @@ def split_parameters(
         #       transformer.layer.<layer_ind>.[...]
         # so we need to select the correct layer indices
         valid_layer_ind = list(
-            range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM)
+            range((i - 2) * N_LAYERS_INTERM, (i - 1) * N_LAYERS_INTERM)
         )
         relevant_keys = [
             k
@@ -169,7 +170,10 @@ def split_parameters(
             prefix = f"{base_name_transformer}.{layer_name}.{ind}"
             for k in relevant_keys:
                 if k.startswith(prefix):
-                    new_k = f"intermediate_model.layers.{local_layer_ind}.{remove_prefix(k, prefix)}"
+                    end = remove_prefix(k, prefix)
+                    new_k = (
+                        f"intermediate_model.layers.{int(local_layer_ind)}{end}"
+                    )
                     curr_params[new_k] = model_params[k]
             local_layer_ind += 1
 
@@ -180,7 +184,7 @@ def split_parameters(
 
     # Layers:
     valid_layer_ind = list(
-        range((n_nodes - 1) * N_LAYERS_FINISH, n_nodes * N_LAYERS_FINISH)
+        range((n_nodes - 2) * N_LAYERS_FINISH, (n_nodes - 1) * N_LAYERS_FINISH)
     )
     relevant_keys = [
         k
@@ -195,10 +199,11 @@ def split_parameters(
         prefix = f"{base_name_transformer}.{layer_name}.{ind}"
         for k in relevant_keys:
             if k.startswith(prefix):
-                new_k = f"finisher_model.layers.{local_layer_ind}.{remove_prefix(k, prefix)}"
+                end = remove_prefix(k, prefix)
+                new_k = f"finisher_model.layers.{local_layer_ind}{end}"
                 out_chunks["finisher"][new_k] = model_params[k]
         local_layer_ind += 1
-
+    # OK below
     out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params[
         f"{transformer_last}.weight"
     ]
@@ -213,13 +218,43 @@ def split_parameters(
         f"{output_layer}.weight"
     ]
     try:
-        out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params[
-            f"{output_layer}.weight"
+        out_chunks["finisher"][f"finisher_model.lm_head.bias"] = model_params[
+            f"{output_layer}.bias"
         ]
     except:
         pass
 
     return out_chunks
+
+
+def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Serialize a mapping, specifically a state dict, to allow it to be read as a
+    JSON/dict.
+    """
+    json_serializable_params = {}
+    for key, value in params.items():
+        json_serializable_params[key] = (
+            value.tolist() if isinstance(value, torch.Tensor) else value
+        )
+
+    return json_serializable_params
+
+
+def deserialize_params(params: Dict) -> Mapping[str, Any]:
+    """
+    De-serialize a dictionary and return a state dictionary containing a torch
+    model parameters.
+    """
+    deserialized_params = {}
+    for key, value in params.items():
+        if isinstance(value, list):
+            # Convert lists back to PyTorch tensors
+            deserialized_params[key] = torch.tensor(value)
+        else:
+            deserialized_params[key] = value
+
+    return deserialized_params
 
 
 class StarterNode(nn.Module):
@@ -331,7 +366,7 @@ class FinisherNode(nn.Module):
                 layers=nn.ModuleList(
                     [Block(config) for _ in range(N_LAYERS_FINISH)]
                 ),
-                ln_f=LayerNorm(config.n_head, bias=config.bias),
+                ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size),
             )
         )
@@ -382,8 +417,8 @@ class GPTServer:
 
     def __init__(
         self,
-        node_type: str,
         node_config: Dict,
+        node_type: Union[None, str] = None,
         starter_config: Union[
             Dict, None
         ] = None,  # FIXME: add specs for the right parameters
@@ -412,36 +447,27 @@ class GPTServer:
         self.own_addr = node_config["addr"]
         self.own_comm_port = node_config["communication"]["port"]
 
-        # FIXME: maybe the following configuration should be called outside
-        cp.tree.mount(self, "/")
-        cp.config.update(
-            {
-                "server.socket_host": self.own_addr,
-                "server.socket_port": self.own_comm_port,
-            }
-        )
-
         self.node_type = node_type
         self.node_config = node_config
         # Extract optional parameters
-        if node_type.lower() == "starter":
+        if node_type is not None and node_type.lower() == "starter":
             # Configuration of starter node
             assert type(starter_config) == dict
             assert (
                 len(starter_config.keys()) >= 3
             )  # There should be params, next & prev
 
-            if "next_node" in starter_config:  # FIXME: check this works
+            if "next_node" in starter_config:
                 self.next_node = dict(starter_config["next_node"])
             else:
                 raise ValueError("Missing 'next_node' information")
 
-            if "prev_node" in starter_config:  # FIXME: check this works
+            if "prev_node" in starter_config:
                 self.prev_node = dict(starter_config["prev_node"])
             else:
                 raise ValueError("Missing 'prev_node' information")
 
-            if "params" in starter_config:  # FIXME: check this works
+            if "params" in starter_config:
                 self.model_params = dict(starter_config["params"])
             else:
                 raise ValueError("Missing parameters!")
@@ -463,8 +489,25 @@ class GPTServer:
         else:
             # Configuration of "secondary" (intermediate or finisher) node
             self.starter_addr = node_config["communication"]["starter_addr"]
-            # NOTE: the model will be initialized once config info is received
-        pass
+            self._running_thread = threading.Thread()  # Placeholder
+            # NOTE: the model will be initialized once config info is received (POST)
+
+        self.webserv_config = {
+            "/": {
+                "request.dispatch": cp.dispatch.MethodDispatcher(),
+                "tools.sessions.on": True,
+            }
+        }
+
+        cp.tree.mount(self, "/", self.webserv_config)
+        cp.config.update(
+            {
+                "server.socket_host": self.own_addr,
+                "server.socket_port": self.own_comm_port,
+            }
+        )
+
+        cp.engine.start()
 
     # ----- Public ------------------------------------------------------------
 
@@ -494,20 +537,25 @@ class GPTServer:
         self.model.load_weights(self.model_params)
         if set_eval:
             self.model.eval()
-        self.running = True  # NOTE!!!
 
     def start(
         self,
         n_nodes: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
-    ):
+    ) -> Union[None, str]:
         """
         Perform normal operation (open sockets, wait for communication from
         previous node and forward activations to next one)
 
-        This function launches an infinite loop, interrupted by the receival of
-        a special message (PUT) over the communication channel that triggers a
-        change in a class attribute
+        In starter nodes, the function launches the operation by creating
+        sockets to the nodes and initializing the sample vectors.
+        Starter nodes are the only ones for which the arguments should not be
+        None.
+
+        This function launches an infinite loop on a separate thread in
+        non-starter nodes, interrupted by the receival of a special message
+        (PUT) over the communication channel that triggers a change in a class
+        attribute.
 
         Args:
             n_nodes: number of nodes in the network, it is the same as the
@@ -518,19 +566,15 @@ class GPTServer:
             REMOVED: num_samples: ONLY FOR STARTER - number of generated samples
                 -> It is the same as the number of nodes in the network
         """
-        assert self.running
-
-        # TODO
-
         n_nodes = 1  # TODO: remove when pipelining is implemented
 
-        if self.node_type == "starter":
-            # Open sockets (2 ports!) - starter is server for both prev & next
-            assert n_nodes is not None and max_new_tokens is not None
-            assert self.sock_to_prev is None and self.sock_to_next is None
-            assert self.next_node is not None and self.prev_node is not None
-            assert self.model_config is not None and self.model is not None
+        # Configuration for all nodes
+        assert self.sock_to_prev is None and self.sock_to_next is None
+        assert self.next_node is not None and self.prev_node is not None
+        assert self.model_config is not None and self.model is not None
 
+        # Differentiate between different types
+        if self.node_type == "starter":
             if VERB:
                 print("Opening socket to next node")
             self.sock_to_next = socket.socket(
@@ -568,6 +612,9 @@ class GPTServer:
                 print(
                     f"Connected to PREV node: {self.prev_host}:{self.prev_port}"
                 )
+            self.running = True
+            # Open sockets (2 ports!) - starter is server for both prev & next
+            assert n_nodes is not None and max_new_tokens is not None
 
             # Perform tokenization + encoding -> send to next
             # TOKENIZATION - load metadata of tokenizer (if found)
@@ -580,14 +627,11 @@ class GPTServer:
             self.tok_encode = lambda s: self.tok.encode(s)
             self.tok_decode = lambda l: self.tok.decode(l)
 
+            if VERB:
+                print("> Tokenizer loaded!")
+
             # GENERATION
             # Encode starting sequence (TODO: implement prompt support)
-            # FIXME: make idx a vector with n_nodes elements (pipelining)
-            start = "\n"
-            start_ids = self.tok_encode(start)
-            idx = torch.tensor(
-                start_ids, dtype=torch.long, device=self.model_config.device
-            )[None, ...]
 
             # TODO: implement recurrent pipelining
             """Hint: use k % n_nodes to decide what to do (on which sample to
@@ -595,14 +639,22 @@ class GPTServer:
             The idea is: if at iter 'k' we work on a sample, then at iter 'k-1'
             we receive the previous outputs from the finisher
             """
+            # FIXME: make idx a vector with n_nodes elements (pipelining)
+            # idx will contain all the different n_nodes samples
+            start = "\n"
+            start_ids = self.tok_encode(start)
+            idx = torch.tensor(
+                start_ids, dtype=torch.long, device=self.model_config.device
+            )[None, ...]
+
             with torch.no_grad():
-                # with CTX:
+                # with CTX:  # FIXME
                 for k in range(max_new_tokens * n_nodes):
                     sample_id = k % n_nodes
                     if k >= n_nodes:
                         # We are not in the first iteration (k starts from 0)
                         # Wait for output of corresp. sample from finisher
-                        outs = self.sock_to_prev.recv(4)  # TODO: Set bufsize
+                        outs = self.sock_to_prev.recv(4)  # TODO: Set bufsize(?)
                         out_logits = pickle.loads(outs)
                         probs = F.softmax(out_logits, dim=1)
                         idx_next = torch.multinomial(probs, num_samples=1)
@@ -614,13 +666,77 @@ class GPTServer:
                     out_tx = pickle.dumps(idx_cond)
                     self.sock_to_next.sendall(out_tx)
 
-                print(self.tok_decode(idx[0].tolist()))
-
+                return self.tok_decode(idx[0].tolist())  # TODO: maybe return
         else:
-            # TODO: socket creation
-            # Intermediate is client for prev node, server for next
-            # Finisher is client for prev and next
-            pass
+            self.running = True
+            self._running_thread = threading.Thread(
+                target=self._node_loop,
+                # args=(self.pipelines[self.current_model_ind], mod),
+                daemon=True,
+            )
+            self._running_thread.start()
+
+    def create_sockets(self):
+        """
+        Create sockets for communicating the intermediate results with the
+        previous and next nodes in the chain.
+        """
+
+    # ----- Private (threads) -------------------------------------------------
+
+    def _node_loop(self):
+        """
+        Execution loop for non-starter nodes. This method must be used as the
+        target of a thread that is launched once the node has been correctly
+        initialized.
+
+        The execution will be stopped once a PUT request is made to /stop.
+        """
+        assert self.sock_to_prev is None and self.sock_to_next is None
+        assert self.next_node is not None and self.prev_node is not None
+        assert self.model is not None
+
+        # self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock_to_prev.bind(
+            (
+                self.node_config["addr"],
+                self.node_config["inference"]["port_in"],
+            )
+        )
+        if VERB:
+            print("Opening socket to previous node")
+        self.sock_to_prev.listen(1)
+        self.prev_host, self.prev_port = self.sock_to_prev.accept()
+        assert self.prev_port == self.prev_node["inference"]["port_out"]
+        if VERB:
+            print(f"Connected to PREV node: {self.prev_host}:{self.prev_port}")
+        self.running = True
+
+        if VERB:
+            print("Opening socket to next node")
+        self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock_to_next.bind(
+            (
+                self.node_config["addr"],
+                self.node_config["inference"]["port_out"],
+            )
+        )
+        self.sock_to_next.listen(1)
+        self.next_host, self.next_port = self.sock_to_next.accept()
+        assert self.next_port == self.next_node["inference"]["port_in"]
+        if VERB:
+            print(f"Connected to NEXT node: {self.next_host}:{self.next_port}")
+
+        iter = 0
+        with torch.no_grad():
+            while self.running:
+                from_prev = self.sock_to_prev.recv(4)
+                from_prev_tens = pickle.loads(from_prev)
+                output_tens = self.model(from_prev_tens)
+                out_pkl = pickle.dumps(output_tens)
+                self.sock_to_next.sendall(out_pkl)
+                iter += 1
 
     # ----- REST --------------------------------------------------------------
 
@@ -642,30 +758,46 @@ class GPTServer:
             transmission (from prev), process values (forward), and send them
             over to the next one
         """
-        if self.node_type != "starter" and self.model is None:
-            init_msg = json.loads(cp.request.body.read())
-            self.node_type = init_msg["role"]
-            self.prev_node = init_msg["prev_node"]
-            self.next_node = init_msg["next_node"]
-            self.model_config = init_msg["model_config"]
-            self.model_params = init_msg["params"]
-            # Set up the node
-            self.init_model()
+        if self.node_type is None and self.model is None:
+            if len(path) > 0 and path[0] == "init":
+                assert not self.running
+                init_msg = json.loads(cp.request.body.read())
+                self.node_type = init_msg["role"]
+                self.prev_node = init_msg["prev_node"]
+                self.next_node = init_msg["next_node"]
+                self.model_config = GPTConfig(**init_msg["model_config"])
+                self.model_params = deserialize_params(init_msg["params"])
+                # Set up the node
+                self.init_model()
+                if VERB:
+                    print(f"Starting operation - {self.node_type} node")
+                self.start()
+                cp.response.status = 200
+            else:
+                raise cp.HTTPError(404, "Not found")
         elif self.model is None:
             raise cp.HTTPError(
                 403,
                 "Failed to configure node - the model was already initialized",
             )
 
-    def PUT(self):
+    def PUT(self, *path):
         """Not implemented"""
-        # TODO: for non-Starters, implement stopping condition (use attribute
-        # self.running)
-        raise cp.HTTPError(501, "PUT not implemented!")
+        # TODO: for non-Starters, implement stopping condition
+        if self.node_type not in {"intermediate", "finisher"}:
+            raise cp.HTTPError(501, "PUT not implemented!")
+        else:
+            if len(path) > 0 and path[0] == "stop":
+                self.running = False
+                self._running_thread.join()
+                if VERB:
+                    print("Node stopped!")
+                cp.engine.stop()
+                cp.response.status = 200
 
     def DELETE(self):
         """Not implemented"""
-        raise cp.HTTPError(501, "PUT not implemented!")
+        raise cp.HTTPError(501, "DELETE not implemented!")
 
 
 class GPTDistributed:
@@ -787,30 +919,46 @@ class GPTDistributed:
             starter_config=starter_config,
         )
 
-    def configure_nodes(self):
+    def configure_nodes(self) -> int:
         """
         Send POST requests to the other nodes to inform them of their role and
         including their chunk of model.
+
+        Information sent:
+            - Node role ("role")
+            - Model config (GPTConfig as dict) ("model_config")
+            - Model parameters ("params") - from pickle.dumps()
+            - Previous node information - from json file ("prev_node")
+            - Next node information - from json ("next_node")
+
+        Returns:
+            1 if success
+            0 if at least 1 node fails
         """
-        # TODO: add also communication information to prev/next node information
-        # This way it is possible to ping the nodes (check alive)
+        out = 1  # Return code
 
         # Store the prev and next in a smart way
         prev = self.nodes_info["nodes"]["starter"]
         n_interm = len(self.nodes_info["nodes"]["intermediate"])
-        if n_interm == 0:
+        if n_interm == 0:  # No intermediate nodes
             next = prev
         elif n_interm == 1:
             next = self.nodes_info["nodes"]["finisher"]
-        else:
+        elif n_interm > 1:
             next = self.nodes_info["nodes"]["intermediate"][1]
+        else:
+            raise ValueError("Should not be here!")
 
         # Intermediate config
         for i, int_node in enumerate(self.nodes_info["nodes"]["intermediate"]):
+            if VERB:
+                print(f"Initializing intermediate node n.{i}")
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
-            curr_msg["model_config"] = self.model_config
-            curr_msg["params"] = self.model_chunks["intermediate"][i]
+            curr_msg["model_config"] = self.model_config.asdict()
+            curr_msg["params"] = serialize_params(
+                self.model_chunks["intermediate"][i]
+            )
 
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
@@ -829,17 +977,21 @@ class GPTDistributed:
             target_port = int_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/init"
-            ret = requests.post(addr, json=curr_msg)
-            while not ret.status_code == 200:
+            out *= self.request_to_node("post", addr, curr_msg)
+
+            if not out:
                 if VERB:
-                    print("Unable to reach node - retrying in 3s")
-                time.sleep(3)
-                ret = requests.post(addr, json=curr_msg)
+                    print("> Failed!")
+                return out
+
+            if VERB:
+                print("> Success!")
 
         # Finisher config - can use next/prev from last loop iteration
         curr_msg = self.init_msg.copy()
         curr_msg["role"] = "finisher"
-        curr_msg["model_config"] = self.model_config
+        curr_msg["model_config"] = self.model_config.asdict()
+        curr_msg["params"] = serialize_params(self.model_chunks["finisher"])
 
         curr_msg["prev_node"] = prev
         curr_msg["next_node"] = next
@@ -849,19 +1001,105 @@ class GPTDistributed:
             "port"
         ]
         addr = f"http://{target_addr}:{target_port}/init"
-        ret = requests.post(addr, json=curr_msg)
-        while not ret.status_code == 200:
-            if VERB:
-                print("Unable to reach node - retrying in 3s")
-            time.sleep(3)
-            ret = requests.post(addr, json=curr_msg)
+        if VERB:
+            print(f"Initializing finisher node ({addr})")
 
-        return 1
+        out *= self.request_to_node("post", addr, curr_msg)
+
+        if VERB and out:
+            print("> Success!")
+        elif VERB and not out:
+            print("> Failed!")
+
+        return out
+
+    def request_to_node(
+        self, req_type: str, addr: str, content: dict, max_n_requests: int = 100
+    ) -> int:
+        """
+        Send an HTTP request containing a json-formatted string to a specified
+        target node.
+
+        Args:
+            req_type: type of HTTP request, can be "post" or "put"
+            addr: full address (http(s)://<ip>:<port>) of the target node
+            content: python dict containing the information
+            max_n_requests: maximum number of requests before failure
+
+        Returns:
+            1 if successful
+            0 if failed
+        """
+        if req_type.lower() == "post":
+            req_func = requests.post
+        elif req_type.lower() == "put":
+            req_func = requests.put
+        else:
+            raise ValueError(f"Unsupported request type '{req_type}'")
+        ret = None
+        n_ret = 0
+        try:
+            ret = req_func(addr, json=content)
+        except:
+            n_ret += 1
+        while (
+            ret is None or ret.status_code != 200
+        ) and n_ret < max_n_requests:
+            if VERB:
+                print(
+                    f"Unable to reach node - retrying in 3s ({n_ret}/{max_n_requests})"
+                )
+            time.sleep(3)
+            try:
+                ret = req_func(addr, json=content)
+            except:
+                n_ret += 1
+
+        if ret is not None and ret.status_code == 200:
+            return 1
+        return 0
 
     def start(self):
         """
         Start the operation - webserver + model
 
         Stop when the model finished running, i.e., all tokens have been
-        generated
+        generated.
+
+        This method calls back self.configure_nodes() and self.webserv.start()
         """
+        # TODO: add assertions (uninitialized values)
+        if not self.configure_nodes():
+            raise AssertionError("Unable to initialize required nodes!")
+
+        self.webserv.start()
+
+        # Once finished, send PUT to each node to terminate execution for them
+        self.stop()
+
+    def stop(self) -> int:
+        """
+        Terminate execution of the application on every other node by sending
+        them a PUT request to <addr>:<port>/stop.
+
+        Returns:
+            1 if all requests were successful
+            0 if at least 1 request failed
+        """
+        out = 1
+        for int_node in self.nodes_info["nodes"]["intermediate"]:
+            target_addr = int_node["addr"]
+            target_port = int_node["communication"]["port"]
+
+            addr = f"http://{target_addr}:{target_port}/stop"
+
+            out *= self.request_to_node("PUT", addr, {})
+
+        target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
+        target_port = self.nodes_info["nodes"]["finisher"]["communication"][
+            "port"
+        ]
+        addr = f"http://{target_addr}:{target_port}/init"
+        out *= self.request_to_node("PUT", addr, {})
+
+        return out
