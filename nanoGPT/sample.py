@@ -12,7 +12,7 @@ import tiktoken
 import torch
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K
+from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
 from sub.model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
@@ -87,11 +87,13 @@ load_meta = False
 if (
     INIT_FROM == "resume"
     and "config" in checkpoint
-    and "dataset" in checkpoint["config"]
+    and "DATASET" in checkpoint["config"]
 ):  # older checkpoints might not have these...
     meta_path = os.path.join(
-        script_dir, "data", checkpoint["config"]["dataset"], "meta.pkl"
+        script_dir, "data", checkpoint["config"]["DATASET"], "meta.pkl"
     )
+    if VERB:
+        print("Looking for tokenizer info in: ", meta_path)
     load_meta = os.path.exists(meta_path)
 
 if load_meta:
