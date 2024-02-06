@@ -24,10 +24,6 @@ from sub.model_dist import GPTDistributed, GPTServer
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
 dataset = "shakespeare"
-dataset_name = os.path.splitext(dataset)[0]
-data_dir = os.path.join(script_dir, "data", dataset_name)
-out_dir = os.path.join(data_dir, "out")
-settings_path = os.path.join(script_dir, "settings_distr")
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
@@ -51,13 +47,20 @@ ctx = (
     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 )
 
-ckpt_path = os.path.join(out_dir, "ckpt.pt")
-network_conf_path = os.path.join(settings_path, "configuration.json")
-gpt_distr = GPTDistributed(ckpt_path)
 
-# Operation
-try:
-    gpt_distr.start()
-except KeyboardInterrupt:
-    cp.engine.stop()
-    print("Starter stopped")
+if __name__ == "__main__":
+    dataset_name = os.path.splitext(dataset)[0]
+    data_dir = os.path.join(script_dir, "data", dataset_name)
+    out_dir = os.path.join(data_dir, "out")
+    settings_path = os.path.join(script_dir, "settings_distr")
+    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    network_conf_path = os.path.join(settings_path, "configuration.json")
+
+    gpt_distr = GPTDistributed(ckpt_path)
+
+    # Operation
+    try:
+        gpt_distr.start()
+    except KeyboardInterrupt:
+        cp.engine.stop()
+        print("Starter stopped")

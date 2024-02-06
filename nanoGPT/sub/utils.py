@@ -71,3 +71,33 @@ def get_lr(
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (lr - min_lr)
+
+
+def loading_bar(
+    current_iter: int,
+    tot_iter: int,
+    n_chars: int = 10,
+    ch: str = "=",
+    n_ch: str = " ",
+) -> str:
+    """
+    loading_bar
+    ---
+    Produce a loading bar string to be printed.
+
+    Args:
+        current_iter: current iteration, will determine the position
+            of the current bar
+        tot_iter: total number of iterations to be performed
+        n_chars: total length of the loading bar in characters
+        ch: character that makes up the loading bar (default: =)
+        n_ch: character that makes up the remaining part of the bar
+            (default: blankspace)
+
+    Returns:
+        string containing the loading bar for the current iteration
+    """
+    n_elem = int(current_iter * n_chars / tot_iter)
+    prog = str("".join([ch] * n_elem))
+    n_prog = str("".join([" "] * (n_chars - n_elem - 1)))
+    return "[" + prog + n_prog + "]"

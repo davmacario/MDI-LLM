@@ -48,6 +48,10 @@ ctx = (
     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 )
 
-with open(network_conf_path, "r") as f:
-    full_config = json.load(f)
-    gpt_webserv = GPTServer(node_config=full_config["nodes"]["finisher"])
+try:
+    with open(network_conf_path, "r") as f:
+        full_config = json.load(f)
+        gpt_webserv = GPTServer(node_config=full_config["nodes"]["finisher"])
+except KeyboardInterrupt:
+    print("Node stopped!")
+    cp.engine.stop()

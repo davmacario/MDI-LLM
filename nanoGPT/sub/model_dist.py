@@ -25,6 +25,7 @@ from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, CKPT_INTERVAL, DEVICE,
 from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
                        MultiHeadAttention)
 from sub.server_config import MAX_TRIES
+from sub.utils import loading_bar
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -592,13 +593,7 @@ class GPTServer:
         if self.node_type == "starter":
             assert n_nodes is not None and max_new_tokens is not None
 
-            # Perform tokenization + encoding -> send to next
-            # TOKENIZATION - load metadata of tokenizer (if found)
-            if VERB:
-                print(f"Loading tokenizer metadata from {self.tok_meta_path}")
-            with open(self.tok_meta_path, "rb") as f:
-                meta = pickle.load(f)
-            self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+            self._load_tokenizer()
             self.tok_encode = lambda s: self.tok.encode(s)
             self.tok_decode = lambda l: self.tok.decode(l)
 
@@ -626,8 +621,13 @@ class GPTServer:
             # corresp to EOS is received for one of the samples
             with torch.no_grad():
                 # with CTX:  # FIXME
-                for k in range(max_new_tokens * n_nodes):
+                total_iters = max_new_tokens * n_nodes
+                for k in range(total_iters):
                     sample_id = k % n_nodes
+                    print(
+                        f"Generating: {loading_bar(k, total_iters, 20)}",
+                        end="\r",
+                    )
                     if k >= n_nodes:
                         # We are not in the first iteration (k starts from 0)
                         # Wait for output of corresp. sample from finisher
@@ -646,9 +646,19 @@ class GPTServer:
 
                     if k < (n_nodes * (max_new_tokens - 1)):
                         # Send to next iff not at the last token
-                        idx_cond = self.model(idx)
+
+                        # Crop to block size
+                        idx_cond = (
+                            idx
+                            if idx.size(1) <= self.model.config.block_size
+                            else idx[:, -self.model.config.block_size :]
+                        )
+                        # Forward in local model
+                        idx_cond = self.model(idx_cond)
 
                         self.send_to_next(idx_cond)
+
+                print("Generation completed!                          ")
 
                 out_text = self.tok_decode(idx[0].tolist())
                 # Stop timer
@@ -694,12 +704,10 @@ class GPTServer:
                 # Look for stopping msg
                 if type(data) == str and data == self.stop_msg:
                     if VERB:
-                        print("Stopping message received")
+                        print("Stopping message received! Generation complete!")
                     self.running = False
                     return self.stop_msg
                 else:
-                    if VERB:
-                        print("Received full activation")
                     finished = True
                     return data
 
@@ -714,8 +722,6 @@ class GPTServer:
             bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
         self.sock_to_next_prop[0].send(tx_msg)
-        if VERB:
-            print("Sent activations to next node")
 
     def create_sockets(self):
         """
@@ -774,6 +780,24 @@ class GPTServer:
                 print(f"Connected to NEXT node: {self.sock_to_next_prop[1]}")
 
     # ----- Private -----------------------------------------------------------
+
+    def _load_tokenizer(self) -> CharacterTokenizer:
+        """
+        Load the tokenizer information from the path specified in class
+        attribute `self.tok_meta_path`.
+
+        The tokenizer object will be stored in `self.tok`.
+
+        Returns:
+            the tokenizer object
+        """
+        if VERB:
+            print(f"Loading tokenizer metadata from {self.tok_meta_path}")
+        with open(self.tok_meta_path, "rb") as f:
+            meta = pickle.load(f)
+        self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+
+        return self.tok
 
     def _start_server(self, max_tries: int = 30):
         """
@@ -854,12 +878,14 @@ class GPTServer:
         assert self.sock_to_prev is not None and self.sock_to_next is not None
         assert self.model is not None and self.model_config is not None
 
+        loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         with torch.no_grad():
             while self.running:
                 # Wait for output from prev or stopping condition
                 ins = self.recv_from_prev()
                 if self.running:
+                    print(f"Generating {loopsigns[iter % 4]}", end="\r")
                     ins = ins.to(self.model_config.device)
                     # Forward pass
                     outs = self.model(ins)
@@ -867,21 +893,27 @@ class GPTServer:
                     self.send_to_next(outs)
                     iter += 1
                 else:
+                    print("Generation completed!")
                     self.send_to_next(self.stop_msg)
 
-    def _shutdown(self):
+    def shutdown(self) -> int:
         """
-        Turn off the node - close sockets and stop threads
+        Turn off the node - stop server, close sockets and stop thread.
+
+        Returns:
+            1 upon success, 0 otherwise
         """
-        # TODO: understand how to use the PUT to stop the cherrypy server
-        # Hint: use another thread to run this method and launch it at PUT, but
-        # wait 3s to allow PUT response to be sent
-        time.sleep(3)
-        self.sock_to_prev.close()
-        self.sock_to_next.close()
-        cp.engine.stop()
-        self.running = False
-        self._running_thread.join()
+        try:
+            time.sleep(3)
+            cp.engine.stop()
+            self.sock_to_prev.close()  # FIXME: one of the 2 should use the conn.
+            self.sock_to_next.close()
+            self.running = False  # Redundant
+            if self.node_type != "starter":
+                self._running_thread.join()
+            return 1
+        except:
+            return 0
 
     # ----- REST --------------------------------------------------------------
 
@@ -937,8 +969,9 @@ class GPTServer:
         else:
             if len(path) > 0 and path[0] == "stop":
                 self._end_thr = threading.Thread(
-                    target=self._shutdown, daemon=True
+                    target=self.shutdown, daemon=True
                 )
+                self._end_thr.start()
                 if VERB:
                     print("Node stopped!")
                 cp.response.status = 200
@@ -1222,15 +1255,21 @@ class GPTDistributed:
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        out = self.webserv.start(n_nodes=self.n_total_nodes, max_new_tokens=100)
+        out = self.webserv.start(
+            n_nodes=self.n_total_nodes, max_new_tokens=1000
+        )
 
+        print("-------------------------------------------------")
         print("Produced output:\n", out)
+        print("-------------------------------------------------")
 
         # Once finished, send PUT to each node to terminate execution for them
         self.stop()
 
     def stop(self) -> int:
         """
+        Interrupt operation and shut down the node.
+
         Terminate execution of the application on every other node by sending
         them a PUT request to <addr>:<port>/stop.
 
@@ -1246,7 +1285,6 @@ class GPTDistributed:
             addr = f"http://{target_addr}:{target_port}/stop"
             if VERB:
                 print(f"Sending PUT request to {addr}")
-
             out *= self.request_to_node("PUT", addr, {})
 
         target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
@@ -1254,8 +1292,10 @@ class GPTDistributed:
             "port"
         ]
         addr = f"http://{target_addr}:{target_port}/stop"
-        print(f"Sending PUT request to {addr}")
+        if VERB:
+            print(f"Sending PUT request to {addr}")
         out *= self.request_to_node("PUT", addr, {})
-        print("HERE")
+
+        self.webserv.shutdown()
 
         return out
