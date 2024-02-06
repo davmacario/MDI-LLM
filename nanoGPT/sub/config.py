@@ -41,7 +41,7 @@ else:
     DEVICE = "cpu"
 
 # ---- Training configuration --------------------
-INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
+INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
@@ -66,6 +66,7 @@ MIN_LR: float = 6e-5  # ~= .1*lr
 
 # ---- Generation settings ----------------------
 TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 probability
+TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 
 # ---- System configuration ----------------------
 DTYPE = (

@@ -12,7 +12,8 @@ import tiktoken
 import torch
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
+from sub.config import (COMPILE, DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K,
+                        VERB)
 from sub.model import GPT, GPTConfig
 
 # -----------------------------------------------------------------------------
@@ -30,7 +31,6 @@ out_dir = os.path.join(data_dir, "out")
 start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 10  # number of samples to draw
 max_new_tokens = 1000  # number of tokens generated in each sample
-temperature = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 seed = 1337
 # exec(open("configurator.py").read())  # overrides from command line or config file
 
@@ -123,7 +123,7 @@ with torch.no_grad():
     with ctx:
         for k in range(num_samples):
             y = model.generate(
-                x, max_new_tokens, temperature=temperature, top_k=TOP_K
+                x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
             print(decode(y[0].tolist()))
             print("---------------")
