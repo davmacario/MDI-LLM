@@ -10,7 +10,7 @@ import time
 import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Union
+from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
 import requests
@@ -21,7 +21,7 @@ from torch.nn import functional as F
 from sub.char_tokenizer import CharacterTokenizer
 from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, CKPT_INTERVAL, DEVICE,
                         DROPOUT, EVAL_ITERS, LEARNING_RATE, N_EMBD, N_HEADS,
-                        N_ITER_TRAIN, N_LAYER, VERB)
+                        N_ITER_TRAIN, N_LAYER, TEMPERATURE, TOP_K, VERB)
 from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
                        MultiHeadAttention)
 from sub.server_config import MAX_TRIES
@@ -66,6 +66,7 @@ N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
 #     if DEVICE in {"cpu", "mps"}
 #     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 # )
+HEADERLENGTH = 10  # Header length in chars
 
 script_dir = os.path.dirname(__file__)
 
@@ -400,11 +401,11 @@ class GPTServer:
     """
 
     exposed = True
-    model: Union[None, StarterNode, IntermediateNode, FinisherNode] = None
-    next_node: Union[None, Dict] = None
-    prev_node: Union[None, Dict] = None
-    model_params: Union[None, Dict] = None
-    model_config: Union[None, GPTConfig] = None
+    model: Union[StarterNode, IntermediateNode, FinisherNode, None] = None
+    next_node: Union[Dict, None] = None
+    prev_node: Union[Dict, None] = None
+    model_params: Union[Dict, None] = None
+    model_config: Union[GPTConfig, None] = None
     # NOTE: True iff the model has been initialized and it is ready to perform
     # inference.
     # When this flag is turned to False (at the end of the generated sequence),
@@ -412,8 +413,15 @@ class GPTServer:
     # (in non-starter nodes) is to receive the specific PUT HTTP request from
     # the starter, that advertises the conclusion of the generated sequence
     running: bool = False
+    stop_msg: str = "STOP"
     sock_to_prev: Union[socket.socket, None] = None
+    sock_to_prev_prop: Tuple = ()  # FIXME - not needed
     sock_to_next: Union[socket.socket, None] = None
+    sock_to_next_prop: Tuple = ()
+
+    # Some model configs:
+    top_k = TOP_K
+    temperature = TEMPERATURE
 
     def __init__(
         self,
@@ -535,6 +543,7 @@ class GPTServer:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
         self.model.load_weights(self.model_params)
+        self.model = self.model.to(DEVICE)
         if set_eval:
             self.model.eval()
 
@@ -551,20 +560,22 @@ class GPTServer:
         sockets to the nodes and initializing the sample vectors.
         Starter nodes are the only ones for which the arguments should not be
         None.
+        The loop, for starter nodes, is not infinite, as they should know how
+        many tokens to generate.
 
         This function launches an infinite loop on a separate thread in
         non-starter nodes, interrupted by the receival of a special message
         (PUT) over the communication channel that triggers a change in a class
         attribute.
+        Non-starter node do not know how long the generation will take, hence
+        they need to be stopped "externally" by the starter node once the
+        generation is complete.
 
         Args:
             n_nodes: number of nodes in the network, it is the same as the
                 number of generated samples (recurrent pipelining)
             max_new_tokens: ONLY FOR STARTER - maximum number of tokens per
                 generated sample
-
-            REMOVED: num_samples: ONLY FOR STARTER - number of generated samples
-                -> It is the same as the number of nodes in the network
         """
         n_nodes = 1  # TODO: remove when pipelining is implemented
 
@@ -573,52 +584,16 @@ class GPTServer:
         assert self.next_node is not None and self.prev_node is not None
         assert self.model_config is not None and self.model is not None
 
+        self.create_sockets()
+
+        assert self.sock_to_prev is not None and self.sock_to_next is not None
+
         # Differentiate between different types
         if self.node_type == "starter":
-            if VERB:
-                print("Opening socket to next node")
-            self.sock_to_next = socket.socket(
-                socket.AF_INET, socket.SOCK_STREAM
-            )
-            self.sock_to_next.bind(
-                (
-                    self.node_config["addr"],
-                    self.node_config["inference"]["port_out"],
-                )
-            )
-            self.sock_to_next.listen(1)
-            self.next_host, self.next_port = self.sock_to_next.accept()
-            assert self.next_port == self.next_node["inference"]["port_in"]
-            if VERB:
-                print(
-                    f"Connected to NEXT node: {self.next_host}:{self.next_port}"
-                )
-
-            if VERB:
-                print("Opening socket to previous node")
-            self.sock_to_prev = socket.socket(
-                socket.AF_INET, socket.SOCK_STREAM
-            )
-            self.sock_to_prev.bind(
-                (
-                    self.node_config["addr"],
-                    self.node_config["inference"]["port_in"],
-                )
-            )
-            self.sock_to_prev.listen(1)
-            self.prev_host, self.prev_port = self.sock_to_prev.accept()
-            assert self.prev_port == self.prev_node["inference"]["port_out"]
-            if VERB:
-                print(
-                    f"Connected to PREV node: {self.prev_host}:{self.prev_port}"
-                )
-            self.running = True
-            # Open sockets (2 ports!) - starter is server for both prev & next
             assert n_nodes is not None and max_new_tokens is not None
 
             # Perform tokenization + encoding -> send to next
             # TOKENIZATION - load metadata of tokenizer (if found)
-            # TODO: understand whether to put this here or in GPTDistributed
             if VERB:
                 print(f"Loading tokenizer metadata from {self.tok_meta_path}")
             with open(self.tok_meta_path, "rb") as f:
@@ -647,6 +622,8 @@ class GPTServer:
                 start_ids, dtype=torch.long, device=self.model_config.device
             )[None, ...]
 
+            # TODO: implement mechanism to stop generation whenever the token
+            # corresp to EOS is received for one of the samples
             with torch.no_grad():
                 # with CTX:  # FIXME
                 for k in range(max_new_tokens * n_nodes):
@@ -654,35 +631,217 @@ class GPTServer:
                     if k >= n_nodes:
                         # We are not in the first iteration (k starts from 0)
                         # Wait for output of corresp. sample from finisher
-                        outs = self.sock_to_prev.recv(4)  # TODO: Set bufsize(?)
-                        out_logits = pickle.loads(outs)
-                        probs = F.softmax(out_logits, dim=1)
+                        out_logits = self.recv_from_prev().to(
+                            self.model_config.device
+                        )
+                        logits = out_logits[:, -1, :] / self.temperature
+                        if self.top_k is not None:
+                            v, _ = torch.topk(
+                                logits, min(self.top_k, logits.size(-1))
+                            )
+                            logits[logits < v[:, [-1]]] = -float("Inf")
+                        probs = F.softmax(logits, dim=1)
                         idx_next = torch.multinomial(probs, num_samples=1)
                         idx = torch.cat((idx, idx_next), dim=1)
 
-                    # Send to next
-                    idx_cond = self.model(idx)
+                    if k < (n_nodes * (max_new_tokens - 1)):
+                        # Send to next iff not at the last token
+                        idx_cond = self.model(idx)
 
-                    out_tx = pickle.dumps(idx_cond)
-                    self.sock_to_next.sendall(out_tx)
+                        self.send_to_next(idx_cond)
 
-                return self.tok_decode(idx[0].tolist())  # TODO: maybe return
+                out_text = self.tok_decode(idx[0].tolist())
+                # Stop timer
+
+                # Send stop message to the next
+                self.send_to_next(self.stop_msg)
+
+                return out_text
         else:
             self.running = True
-            self._running_thread = threading.Thread(
-                target=self._node_loop,
-                # args=(self.pipelines[self.current_model_ind], mod),
-                daemon=True,
-            )
-            self._running_thread.start()
+            self._node_loop()
+
+    def recv_from_prev(self, max_wait_s: int = 5) -> Any:
+        """
+        Receive a full message from the previous node.
+
+        This method assumes the message is an encoding in bytes of any Python
+        object, which can be extracted using pickle.
+
+        Returns:
+            the received python object
+        """
+        assert self.sock_to_prev is not None
+
+        full_msg = b""
+        new_msg = True
+        finished = False
+        t_start = time.time()
+        while not finished and time.time() - t_start < max_wait_s:
+            # Receive information from the new socket
+            msg = self.sock_to_prev.recv(1024)  # Size of the buffer in bytes
+            if new_msg:
+                # Extract message length from the header
+                msg_len = int(msg[:HEADERLENGTH])
+                new_msg = False
+
+            full_msg += msg
+
+            if len(full_msg) - HEADERLENGTH >= msg_len:
+                # When the full message is received, the length will be the one in the header
+                # print("Raw msg: ", full_msg[HEADERLENGTH:])
+                data = pickle.loads(full_msg[HEADERLENGTH:])
+                # Look for stopping msg
+                if type(data) == str and data == self.stop_msg:
+                    if VERB:
+                        print("Stopping message received")
+                    self.running = False
+                    return self.stop_msg
+                else:
+                    if VERB:
+                        print("Received full activation")
+                    finished = True
+                    return data
+
+    def send_to_next(self, data: Any):
+        """
+        Send any Python object to the next node.
+        """
+        assert self.sock_to_next_prop != ()
+
+        message_str = pickle.dumps(data)
+        tx_msg = (
+            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
+        )
+        self.sock_to_next_prop[0].send(tx_msg)
+        if VERB:
+            print("Sent activations to next node")
 
     def create_sockets(self):
         """
         Create sockets for communicating the intermediate results with the
         previous and next nodes in the chain.
-        """
 
-    # ----- Private (threads) -------------------------------------------------
+        Starter nodes will open the connection towards the next node first,
+        while all other nodes will first connect to the previous ones.
+        """
+        assert self.sock_to_prev is None and self.sock_to_next is None
+        assert self.next_node is not None and self.prev_node is not None
+
+        if self.node_type == "starter":
+            # Open server towards next node (first thing if starter node)
+            if VERB:
+                print(
+                    f"Opening socket to next node (to port {self.next_node['inference']['port_in']})"
+                )
+
+            self._start_server()
+            assert self.sock_to_next is not None
+            self.sock_to_next.listen(1)
+
+            self.sock_to_next_prop = self.sock_to_next.accept()
+
+            if VERB:
+                print(f"Connected to NEXT node: {self.sock_to_next_prop[1]}")
+
+        # Open client towards previous
+        if VERB:
+            print(
+                f"Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
+            )
+
+        self._start_client()
+        assert self.sock_to_prev is not None
+
+        if VERB:
+            print("Connected to PREV node as client")
+        self.running = True
+
+        if self.node_type != "starter":
+            # Open server towards next node
+            if VERB:
+                print(
+                    f"Opening socket to next node (to port {self.next_node['inference']['port_in']})"
+                )
+
+            self._start_server()
+            assert self.sock_to_next is not None
+            self.sock_to_next.listen(1)
+
+            self.sock_to_next_prop = self.sock_to_next.accept()
+
+            if VERB:
+                print(f"Connected to NEXT node: {self.sock_to_next_prop[1]}")
+
+    # ----- Private -----------------------------------------------------------
+
+    def _start_server(self, max_tries: int = 30):
+        """
+        Start the server socket, i.e., the socket to the next node in the chain.
+        """
+        loopsigns = ["|", "/", "-", "\\"]
+        self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        failed = True
+        tries = 0
+        while failed and tries < max_tries:
+            # Attempt to bind
+            try:
+                self.sock_to_next.bind(
+                    (
+                        self.node_config["addr"],
+                        self.node_config["inference"]["port_out"],
+                    )
+                )
+            except:
+                tries += 1
+                print(f"Retrying {loopsigns[tries % 4]}", end="\r")
+                time.sleep(1)
+            else:
+                failed = False
+
+        if failed:
+            raise ConnectionError(
+                f"Unable to bind to ({self.node_config['addr']}, {self.node_config['inference']['port_out']})"
+            )
+        # Will listen and accept afterwards
+
+    def _start_client(self, max_tries: int = 30):
+        """
+        Start the client socket, i.e., the socket to the prev node in the chain.
+        """
+        loopsigns = ["|", "/", "-", "\\"]
+        conn = False
+        tries = 0
+        while not conn and tries < max_tries:
+            try:
+                self.sock_to_prev = socket.socket(
+                    socket.AF_INET, socket.SOCK_STREAM
+                )
+                # Bind should work even after some fails
+                self.sock_to_prev.bind(
+                    (
+                        self.node_config["addr"],
+                        self.node_config["inference"]["port_in"],
+                    )
+                )
+                self.sock_to_prev.connect(
+                    (
+                        self.prev_node["addr"],
+                        self.prev_node["inference"]["port_out"],
+                    )
+                )
+            except:
+                # Can either fail when binding or when connecting
+                tries += 1
+                print(f"Retrying {loopsigns[tries % 4]}", end="\r")
+                time.sleep(1)
+            else:
+                conn = True
+
+        if not conn:
+            raise ConnectionError(
+                f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
+            )
 
     def _node_loop(self):
         """
@@ -692,51 +851,37 @@ class GPTServer:
 
         The execution will be stopped once a PUT request is made to /stop.
         """
-        assert self.sock_to_prev is None and self.sock_to_next is None
-        assert self.next_node is not None and self.prev_node is not None
-        assert self.model is not None
-
-        # self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock_to_prev.bind(
-            (
-                self.node_config["addr"],
-                self.node_config["inference"]["port_in"],
-            )
-        )
-        if VERB:
-            print("Opening socket to previous node")
-        self.sock_to_prev.listen(1)
-        self.prev_host, self.prev_port = self.sock_to_prev.accept()
-        assert self.prev_port == self.prev_node["inference"]["port_out"]
-        if VERB:
-            print(f"Connected to PREV node: {self.prev_host}:{self.prev_port}")
-        self.running = True
-
-        if VERB:
-            print("Opening socket to next node")
-        self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock_to_next.bind(
-            (
-                self.node_config["addr"],
-                self.node_config["inference"]["port_out"],
-            )
-        )
-        self.sock_to_next.listen(1)
-        self.next_host, self.next_port = self.sock_to_next.accept()
-        assert self.next_port == self.next_node["inference"]["port_in"]
-        if VERB:
-            print(f"Connected to NEXT node: {self.next_host}:{self.next_port}")
+        assert self.sock_to_prev is not None and self.sock_to_next is not None
+        assert self.model is not None and self.model_config is not None
 
         iter = 0
         with torch.no_grad():
             while self.running:
-                from_prev = self.sock_to_prev.recv(4)
-                from_prev_tens = pickle.loads(from_prev)
-                output_tens = self.model(from_prev_tens)
-                out_pkl = pickle.dumps(output_tens)
-                self.sock_to_next.sendall(out_pkl)
-                iter += 1
+                # Wait for output from prev or stopping condition
+                ins = self.recv_from_prev()
+                if self.running:
+                    ins = ins.to(self.model_config.device)
+                    # Forward pass
+                    outs = self.model(ins)
+                    # Send to next
+                    self.send_to_next(outs)
+                    iter += 1
+                else:
+                    self.send_to_next(self.stop_msg)
+
+    def _shutdown(self):
+        """
+        Turn off the node - close sockets and stop threads
+        """
+        # TODO: understand how to use the PUT to stop the cherrypy server
+        # Hint: use another thread to run this method and launch it at PUT, but
+        # wait 3s to allow PUT response to be sent
+        time.sleep(3)
+        self.sock_to_prev.close()
+        self.sock_to_next.close()
+        cp.engine.stop()
+        self.running = False
+        self._running_thread.join()
 
     # ----- REST --------------------------------------------------------------
 
@@ -771,7 +916,10 @@ class GPTServer:
                 self.init_model()
                 if VERB:
                     print(f"Starting operation - {self.node_type} node")
-                self.start()
+                self._running_thread = threading.Thread(
+                    target=self.start, daemon=True
+                )
+                self._running_thread.start()
                 cp.response.status = 200
             else:
                 raise cp.HTTPError(404, "Not found")
@@ -788,12 +936,14 @@ class GPTServer:
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
             if len(path) > 0 and path[0] == "stop":
-                self.running = False
-                self._running_thread.join()
+                self._end_thr = threading.Thread(
+                    target=self._shutdown, daemon=True
+                )
                 if VERB:
                     print("Node stopped!")
-                cp.engine.stop()
                 cp.response.status = 200
+            else:
+                raise cp.HTTPError(404, "Not found!")
 
     def DELETE(self):
         """Not implemented"""
@@ -1072,7 +1222,9 @@ class GPTDistributed:
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        self.webserv.start()
+        out = self.webserv.start(n_nodes=self.n_total_nodes, max_new_tokens=100)
+
+        print("Produced output:\n", out)
 
         # Once finished, send PUT to each node to terminate execution for them
         self.stop()
@@ -1092,6 +1244,8 @@ class GPTDistributed:
             target_port = int_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/stop"
+            if VERB:
+                print(f"Sending PUT request to {addr}")
 
             out *= self.request_to_node("PUT", addr, {})
 
@@ -1099,7 +1253,9 @@ class GPTDistributed:
         target_port = self.nodes_info["nodes"]["finisher"]["communication"][
             "port"
         ]
-        addr = f"http://{target_addr}:{target_port}/init"
+        addr = f"http://{target_addr}:{target_port}/stop"
+        print(f"Sending PUT request to {addr}")
         out *= self.request_to_node("PUT", addr, {})
+        print("HERE")
 
         return out
