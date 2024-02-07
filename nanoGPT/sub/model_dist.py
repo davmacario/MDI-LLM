@@ -60,8 +60,8 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
+N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
@@ -118,7 +118,7 @@ def split_parameters(
 
     assert n_nodes >= 2
 
-    out_chunks = {}  # TODO: add same keys as config["nodes"]
+    out_chunks = {}
 
     # 1. Select params for Starter
     out_chunks["starter"] = {}
@@ -155,7 +155,7 @@ def split_parameters(
         #       transformer.layer.<layer_ind>.[...]
         # so we need to select the correct layer indices
         valid_layer_ind = list(
-            range((i - 2) * N_LAYERS_INTERM, (i - 1) * N_LAYERS_INTERM)
+            range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM)
         )
         relevant_keys = [
             k
@@ -173,9 +173,7 @@ def split_parameters(
             for k in relevant_keys:
                 if k.startswith(prefix):
                     end = remove_prefix(k, prefix)
-                    new_k = (
-                        f"intermediate_model.layers.{int(local_layer_ind)}{end}"
-                    )
+                    new_k = f"intermediate_model.layers.{local_layer_ind}{end}"
                     curr_params[new_k] = model_params[k]
             local_layer_ind += 1
 
