@@ -64,8 +64,15 @@ if __name__ == "__main__":
     # Print first element (first key)
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
-    par_split = split_parameters(checkpoint["model"], 2)
-    print(par_split["finisher"].keys())
+    par_split = split_parameters(checkpoint["model"], 3)
+    print("Intermediate node keys:")
+    int_k = list(par_split["intermediate"][0].keys())
+    for k in int_k:
+        print(k)
+    print("Finisher node keys:")
+    fin_k = list(par_split["finisher"].keys())
+    for k in fin_k:
+        print(k)
 
     fn = FinisherNode(GPTConfig(**checkpoint["model_args"]))
 
