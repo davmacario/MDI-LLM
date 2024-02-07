@@ -773,6 +773,25 @@ class GPTServer:
             if VERB:
                 print(f"Connected to NEXT node: {self.sock_to_next_prop[1]}")
 
+    def shutdown(self) -> int:
+        """
+        Turn off the node - stop server, close sockets and stop thread.
+
+        Returns:
+            1 upon success, 0 otherwise
+        """
+        try:
+            time.sleep(3)
+            cp.engine.stop()
+            self.sock_to_prev.close()  # FIXME: one of the 2 should use the conn.
+            self.sock_to_next.close()
+            self.running = False  # Redundant
+            if self.node_type != "starter":
+                self._running_thread.join()
+            return 1
+        except:
+            return 0
+
     # ----- Private -----------------------------------------------------------
 
     def _load_tokenizer(self) -> CharacterTokenizer:
@@ -890,25 +909,6 @@ class GPTServer:
                     print("Generation completed!")
                     self.send_to_next(self.stop_msg)
 
-    def shutdown(self) -> int:
-        """
-        Turn off the node - stop server, close sockets and stop thread.
-
-        Returns:
-            1 upon success, 0 otherwise
-        """
-        try:
-            time.sleep(3)
-            cp.engine.stop()
-            self.sock_to_prev.close()  # FIXME: one of the 2 should use the conn.
-            self.sock_to_next.close()
-            self.running = False  # Redundant
-            if self.node_type != "starter":
-                self._running_thread.join()
-            return 1
-        except:
-            return 0
-
     # ----- REST --------------------------------------------------------------
 
     def GET(self, *path, **params):
@@ -956,8 +956,9 @@ class GPTServer:
             )
 
     def PUT(self, *path):
-        """Not implemented"""
-        # TODO: for non-Starters, implement stopping condition
+        """
+        Used by the starter to stop running nodes at the end of the generation
+        """
         if self.node_type not in {"intermediate", "finisher"}:
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
