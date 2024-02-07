@@ -27,7 +27,7 @@ BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
 BATCH_SIZE = 12  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
-N_LAYER = 2  # Number of transformer blocks
+N_LAYER = 4  # Number of transformer blocks
 DROPOUT = 0.2  # Dropout probability
 BIAS = True  # do we use bias inside LayerNorm and Linear layers?
 
@@ -41,7 +41,7 @@ else:
     DEVICE = "cpu"
 
 # ---- Training configuration --------------------
-INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
+INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
