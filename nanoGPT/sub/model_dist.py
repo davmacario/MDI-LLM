@@ -60,8 +60,8 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
+N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
@@ -546,7 +546,7 @@ class GPTServer:
         self,
         n_nodes: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
-    ) -> Union[None, str]:
+    ) -> Union[None, List[str]]:
         """
         Perform normal operation (open sockets, wait for communication from
         previous node and forward activations to next one)
@@ -571,6 +571,9 @@ class GPTServer:
                 number of generated samples (recurrent pipelining)
             max_new_tokens: ONLY FOR STARTER - maximum number of tokens per
                 generated sample
+
+        Returns:
+            if starter node, return the list of produced samples, else nothing
         """
         n_nodes = 1  # TODO: remove when pipelining is implemented
 
@@ -594,68 +597,7 @@ class GPTServer:
             if VERB:
                 print("> Tokenizer loaded!")
 
-            # GENERATION
-            # Encode starting sequence (TODO: implement prompt support)
-
-            # TODO: implement recurrent pipelining
-            """Hint: use k % n_nodes to decide what to do (on which sample to
-            work)
-            The idea is: if at iter 'k' we work on a sample, then at iter 'k-1'
-            we receive the previous outputs from the finisher
-            """
-            # FIXME: make idx a vector with n_nodes elements (pipelining)
-            # idx will contain all the different n_nodes samples
-            start = "\n"
-            start_ids = self.tok_encode(start)
-            idx = torch.tensor(
-                start_ids, dtype=torch.long, device=self.model_config.device
-            )[None, ...]
-
-            # TODO: implement mechanism to stop generation whenever the token
-            # corresp to EOS is received for one of the samples
-            with torch.no_grad():
-                # with CTX:  # FIXME
-                total_iters = max_new_tokens * n_nodes
-                for k in range(total_iters):
-                    sample_id = k % n_nodes
-                    print(
-                        f"Generating: {loading_bar(k, total_iters, 20)}",
-                        end="\r",
-                    )
-                    if k >= n_nodes:
-                        # We are not in the first iteration (k starts from 0)
-                        # Wait for output of corresp. sample from finisher
-                        out_logits = self.recv_from_prev().to(
-                            self.model_config.device
-                        )
-                        logits = out_logits[:, -1, :] / self.temperature
-                        if self.top_k is not None:
-                            v, _ = torch.topk(
-                                logits, min(self.top_k, logits.size(-1))
-                            )
-                            logits[logits < v[:, [-1]]] = -float("Inf")
-                        probs = F.softmax(logits, dim=1)
-                        idx_next = torch.multinomial(probs, num_samples=1)
-                        idx = torch.cat((idx, idx_next), dim=1)
-
-                    if k < (n_nodes * (max_new_tokens - 1)):
-                        # Send to next iff not at the last token
-
-                        # Crop to block size
-                        idx_cond = (
-                            idx
-                            if idx.size(1) <= self.model.config.block_size
-                            else idx[:, -self.model.config.block_size :]
-                        )
-                        # Forward in local model
-                        idx_cond = self.model(idx_cond)
-
-                        self.send_to_next(idx_cond)
-
-                print("Generation completed!                          ")
-
-                out_text = self.tok_decode(idx[0].tolist())
-                # Stop timer
+                out_text = self._starter_loop(n_nodes, max_new_tokens)
 
                 # Send stop message to the next
                 self.send_to_next(self.stop_msg)
@@ -879,6 +821,94 @@ class GPTServer:
             raise ConnectionError(
                 f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
             )
+
+    def _starter_loop(self, n_nodes: int, max_new_tokens: int) -> List[str]:
+        """
+        Generation loop for the starter node only.
+        This loop has a finite duration, as the starter knows what is the length
+        of the samples to be generated.
+
+        Args:
+            n_nodes: total number of nodes in the network it will be equal to
+                the number of generated samples (using pipelining)
+            max_new_tokens: maximum number of tokens
+
+        Returns:
+            list containing the `n_nodes` generated samples
+
+        ---
+
+        TODO:
+            Measure time
+            Recurrent pipelining
+            Measure time again
+        """
+        assert self.model_config is not None and self.model is not None
+
+        # Encode starting sequence (TODO: implement prompt support)
+
+        # TODO: implement recurrent pipelining
+        """Hint: use k % n_nodes to decide what to do (on which sample to
+        work)
+        The idea is: if at iter 'k' we work on a sample, then at iter 'k-1'
+        we receive the previous outputs from the finisher
+        """
+        # FIXME: make idx a vector with n_nodes elements (pipelining)
+        # idx will contain all the different n_nodes samples
+        start = "\n"
+        start_ids = self.tok_encode(start)
+        idx = torch.tensor(
+            start_ids, dtype=torch.long, device=self.model_config.device
+        )[None, ...]
+
+        # TODO: implement mechanism to stop generation whenever the token
+        # corresp to EOS is received for one of the samples
+        start_time = time.time()
+        with torch.no_grad():
+            # with CTX:  # FIXME
+            total_iters = max_new_tokens * n_nodes
+            for k in range(total_iters):
+                sample_id = k % n_nodes
+                print(
+                    f"Generating: {loading_bar(k, total_iters, 20)}, ({k}/{total_iters})",
+                    end="\r",
+                )
+                if k >= n_nodes:
+                    # We are not in the first iteration (k starts from 0)
+                    # Wait for output of corresp. sample from finisher
+                    out_logits = self.recv_from_prev().to(
+                        self.model_config.device
+                    )
+                    logits = out_logits[:, -1, :] / self.temperature
+                    if self.top_k is not None:
+                        v, _ = torch.topk(
+                            logits, min(self.top_k, logits.size(-1))
+                        )
+                        logits[logits < v[:, [-1]]] = -float("Inf")
+                    probs = F.softmax(logits, dim=1)
+                    idx_next = torch.multinomial(probs, num_samples=1)
+                    idx = torch.cat((idx, idx_next), dim=1)
+
+                if k < (n_nodes * (max_new_tokens - 1)):
+                    # Send to next iff not at the last token
+
+                    # Crop to block size
+                    idx_cond = (
+                        idx
+                        if idx.size(1) <= self.model_config.block_size
+                        else idx[:, -self.model_config.block_size :]
+                    )
+                    # Forward in local model
+                    idx_cond = self.model(idx_cond)
+
+                    self.send_to_next(idx_cond)
+
+        tot_time = time.time() - start_time
+        if VERB:
+            print("Generation completed!                          ")
+            print(f"Total time for generation: {tot_time} s")
+
+        return [self.tok_decode(idx[0].tolist())]
 
     def _node_loop(self):
         """
@@ -1253,9 +1283,12 @@ class GPTDistributed:
         out = self.webserv.start(
             n_nodes=self.n_total_nodes, max_new_tokens=1000
         )
+        assert out is not None
 
         print("-------------------------------------------------")
-        print("Produced output:\n", out)
+        print("Produced output:\n")
+        for smpl in out:
+            print(smpl, "\n")
         print("-------------------------------------------------")
 
         # Once finished, send PUT to each node to terminate execution for them
