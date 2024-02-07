@@ -405,12 +405,8 @@ class GPTServer:
     prev_node: Union[Dict, None] = None
     model_params: Union[Dict, None] = None
     model_config: Union[GPTConfig, None] = None
-    # NOTE: True iff the model has been initialized and it is ready to perform
+    # True iff the model has been initialized and it is ready to perform
     # inference.
-    # When this flag is turned to False (at the end of the generated sequence),
-    # the loop in self.start() is interrupted; the only way to set this to False
-    # (in non-starter nodes) is to receive the specific PUT HTTP request from
-    # the starter, that advertises the conclusion of the generated sequence
     running: bool = False
     stop_msg: str = "STOP"
     sock_to_prev: Union[socket.socket, None] = None
