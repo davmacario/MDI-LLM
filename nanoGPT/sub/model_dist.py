@@ -60,8 +60,8 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
+N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
@@ -166,7 +166,7 @@ def split_parameters(
             )
         ]
 
-        # Iterate over old keys, select correct ones, create new keys, transfer values
+        # Iterate over old keys, select correct, create new keys, copy val
         local_layer_ind = 0
         for ind in valid_layer_ind:
             prefix = f"{base_name_transformer}.{layer_name}.{ind}"
