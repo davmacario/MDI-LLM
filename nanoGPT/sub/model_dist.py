@@ -408,11 +408,14 @@ class GPTServer:
     # True iff the model has been initialized and it is ready to perform
     # inference.
     running: bool = False
-    stop_msg: str = "STOP"
+    stop_msg = {"stop": True}
     sock_to_prev: Union[socket.socket, None] = None
     sock_to_prev_prop: Tuple = ()  # FIXME - not needed
     sock_to_next: Union[socket.socket, None] = None
     sock_to_next_prop: Tuple = ()
+
+    # Message queue
+    message_queue = []
 
     # Some model configs:
     top_k = TOP_K
@@ -587,6 +590,8 @@ class GPTServer:
 
         assert self.sock_to_prev is not None and self.sock_to_next is not None
 
+        self.message_queue = []  # Initialize empty queue
+
         # Differentiate between different types
         if self.node_type == "starter":
             assert self.n_nodes is not None and max_new_tokens is not None
@@ -598,14 +603,20 @@ class GPTServer:
             if VERB:
                 print("> Tokenizer loaded!")
 
-                out_text = self._starter_loop(max_new_tokens)
+            self.queue_thread = threading.Thread(
+                target=self._fill_queue, daemon=True
+            )  # TODO
+            self.queue_thread.start()
 
-                # Send stop message to the next
-                self.send_to_next(self.stop_msg)
+            out_text = self._starter_loop(max_new_tokens)
 
-                return out_text
+            return out_text
         else:
             self.running = True
+            self.queue_thread = threading.Thread(
+                target=self._fill_queue, daemon=True
+            )  # TODO
+            self.queue_thread.start()
             self._node_loop()
 
     def recv_from_prev(self, max_wait_s: int = 5) -> Any:
@@ -640,30 +651,14 @@ class GPTServer:
                 data = pickle.loads(full_msg[HEADERLENGTH:])
                 # Look for stopping msg
                 if type(data) == str and data == self.stop_msg:
-                    self.ack_to_prev()
                     if VERB:
                         print("Stopping message received! Generation complete!")
                     self.running = False
                     return self.stop_msg
                 else:
-                    finished = self.ack_to_prev()
+                    finished = True
                     new_msg = True
                     return data
-
-    def ack_to_prev(self) -> bool:
-        """
-        Send ACK to the previous node upon complete reception
-        """
-        assert self.sock_to_prev is not None
-        ack = True
-        ack_msg = {"ack": ack}
-        ack_b = pickle.dumps(ack_msg)
-        tx_msg = bytes(f"{len(ack_b):<{HEADERLENGTH}}", "utf-8") + ack_b
-        self.sock_to_prev.sendall(tx_msg)
-        if VERB:
-            print("[INFO] Sent ack")
-
-        return True
 
     def send_to_next(self, data: Any, max_wait_ack: int = 5):
         """
@@ -681,33 +676,8 @@ class GPTServer:
         # if VERB:
         #     print("Sent:\n", tx_msg)
         #     print("")
-        acked = False
-        while not acked:
-            # Send
-            self.sock_to_next_prop[0].sendall(tx_msg)
-            # Wait for ack
-            acked = self.ack_from_next()
-
-    def ack_from_next(self) -> bool:
-        """
-        Receive the ACK from the next node.
-        """
-        ack = False
-        full_ack = b""
-        ack_start = True
-        msg_finished = False
-        if VERB:
-            print("Waiting for ack")
-        while not msg_finished:
-            msg = self.sock_to_next_prop[0].recv(2048)
-            if ack_start:
-                ack_len = int(msg[:HEADERLENGTH])
-                ack_start = False
-            full_ack += msg
-            if len(full_ack) - HEADERLENGTH >= ack_len:
-                ack = bool(pickle.loads(full_ack[HEADERLENGTH:])["ack"])
-                return ack
-        return ack
+        # Send
+        self.sock_to_next_prop[0].sendall(tx_msg)
 
     def create_sockets(self):
         """
@@ -783,6 +753,46 @@ class GPTServer:
             return 1
         except:
             return 0
+
+    # -------------- TODO: Remove ---------------------------------------------
+
+    def ack_to_prev(self) -> bool:
+        """
+        Send ACK to the previous node upon complete reception
+        """
+        assert self.sock_to_prev is not None
+        ack = True
+        ack_msg = {"ack": ack}
+        ack_b = pickle.dumps(ack_msg)
+        tx_msg = bytes(f"{len(ack_b):<{HEADERLENGTH}}", "utf-8") + ack_b
+        self.sock_to_prev.sendall(tx_msg)
+        if VERB:
+            print("[INFO] Sent ack")
+
+        return True
+
+    def ack_from_next(self) -> bool:
+        """
+        Receive the ACK from the next node.
+        """
+        ack = False
+        full_ack = b""
+        ack_start = True
+        msg_finished = False
+        if VERB:
+            print("Waiting for ack")
+        while not msg_finished:
+            msg = self.sock_to_next_prop[0].recv(2048)
+            if ack_start:
+                ack_len = int(msg[:HEADERLENGTH])
+                ack_start = False
+            full_ack += msg
+            if len(full_ack) - HEADERLENGTH >= ack_len:
+                ack = bool(pickle.loads(full_ack[HEADERLENGTH:])["ack"])
+                return ack
+        return ack
+
+    # -------------------------------------------------------------------------
 
     # ----- Private -----------------------------------------------------------
 
@@ -872,6 +882,51 @@ class GPTServer:
                 f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
             )
 
+    def _fill_queue(self):
+        """
+        This method has the goal of managing incoming messages from previous
+        nodes in the chain.
+        As a message is received, its contents are stored in the message queue
+        (`self.message_queue`).
+
+        This method loops infinitely and constantly waits for incoming messages.
+        As a result, it is ran on a separate thread, and it is stopped when the
+        main thread, running the processing function, finishes.
+        """
+        assert self.sock_to_prev is not None
+
+        curr_msg = b""
+        new_msg = True
+        # Expected next msg len - allow to read the header first
+        exp_length = HEADERLENGTH
+        while self.running:
+            # Receive information from the new socket
+            msg = self.sock_to_prev.recv(exp_length)
+            if new_msg:
+                # Extract message length from the header, then update exp_len
+                msg_len = int(msg[:HEADERLENGTH])
+                new_msg = False
+                exp_length = msg_len
+
+            curr_msg += msg
+
+            if len(curr_msg) - HEADERLENGTH >= msg_len:
+                # When the full message is received, the length will be the one in the header
+                # print("Raw msg: ", full_msg[HEADERLENGTH:])
+                data = pickle.loads(curr_msg[HEADERLENGTH:])
+                # Look for stopping msg
+                if "stop" in data and data["stop"]:
+                    # Stopping sequence
+                    exp_length = HEADERLENGTH
+                    if VERB:
+                        print("Stopping message received! Generation complete!")
+                    self.running = False
+                else:
+                    new_msg = True
+                    curr_msg = b""
+                    exp_length = HEADERLENGTH
+                    self.message_queue.append(data)
+
     def _starter_loop(self, max_new_tokens: int) -> List[str]:
         """
         Generation loop for the starter node only.
@@ -879,8 +934,6 @@ class GPTServer:
         of the samples to be generated.
 
         Args:
-            n_nodes: total number of nodes in the network it will be equal to
-                the number of generated samples (using pipelining)
             max_new_tokens: maximum number of tokens
 
         Returns:
@@ -889,24 +942,13 @@ class GPTServer:
         ---
 
         TODO:
-            Recurrent pipelining
-            Measure time again
+            Implement processing alongside queue
         """
         assert self.model_config is not None and self.model is not None
 
         # Encode starting sequence (TODO: implement prompt support - different
         # prompts for different samples)
 
-        # TODO: implement recurrent pipelining
-        """Hint: use k % n_nodes to decide what to do (on which sample to
-        work)
-        The idea is: if at iter 'k' we work on a sample, then at iter 'k-1'
-        we receive the previous outputs from the finisher
-
-        ATTENTION to this! Make sure the nodes are always "on the same page"
-        """
-        # FIXME: make idx a vector with n_nodes elements (pipelining)
-        # idx will contain all the different n_nodes samples
         start = "\n"
         start_ids = self.tok_encode(start)
         idx = [
@@ -916,25 +958,26 @@ class GPTServer:
             for _ in range(self.n_nodes)
         ]
 
-        # TODO: implement mechanism to stop generation whenever the token
-        # corresp to EOS is received for one of the samples
         start_time = time.time()
         with torch.no_grad():
             # with CTX:  # FIXME
             total_iters = max_new_tokens * self.n_nodes
             for k in range(total_iters):
-                if k == total_iters - 1:
-                    print("Last Iter")
                 print(
                     f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
                     end="\r",
                 )
                 sample_id = k % self.n_nodes  # Which of the n_nodes samples
+
                 if k >= self.n_nodes:
                     # We are not in the first iteration (k starts from 0)
-                    # Wait for output of corresp. sample from finisher
-                    in_msg = self.recv_from_prev()
+                    # can start processing messages from finisher
+                    while len(self.message_queue) <= 0:
+                        time.sleep(0.05)
+                    in_msg = self.message_queue.pop(0)
                     sample_in = in_msg["sample_index"]
+
+                    # Check correct order
                     assert (
                         sample_in == sample_id
                     ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
@@ -954,7 +997,6 @@ class GPTServer:
 
                 if k < (self.n_nodes * (max_new_tokens - 1)):
                     # Send to next iff not at the last token
-
                     # Crop to block size
                     idx_cond = (
                         idx[sample_id]
@@ -967,10 +1009,11 @@ class GPTServer:
 
                     # Build message
                     out_msg = self._build_msg(idx_cond, sample_id)
-
                     self.send_to_next(out_msg)
 
         tot_time = time.time() - start_time
+        # Send stop message to the next
+        self.send_to_next(self.stop_msg)
         if VERB:
             print("Generation completed!                          ")
             print(f"Total time for generation: {tot_time} s")
@@ -993,14 +1036,15 @@ class GPTServer:
         exp_ind = 0  # Expected sample index from previous
         with torch.no_grad():
             while self.running:
-                # Wait for output from prev or stopping condition
-                in_msg = self.recv_from_prev()
+                while len(self.message_queue) <= 0:  # Wait for messages
+                    time.sleep(0.05)
+                # Extract message from queue
+                in_msg = self.message_queue.pop(0)
                 # Unpack
                 samp_ind = in_msg["sample_index"]
                 assert (
                     exp_ind == samp_ind
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                print(f"Got sample {samp_ind}")
                 exp_ind = (samp_ind + 1) % self.n_nodes
 
                 ins = in_msg["data"]
