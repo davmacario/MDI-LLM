@@ -575,7 +575,7 @@ class GPTServer:
         Returns:
             if starter node, return the list of produced samples, else nothing
         """
-        n_nodes = 1  # TODO: remove when pipelining is implemented
+        # n_nodes = 1  # TODO: remove when pipelining is implemented
 
         # Configuration for all nodes
         assert self.sock_to_prev is None and self.sock_to_next is None
@@ -839,27 +839,32 @@ class GPTServer:
         ---
 
         TODO:
-            Measure time
             Recurrent pipelining
             Measure time again
         """
         assert self.model_config is not None and self.model is not None
 
-        # Encode starting sequence (TODO: implement prompt support)
+        # Encode starting sequence (TODO: implement prompt support - different
+        # prompts for different samples)
 
         # TODO: implement recurrent pipelining
         """Hint: use k % n_nodes to decide what to do (on which sample to
         work)
         The idea is: if at iter 'k' we work on a sample, then at iter 'k-1'
         we receive the previous outputs from the finisher
+
+        ATTENTION to this! Make sure the nodes are always "on the same page"
         """
         # FIXME: make idx a vector with n_nodes elements (pipelining)
         # idx will contain all the different n_nodes samples
         start = "\n"
         start_ids = self.tok_encode(start)
-        idx = torch.tensor(
-            start_ids, dtype=torch.long, device=self.model_config.device
-        )[None, ...]
+        idx = [
+            torch.tensor(
+                start_ids, dtype=torch.long, device=self.model_config.device
+            )[None, ...]
+            for _ in range(n_nodes)
+        ]
 
         # TODO: implement mechanism to stop generation whenever the token
         # corresp to EOS is received for one of the samples
@@ -868,11 +873,11 @@ class GPTServer:
             # with CTX:  # FIXME
             total_iters = max_new_tokens * n_nodes
             for k in range(total_iters):
-                sample_id = k % n_nodes
                 print(
                     f"Generating: {loading_bar(k, total_iters, 20)}, ({k}/{total_iters})",
                     end="\r",
                 )
+                sample_id = k % n_nodes  # Which of the n_nodes samples
                 if k >= n_nodes:
                     # We are not in the first iteration (k starts from 0)
                     # Wait for output of corresp. sample from finisher
@@ -887,16 +892,19 @@ class GPTServer:
                         logits[logits < v[:, [-1]]] = -float("Inf")
                     probs = F.softmax(logits, dim=1)
                     idx_next = torch.multinomial(probs, num_samples=1)
-                    idx = torch.cat((idx, idx_next), dim=1)
+                    idx[sample_id] = torch.cat(
+                        (idx[sample_id], idx_next), dim=1
+                    )
 
                 if k < (n_nodes * (max_new_tokens - 1)):
                     # Send to next iff not at the last token
 
                     # Crop to block size
                     idx_cond = (
-                        idx
-                        if idx.size(1) <= self.model_config.block_size
-                        else idx[:, -self.model_config.block_size :]
+                        idx[sample_id]
+                        if idx[sample_id].size(1)
+                        <= self.model_config.block_size
+                        else idx[sample_id][:, -self.model_config.block_size :]
                     )
                     # Forward in local model
                     idx_cond = self.model(idx_cond)
@@ -908,7 +916,7 @@ class GPTServer:
             print("Generation completed!                          ")
             print(f"Total time for generation: {tot_time} s")
 
-        return [self.tok_decode(idx[0].tolist())]
+        return [self.tok_decode(smp[0].tolist()) for smp in idx]
 
     def _node_loop(self):
         """
