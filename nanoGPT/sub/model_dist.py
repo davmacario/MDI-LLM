@@ -60,8 +60,8 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
+N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
@@ -673,10 +673,6 @@ class GPTServer:
         tx_msg = (
             bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
-        # if VERB:
-        #     print("Sent:\n", tx_msg)
-        #     print("")
-        # Send
         self.sock_to_next_prop[0].sendall(tx_msg)
 
     def create_sockets(self):
