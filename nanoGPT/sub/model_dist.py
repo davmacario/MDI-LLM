@@ -60,14 +60,14 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
+N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
 #     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 # )
-HEADERLENGTH = 10  # Header length in chars
+HEADERLENGTH = 16  # Header length in chars
 
 script_dir = os.path.dirname(__file__)
 
@@ -456,9 +456,11 @@ class GPTServer:
         if node_type is not None and node_type.lower() == "starter":
             # Configuration of starter node
             assert type(starter_config) == dict
-            assert (
-                len(starter_config.keys()) >= 3
-            )  # There should be params, next & prev
+
+            if "n_nodes" in starter_config:
+                self.n_nodes = starter_config["n_nodes"]
+            else:
+                raise ValueError("Missing 'n_nodes' information")
 
             if "next_node" in starter_config:
                 self.next_node = dict(starter_config["next_node"])
@@ -544,7 +546,6 @@ class GPTServer:
 
     def start(
         self,
-        n_nodes: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
     ) -> Union[None, List[str]]:
         """
@@ -588,7 +589,7 @@ class GPTServer:
 
         # Differentiate between different types
         if self.node_type == "starter":
-            assert n_nodes is not None and max_new_tokens is not None
+            assert self.n_nodes is not None and max_new_tokens is not None
 
             self._load_tokenizer()
             self.tok_encode = lambda s: self.tok.encode(s)
@@ -597,7 +598,7 @@ class GPTServer:
             if VERB:
                 print("> Tokenizer loaded!")
 
-                out_text = self._starter_loop(n_nodes, max_new_tokens)
+                out_text = self._starter_loop(max_new_tokens)
 
                 # Send stop message to the next
                 self.send_to_next(self.stop_msg)
@@ -625,7 +626,7 @@ class GPTServer:
         t_start = time.time()
         while not finished and time.time() - t_start < max_wait_s:
             # Receive information from the new socket
-            msg = self.sock_to_prev.recv(1024)  # Size of the buffer in bytes
+            msg = self.sock_to_prev.recv(4096)  # TODO: set global bufsize
             if new_msg:
                 # Extract message length from the header
                 msg_len = int(msg[:HEADERLENGTH])
@@ -639,25 +640,74 @@ class GPTServer:
                 data = pickle.loads(full_msg[HEADERLENGTH:])
                 # Look for stopping msg
                 if type(data) == str and data == self.stop_msg:
+                    self.ack_to_prev()
                     if VERB:
                         print("Stopping message received! Generation complete!")
                     self.running = False
                     return self.stop_msg
                 else:
-                    finished = True
+                    finished = self.ack_to_prev()
+                    new_msg = True
                     return data
 
-    def send_to_next(self, data: Any):
+    def ack_to_prev(self) -> bool:
+        """
+        Send ACK to the previous node upon complete reception
+        """
+        assert self.sock_to_prev is not None
+        ack = True
+        ack_msg = {"ack": ack}
+        ack_b = pickle.dumps(ack_msg)
+        tx_msg = bytes(f"{len(ack_b):<{HEADERLENGTH}}", "utf-8") + ack_b
+        self.sock_to_prev.sendall(tx_msg)
+        if VERB:
+            print("[INFO] Sent ack")
+
+        return True
+
+    def send_to_next(self, data: Any, max_wait_ack: int = 5):
         """
         Send any Python object to the next node.
+        The sender is a **server**.
+
+        TODO This method also waits for an acknowledgement from the receiver.
         """
-        assert self.sock_to_next_prop != ()
+        assert self.sock_to_next is not None and self.sock_to_next_prop != ()
 
         message_str = pickle.dumps(data)
         tx_msg = (
             bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
-        self.sock_to_next_prop[0].send(tx_msg)
+        # if VERB:
+        #     print("Sent:\n", tx_msg)
+        #     print("")
+        acked = False
+        while not acked:
+            # Send
+            self.sock_to_next_prop[0].sendall(tx_msg)
+            # Wait for ack
+            acked = self.ack_from_next()
+
+    def ack_from_next(self) -> bool:
+        """
+        Receive the ACK from the next node.
+        """
+        ack = False
+        full_ack = b""
+        ack_start = True
+        msg_finished = False
+        if VERB:
+            print("Waiting for ack")
+        while not msg_finished:
+            msg = self.sock_to_next_prop[0].recv(2048)
+            if ack_start:
+                ack_len = int(msg[:HEADERLENGTH])
+                ack_start = False
+            full_ack += msg
+            if len(full_ack) - HEADERLENGTH >= ack_len:
+                ack = bool(pickle.loads(full_ack[HEADERLENGTH:])["ack"])
+                return ack
+        return ack
 
     def create_sockets(self):
         """
@@ -822,7 +872,7 @@ class GPTServer:
                 f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
             )
 
-    def _starter_loop(self, n_nodes: int, max_new_tokens: int) -> List[str]:
+    def _starter_loop(self, max_new_tokens: int) -> List[str]:
         """
         Generation loop for the starter node only.
         This loop has a finite duration, as the starter knows what is the length
@@ -863,7 +913,7 @@ class GPTServer:
             torch.tensor(
                 start_ids, dtype=torch.long, device=self.model_config.device
             )[None, ...]
-            for _ in range(n_nodes)
+            for _ in range(self.n_nodes)
         ]
 
         # TODO: implement mechanism to stop generation whenever the token
@@ -871,19 +921,25 @@ class GPTServer:
         start_time = time.time()
         with torch.no_grad():
             # with CTX:  # FIXME
-            total_iters = max_new_tokens * n_nodes
+            total_iters = max_new_tokens * self.n_nodes
             for k in range(total_iters):
+                if k == total_iters - 1:
+                    print("Last Iter")
                 print(
-                    f"Generating: {loading_bar(k, total_iters, 20)}, ({k}/{total_iters})",
+                    f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
                     end="\r",
                 )
-                sample_id = k % n_nodes  # Which of the n_nodes samples
-                if k >= n_nodes:
+                sample_id = k % self.n_nodes  # Which of the n_nodes samples
+                if k >= self.n_nodes:
                     # We are not in the first iteration (k starts from 0)
                     # Wait for output of corresp. sample from finisher
-                    out_logits = self.recv_from_prev().to(
-                        self.model_config.device
-                    )
+                    in_msg = self.recv_from_prev()
+                    sample_in = in_msg["sample_index"]
+                    assert (
+                        sample_in == sample_id
+                    ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
+
+                    out_logits = in_msg["data"].to(self.model_config.device)
                     logits = out_logits[:, -1, :] / self.temperature
                     if self.top_k is not None:
                         v, _ = torch.topk(
@@ -896,7 +952,7 @@ class GPTServer:
                         (idx[sample_id], idx_next), dim=1
                     )
 
-                if k < (n_nodes * (max_new_tokens - 1)):
+                if k < (self.n_nodes * (max_new_tokens - 1)):
                     # Send to next iff not at the last token
 
                     # Crop to block size
@@ -909,7 +965,10 @@ class GPTServer:
                     # Forward in local model
                     idx_cond = self.model(idx_cond)
 
-                    self.send_to_next(idx_cond)
+                    # Build message
+                    out_msg = self._build_msg(idx_cond, sample_id)
+
+                    self.send_to_next(out_msg)
 
         tot_time = time.time() - start_time
         if VERB:
@@ -931,21 +990,47 @@ class GPTServer:
 
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
+        exp_ind = 0  # Expected sample index from previous
         with torch.no_grad():
             while self.running:
                 # Wait for output from prev or stopping condition
-                ins = self.recv_from_prev()
+                in_msg = self.recv_from_prev()
+                # Unpack
+                samp_ind = in_msg["sample_index"]
+                assert (
+                    exp_ind == samp_ind
+                ), f"Expected sample index {exp_ind}, received {samp_ind}"
+                print(f"Got sample {samp_ind}")
+                exp_ind = (samp_ind + 1) % self.n_nodes
+
+                ins = in_msg["data"]
                 if self.running:
                     print(f"Generating {loopsigns[iter % 4]}", end="\r")
                     ins = ins.to(self.model_config.device)
                     # Forward pass
                     outs = self.model(ins)
+                    # Build msg
+                    out_msg = self._build_msg(outs, samp_ind)
                     # Send to next
-                    self.send_to_next(outs)
+                    self.send_to_next(out_msg)
                     iter += 1
                 else:
                     print("Generation completed!")
                     self.send_to_next(self.stop_msg)
+
+    def _build_msg(self, data, sample_index) -> Dict:
+        """
+        Build the message which is transmitted to the next node.
+
+        Args:
+            data: the activations to be transmitted
+            sample_index: index of the current sample (allows to check)
+
+        Returns:
+            the message - a Python dict with the fields "sample_index" and
+            "data"
+        """
+        return {"sample_index": sample_index, "data": data}
 
     # ----- REST --------------------------------------------------------------
 
@@ -976,6 +1061,7 @@ class GPTServer:
                 self.next_node = init_msg["next_node"]
                 self.model_config = GPTConfig(**init_msg["model_config"])
                 self.model_params = deserialize_params(init_msg["params"])
+                self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
                 self.init_model()
                 if VERB:
@@ -1026,6 +1112,7 @@ class GPTDistributed:
         "role": "",  # Role name
         "params": {},  # State dict
         "model_config": GPTConfig(),
+        "n_nodes": 0,
         "prev_node": {},  # From .json
         "next_node": {},  # From .json
     }
@@ -1119,6 +1206,7 @@ class GPTDistributed:
         starter_config["role"] = "starter"
         starter_config["params"] = self.model_chunks["starter"]
         starter_config["model_config"] = self.model_config
+        starter_config["n_nodes"] = self.n_total_nodes
         starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
         if self.n_intermediate:
             starter_config["next_node"] = self.nodes_info["nodes"][
@@ -1175,6 +1263,7 @@ class GPTDistributed:
             curr_msg["params"] = serialize_params(
                 self.model_chunks["intermediate"][i]
             )
+            curr_msg["n_nodes"] = self.n_total_nodes
 
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
@@ -1208,6 +1297,7 @@ class GPTDistributed:
         curr_msg["role"] = "finisher"
         curr_msg["model_config"] = self.model_config.asdict()
         curr_msg["params"] = serialize_params(self.model_chunks["finisher"])
+        curr_msg["n_nodes"] = self.n_total_nodes
 
         curr_msg["prev_node"] = prev
         curr_msg["next_node"] = next
@@ -1288,9 +1378,7 @@ class GPTDistributed:
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        out = self.webserv.start(
-            n_nodes=self.n_total_nodes, max_new_tokens=1000
-        )
+        out = self.webserv.start(max_new_tokens=1000)
         assert out is not None
 
         print("-------------------------------------------------")
