@@ -131,5 +131,6 @@ with torch.no_grad():
             )
             print(decode(y[0].tolist()))
             print("---------------")
-        if VERB:
-            print(f"Total generation time: {time.time() - t_start} s")
+
+if VERB:
+    print(f"Total generation time: {time.time() - t_start} s")
