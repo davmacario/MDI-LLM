@@ -705,7 +705,6 @@ class GPTServer:
         ---
 
         TODO:
-            Implement processing alongside queue
         """
         assert self.model_config is not None and self.model is not None
 
@@ -738,7 +737,7 @@ class GPTServer:
                     while len(self.message_queue) <= 0:
                         time.sleep(0.05)
                     in_msg = self.message_queue.pop(0)
-                    sample_in = in_msg["sample_index"]
+                    sample_in = in_msg["sample_index"].to(DEVICE)
 
                     # Check correct order
                     assert (
@@ -804,7 +803,7 @@ class GPTServer:
                 # Extract message from queue
                 in_msg = self.message_queue.pop(0)
                 # Unpack
-                samp_ind = in_msg["sample_index"]
+                samp_ind = in_msg["sample_index"].to(DEVICE)
                 assert (
                     exp_ind == samp_ind
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
