@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 
-import inspect
 import json
 import os
 import pickle
 import socket
 import threading
 import time
-import warnings
-from contextlib import nullcontext
-from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
@@ -19,13 +15,12 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, CKPT_INTERVAL, DEVICE,
-                        DROPOUT, EVAL_ITERS, LEARNING_RATE, N_EMBD, N_HEADS,
-                        N_ITER_TRAIN, N_LAYER, TEMPERATURE, TOP_K, VERB)
-from sub.model import (Block, FeedForward, GPTConfig, Head, LayerNorm,
-                       MultiHeadAttention)
+from sub.config import (DEVICE, HEADERLENGTH, N_LAYERS_FINISH, N_LAYERS_INTERM,
+                        N_LAYERS_START, TEMPERATURE, TOP_K, VERB)
+from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import loading_bar
+from sub.utils import (deserialize_params, loading_bar, serialize_params,
+                       split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -60,202 +55,7 @@ Functioning:
     waiting for the information to arrive
 """
 
-N_LAYERS_START = 0  # Number of transformer layers in the starter node
-N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
-# CTX = (
-#     nullcontext()
-#     if DEVICE in {"cpu", "mps"}
-#     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-# )
-HEADERLENGTH = 16  # Header length in chars
-
 script_dir = os.path.dirname(__file__)
-
-
-def remove_prefix(text: str, prefix: str) -> str:
-    """
-    Remove the specified prefix from the given string.
-    NOTE: starting Python 3.9, use text.removeprefix(prefix)
-    """
-    if text.startswith(prefix):
-        return text[len(prefix) :]
-    return text
-
-
-def split_parameters(
-    model_params: Mapping[str, Any], n_nodes: int
-) -> Dict[str, Any]:
-    """
-    Split the model parameters (contained in a state dict) among the different
-    available nodes.
-
-    The number of nodes should be at least 2 (starter and finisher).
-
-    The parameters are divided as such:
-        - Starter: token embedding, positional embedding
-        - Intermediate: 2xTransformer Layer
-        - Finisher: 2xTransformer Layer, LayerNorm
-
-    Args:
-        model_params: complete model parameters (state dict)
-        n_nodes: number of nodes among which to divide the parameters; must be
-        greater or equal to 2 (at least starter and finisher)
-
-    Returns:
-        dict containing the following k-v pairs:
-            "starter": dict with the starter state dict
-            "intermediate": list containing the intermediate state dicts
-            "finisher": dict with the finisher state dict
-    """
-    # TODO: make more efficient (too many nested loops) - maybe
-    # Set up some parameters - they are used to gather the relevant keys
-    base_name_transformer = "transformer"
-    tok_emb = "token_embedding"
-    pos_emb = "position_embedding"
-    layer_name = "layers"
-    transformer_last = f"{base_name_transformer}.ln_f"
-    output_layer = "lm_head"
-
-    assert n_nodes >= 2
-
-    out_chunks = {}
-
-    # 1. Select params for Starter
-    out_chunks["starter"] = {}
-    out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params[
-        f"{base_name_transformer}.{tok_emb}.weight"
-    ]
-    out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params[
-        f"{base_name_transformer}.{pos_emb}.weight"
-    ]
-    try:
-        out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params[
-            f"{base_name_transformer}.{tok_emb}.bias"
-        ]
-    except:
-        # Here if no bias - no problem
-        pass
-
-    try:
-        out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params[
-            f"{base_name_transformer}.{pos_emb}.bias"
-        ]
-    except:
-        # Here if no bias - no problem
-        pass
-
-    # 2. Select params for every Intermediate
-    out_chunks["intermediate"] = []
-    for i in range(1, n_nodes - 1):
-        curr_params = {}
-
-        # Complicated pythonic list call to select the correct keys to be
-        # transferred to the intermediate node
-        # As reference, the keys for the layers all start with:
-        #       transformer.layer.<layer_ind>.[...]
-        # so we need to select the correct layer indices
-        valid_layer_ind = list(
-            range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM)
-        )
-        relevant_keys = [
-            k
-            for k in list(model_params.keys())
-            if (
-                k.startswith(f"{base_name_transformer}.{layer_name}")
-                and int(k.split(".")[2]) in valid_layer_ind
-            )
-        ]
-
-        # Iterate over old keys, select correct, create new keys, copy val
-        local_layer_ind = 0
-        for ind in valid_layer_ind:
-            prefix = f"{base_name_transformer}.{layer_name}.{ind}"
-            for k in relevant_keys:
-                if k.startswith(prefix):
-                    end = remove_prefix(k, prefix)
-                    new_k = f"intermediate_model.layers.{local_layer_ind}{end}"
-                    curr_params[new_k] = model_params[k]
-            local_layer_ind += 1
-
-        out_chunks["intermediate"].append(curr_params)
-
-    # 3. Select params for Finisher
-    out_chunks["finisher"] = {}
-
-    # Layers:
-    valid_layer_ind = list(
-        range((n_nodes - 2) * N_LAYERS_FINISH, (n_nodes - 1) * N_LAYERS_FINISH)
-    )
-    relevant_keys = [
-        k
-        for k in list(model_params.keys())
-        if (
-            k.startswith(f"{base_name_transformer}.{layer_name}")
-            and int(k.split(".")[2]) in valid_layer_ind
-        )
-    ]
-    local_layer_ind = 0
-    for ind in valid_layer_ind:
-        prefix = f"{base_name_transformer}.{layer_name}.{ind}"
-        for k in relevant_keys:
-            if k.startswith(prefix):
-                end = remove_prefix(k, prefix)
-                new_k = f"finisher_model.layers.{local_layer_ind}{end}"
-                out_chunks["finisher"][new_k] = model_params[k]
-        local_layer_ind += 1
-    # OK below
-    out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params[
-        f"{transformer_last}.weight"
-    ]
-    try:
-        out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params[
-            f"{transformer_last}.bias"
-        ]
-    except:
-        pass
-
-    out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params[
-        f"{output_layer}.weight"
-    ]
-    try:
-        out_chunks["finisher"][f"finisher_model.lm_head.bias"] = model_params[
-            f"{output_layer}.bias"
-        ]
-    except:
-        pass
-
-    return out_chunks
-
-
-def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
-    """
-    Serialize a mapping, specifically a state dict, to allow it to be read as a
-    JSON/dict.
-    """
-    json_serializable_params = {}
-    for key, value in params.items():
-        json_serializable_params[key] = (
-            value.tolist() if isinstance(value, torch.Tensor) else value
-        )
-
-    return json_serializable_params
-
-
-def deserialize_params(params: Dict) -> Mapping[str, Any]:
-    """
-    De-serialize a dictionary and return a state dictionary containing a torch
-    model parameters.
-    """
-    deserialized_params = {}
-    for key, value in params.items():
-        if isinstance(value, list):
-            # Convert lists back to PyTorch tensors
-            deserialized_params[key] = torch.tensor(value)
-        else:
-            deserialized_params[key] = value
-
-    return deserialized_params
 
 
 class StarterNode(nn.Module):
@@ -459,38 +259,22 @@ class GPTServer:
         if node_type is not None and node_type.lower() == "starter":
             # Configuration of starter node
             assert type(starter_config) == dict
+            req_keys = {
+                "n_nodes",
+                "next_node",
+                "prev_node",
+                "params",
+                "model_config",
+                "tok_metadata_path",
+            }
+            assert all([k in starter_config for k in req_keys])
 
-            if "n_nodes" in starter_config:
-                self.n_nodes = starter_config["n_nodes"]
-            else:
-                raise ValueError("Missing 'n_nodes' information")
-
-            if "next_node" in starter_config:
-                self.next_node = dict(starter_config["next_node"])
-            else:
-                raise ValueError("Missing 'next_node' information")
-
-            if "prev_node" in starter_config:
-                self.prev_node = dict(starter_config["prev_node"])
-            else:
-                raise ValueError("Missing 'prev_node' information")
-
-            if "params" in starter_config:
-                self.model_params = dict(starter_config["params"])
-            else:
-                raise ValueError("Missing parameters!")
-
-            if "model_config" in starter_config:
-                # Create object as done in train/sample scripts
-                assert type(starter_config["model_config"]) == GPTConfig
-                self.model_config = starter_config["model_config"]
-            else:
-                raise ValueError("Missing model configuration")
-
-            if "tok_metadata_path" in starter_config:
-                self.tok_meta_path = str(starter_config["tok_metadata_path"])
-            else:
-                raise ValueError("Missing tokenizer metadata")
+            self.n_nodes = starter_config["n_nodes"]
+            self.next_node = dict(starter_config["next_node"])
+            self.prev_node = dict(starter_config["prev_node"])
+            self.model_params = dict(starter_config["params"])
+            self.model_config = starter_config["model_config"]
+            self.tok_meta_path = str(starter_config["tok_metadata_path"])
 
             self.init_model(set_eval=True)
 
@@ -648,6 +432,9 @@ class GPTServer:
         while self.running:
             # Receive information from the new socket
             msg = self.sock_to_prev.recv(exp_length)
+            if msg == b"":
+                # Prev node shut connection down (error)
+                self.running = False
             if new_msg:
                 # Extract message length from the header, then update exp_len
                 msg_len = int(msg[:HEADERLENGTH])
@@ -862,15 +649,46 @@ class GPTServer:
         (`self.message_queue`).
 
         This method loops infinitely and constantly waits for incoming messages.
-        As a result, it is ran on a separate thread, and it is stopped when the
-        main thread, running the processing function, finishes.
+        For this reason, it is ran on a separate thread, and it is stopped when
+        the main thread, running the processing function, finishes.
         """
         assert self.sock_to_prev is not None
 
+        curr_msg = b""
+        new_msg = True
+        # Expected next msg len - allow to read the header first
+        exp_length = HEADERLENGTH
         while self.running:
-            data = self.recv_from_prev()
-            if self.running:  # Not here if data is stopping message
-                self.message_queue.append(data)
+            # Receive information from the new socket
+            msg = self.sock_to_prev.recv(exp_length)
+            if not msg:
+                # Prev node shut connection down (error)
+                self.running = False
+                break
+            if new_msg:
+                # Extract message length from the header, then update exp_len
+                msg_len = int(msg[:HEADERLENGTH])
+                new_msg = False
+                exp_length = msg_len
+
+            curr_msg += msg
+
+            if len(curr_msg) - HEADERLENGTH >= msg_len:
+                # When the full message is received, the length will be the one in the header
+                data = pickle.loads(curr_msg[HEADERLENGTH:])
+                curr_msg = b""
+                exp_length = HEADERLENGTH
+                new_msg = True
+
+                # Look for stopping msg
+                if "stop" in data and data["stop"]:
+                    # Stopping sequence
+                    if VERB:
+                        print("Stopping message received! Generation complete!")
+                    self.running = False
+
+                if self.running:  # Not here if data is stopping message
+                    self.message_queue.append(data)
 
     def _starter_loop(self, max_new_tokens: int) -> List[str]:
         """
