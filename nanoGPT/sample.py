@@ -6,6 +6,7 @@ Perform inference on a pre-trained model
 
 import os
 import pickle
+import time
 from contextlib import nullcontext
 
 import tiktoken
@@ -123,9 +124,12 @@ with torch.no_grad():
     with ctx:
         if VERB:
             print("Beginning generation")
+        t_start = time.time()
         for k in range(num_samples):
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
             print(decode(y[0].tolist()))
             print("---------------")
+        if VERB:
+            print(f"Total generation time: {time.time() - t_start} s")
