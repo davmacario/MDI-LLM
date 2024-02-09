@@ -29,8 +29,8 @@ out_dir = os.path.join(data_dir, "out")
 # parameters
 
 start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-num_samples = 1  # number of samples to draw
-max_new_tokens = 3000  # number of tokens generated in each sample
+num_samples = 3  # number of samples to draw
+max_new_tokens = 1000  # number of tokens generated in each sample
 seed = 1337
 # exec(open("configurator.py").read())  # overrides from command line or config file
 
