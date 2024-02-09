@@ -493,7 +493,7 @@ class GPTServer:
             assert self.sock_to_next is not None
 
             if VERB:
-                print("-> Done!")
+                print("-> Done!                     ")
 
         # Open client towards previous
         if VERB:
@@ -508,7 +508,7 @@ class GPTServer:
         self.sock_to_prev_prop = self.sock_to_prev.accept()
 
         if VERB:
-            print("-> Done!")
+            print("-> Done!                     ")
         self.running = True
 
         if self.node_type != "starter":
@@ -522,7 +522,7 @@ class GPTServer:
             assert self.sock_to_next is not None
 
             if VERB:
-                print("-> Done!")
+                print("-> Done!                     ")
 
     def shutdown(self) -> int:
         """
