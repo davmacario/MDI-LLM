@@ -60,6 +60,7 @@ Functioning:
     waiting for the information to arrive
 """
 
+N_LAYERS_START = 0  # Number of transformer layers in the starter node
 N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
 N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
 # CTX = (

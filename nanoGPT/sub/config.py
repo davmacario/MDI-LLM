@@ -40,6 +40,8 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = "cpu"
 
+# DEVICE = "cpu"  # On macOS there are some issues with MPS
+
 # ---- Training configuration --------------------
 INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
 
