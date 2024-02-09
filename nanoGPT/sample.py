@@ -121,6 +121,8 @@ x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 # Run generation
 with torch.no_grad():
     with ctx:
+        if VERB:
+            print("Beginning generation")
         for k in range(num_samples):
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
