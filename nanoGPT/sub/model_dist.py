@@ -485,8 +485,7 @@ class GPTServer:
             # Open server towards next node (first thing if starter node)
             if VERB:
                 print(
-                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})",
-                    end=" ",
+                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
                 )
 
             self._start_server()
@@ -501,8 +500,7 @@ class GPTServer:
         # Open client towards previous
         if VERB:
             print(
-                f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})",
-                end=" ",
+                f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
             )
 
         self._start_client()
@@ -516,8 +514,7 @@ class GPTServer:
             # Open server towards next node
             if VERB:
                 print(
-                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})",
-                    end=" ",
+                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
                 )
 
             self._start_server()
