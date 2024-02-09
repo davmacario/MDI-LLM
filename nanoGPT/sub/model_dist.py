@@ -737,7 +737,7 @@ class GPTServer:
                     # can start processing messages from finisher
                     while len(self.message_queue) <= 0:
                         count_wait += 1
-                        time.sleep(0.01)
+                        # time.sleep(0.01)
                     in_msg = self.message_queue.pop(0)
                     sample_in = in_msg["sample_index"]
 
@@ -806,7 +806,7 @@ class GPTServer:
             while self.running:
                 while len(self.message_queue) <= 0:  # Wait for messages
                     count_wait += 1
-                    time.sleep(0.01)
+                    # time.sleep(0.01)
                 # Extract message from queue
                 in_msg = self.message_queue.pop(0)
                 # Unpack
