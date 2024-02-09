@@ -212,8 +212,9 @@ class GPTServer:
     running: bool = False
     stop_msg = {"stop": True}
     sock_to_prev: Union[socket.socket, None] = None
+    sock_to_prev_prop: Tuple = ()  # NOTE: used now
     sock_to_next: Union[socket.socket, None] = None
-    sock_to_next_prop: Tuple = ()
+    sock_to_next_prop: Tuple = ()  # NOTE: not used!
 
     # Message queue
     message_queue = []
@@ -411,7 +412,7 @@ class GPTServer:
                 print("[INFO] Starting generation loop")
             self._node_loop()
 
-    def recv_from_prev(self) -> Any:
+    def recv_from_prev(self) -> Any:  # NOTE: not used - see self._fill_queue
         """
         Receive a full message from the previous node.
 
@@ -424,7 +425,7 @@ class GPTServer:
         Returns:
             the received python object
         """
-        assert self.sock_to_prev is not None
+        assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
         curr_msg = b""
         new_msg = True
@@ -432,7 +433,7 @@ class GPTServer:
         exp_length = HEADERLENGTH
         while self.running:
             # Receive information from the new socket
-            msg = self.sock_to_prev.recv(exp_length)
+            msg = self.sock_to_prev_prop[0].recv(exp_length)
             if msg == b"":
                 # Prev node shut connection down (error)
                 self.running = False
@@ -462,13 +463,13 @@ class GPTServer:
         Send any Python object to the next node.
         The sender is a **server**.
         """
-        assert self.sock_to_next is not None and self.sock_to_next_prop != ()
+        assert self.sock_to_next is not None
 
         message_str = pickle.dumps(data)
         tx_msg = (
             bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
-        self.sock_to_next_prop[0].sendall(tx_msg)
+        self.sock_to_next.sendall(tx_msg)
 
     def create_sockets(self):
         """
@@ -488,11 +489,8 @@ class GPTServer:
                     f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
                 )
 
-            self._start_server()
+            self._start_client()
             assert self.sock_to_next is not None
-            self.sock_to_next.listen(1)
-
-            self.sock_to_next_prop = self.sock_to_next.accept()
 
             if VERB:
                 print("-> Done!")
@@ -503,8 +501,11 @@ class GPTServer:
                 f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
             )
 
-        self._start_client()
+        self._start_server()
         assert self.sock_to_prev is not None
+        self.sock_to_prev.listen(1)
+
+        self.sock_to_prev_prop = self.sock_to_prev.accept()
 
         if VERB:
             print("-> Done!")
@@ -517,11 +518,8 @@ class GPTServer:
                     f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
                 )
 
-            self._start_server()
+            self._start_client()
             assert self.sock_to_next is not None
-            self.sock_to_next.listen(1)
-
-            self.sock_to_next_prop = self.sock_to_next.accept()
 
             if VERB:
                 print("-> Done!")
@@ -536,8 +534,8 @@ class GPTServer:
         try:
             time.sleep(2)
             cp.engine.stop()
+            self.sock_to_prev_prop[0].close()
             self.sock_to_prev.close()
-            self.sock_to_next_prop[0].close()
             self.sock_to_next.close()
             self.running = False  # Redundant
             self.queue_thread.join()
@@ -571,19 +569,20 @@ class GPTServer:
 
     def _start_server(self, max_tries: int = 30):
         """
-        Start the server socket, i.e., the socket to the next node in the chain.
+        Start the server socket, i.e., the socket to the previous node in the
+        chain.
         """
         loopsigns = ["|", "/", "-", "\\"]
-        self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         failed = True
         tries = 0
         while failed and tries < max_tries:
             # Attempt to bind
             try:
-                self.sock_to_next.bind(
+                self.sock_to_prev.bind(
                     (
                         self.node_config["addr"],
-                        self.node_config["inference"]["port_out"],
+                        self.node_config["inference"]["port_in"],
                     )
                 )
             except:
@@ -602,27 +601,27 @@ class GPTServer:
 
     def _start_client(self, max_tries: int = 30):
         """
-        Start the client socket, i.e., the socket to the prev node in the chain.
+        Start the client socket, i.e., the socket to the next node in the chain.
         """
         loopsigns = ["|", "/", "-", "\\"]
         conn = False
         tries = 0
         while not conn and tries < max_tries:
             try:
-                self.sock_to_prev = socket.socket(
+                self.sock_to_next = socket.socket(
                     socket.AF_INET, socket.SOCK_STREAM
                 )
                 # Bind should work even after some fails
-                self.sock_to_prev.bind(
+                self.sock_to_next.bind(
                     (
                         self.node_config["addr"],
-                        self.node_config["inference"]["port_in"],
+                        self.node_config["inference"]["port_out"],
                     )
                 )
-                self.sock_to_prev.connect(
+                self.sock_to_next.connect(
                     (
-                        self.prev_node["addr"],
-                        self.prev_node["inference"]["port_out"],
+                        self.next_node["addr"],
+                        self.next_node["inference"]["port_in"],
                     )
                 )
             except:
@@ -650,7 +649,7 @@ class GPTServer:
         For this reason, it is ran on a separate thread, and it is stopped when
         the main thread, running the processing function, finishes.
         """
-        assert self.sock_to_prev is not None
+        assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
         curr_msg = b""
         new_msg = True
@@ -658,7 +657,7 @@ class GPTServer:
         exp_length = HEADERLENGTH
         while self.running:
             # Receive information from the new socket
-            msg = self.sock_to_prev.recv(exp_length)
+            msg = self.sock_to_prev_prop[0].recv(exp_length)
             if not msg:
                 # Prev node shut connection down (error)
                 self.running = False
