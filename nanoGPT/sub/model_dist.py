@@ -721,6 +721,7 @@ class GPTServer:
         ]
 
         start_time = time.time()
+        count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
             # with CTX:  # FIXME
             total_iters = max_new_tokens * self.n_nodes
@@ -735,9 +736,10 @@ class GPTServer:
                     # We are not in the first iteration (k starts from 0)
                     # can start processing messages from finisher
                     while len(self.message_queue) <= 0:
-                        time.sleep(0.05)
+                        count_wait += 1
+                        time.sleep(0.01)
                     in_msg = self.message_queue.pop(0)
-                    sample_in = in_msg["sample_index"].to(DEVICE)
+                    sample_in = in_msg["sample_index"]
 
                     # Check correct order
                     assert (
@@ -770,7 +772,7 @@ class GPTServer:
                     idx_cond = self.model(idx_cond)
 
                     # Build message
-                    out_msg = self._build_msg(idx_cond, sample_id)
+                    out_msg = self._build_msg(idx_cond.to("cpu"), sample_id)
                     self.send_to_next(out_msg)
 
         tot_time = time.time() - start_time
@@ -779,6 +781,9 @@ class GPTServer:
         if VERB:
             print("[INFO] Generation completed!                          ")
             print(f"> Total time for generation: {tot_time} s")
+            print(
+                f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
+            )
 
         return [self.tok_decode(smp[0].tolist()) for smp in idx]
 
@@ -796,14 +801,16 @@ class GPTServer:
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
+        count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
             while self.running:
                 while len(self.message_queue) <= 0:  # Wait for messages
-                    time.sleep(0.05)
+                    count_wait += 1
+                    time.sleep(0.01)
                 # Extract message from queue
                 in_msg = self.message_queue.pop(0)
                 # Unpack
-                samp_ind = in_msg["sample_index"].to(DEVICE)
+                samp_ind = in_msg["sample_index"]
                 assert (
                     exp_ind == samp_ind
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
@@ -816,12 +823,15 @@ class GPTServer:
                     # Forward pass
                     outs = self.model(ins)
                     # Build msg
-                    out_msg = self._build_msg(outs, samp_ind)
+                    out_msg = self._build_msg(outs.to("cpu"), samp_ind)
                     # Send to next
                     self.send_to_next(out_msg)
                     iter += 1
                 else:
                     print("> Generation completed!")
+                    print(
+                        f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
+                    )
                     self.send_to_next(self.stop_msg)
 
     def _build_msg(self, data, sample_index) -> Dict:
