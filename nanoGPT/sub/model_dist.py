@@ -6,6 +6,7 @@ import pickle
 import socket
 import threading
 import time
+import warnings
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
@@ -664,6 +665,9 @@ class GPTServer:
             if not msg:
                 # Prev node shut connection down (error)
                 self.running = False
+                warnings.warn(
+                    "[WARN] Connection to previous node failed - terminating"
+                )
                 break
             if new_msg:
                 # Extract message length from the header, then update exp_len
