@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import os
 
 import cherrypy as cp
@@ -9,6 +10,19 @@ from sub.model_dist import GPTDistributed
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
+log_file = os.path.join(script_dir, "logs", "logs_starter.log")
+if not os.path.exists(os.path.dirname(log_file)):
+    os.mkdir(os.path.dirname(log_file))
+log_wp = logging.getLogger("model_dist")
+hdlr = logging.StreamHandler()
+fhdlr = logging.FileHandler(log_file, mode="w")
+formatter = logging.Formatter("%(name)s → %(levelname)s: %(message)s")
+fhdlr.setFormatter(formatter)
+hdlr.setFormatter(formatter)
+log_wp.addHandler(hdlr)
+log_wp.addHandler(fhdlr)
+log_wp.setLevel(logging.DEBUG)
+
 dataset = "shakespeare"
 
 torch.manual_seed(1337)

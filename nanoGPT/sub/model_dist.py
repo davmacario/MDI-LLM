@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import logging
 import os
 import pickle
 import socket
@@ -16,8 +17,9 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import (DEVICE, HEADERLENGTH, N_LAYERS_FINISH, N_LAYERS_INTERM,
-                        N_LAYERS_START, TEMPERATURE, TOP_K, VERB)
+from sub.config import (DEVICE, HEADERLENGTH, MSGLENGTH, N_LAYERS_FINISH,
+                        N_LAYERS_INTERM, N_LAYERS_START, TEMPERATURE, TOP_K,
+                        VERB)
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
 from sub.utils import (deserialize_params, loading_bar, serialize_params,
@@ -55,8 +57,10 @@ Functioning:
     Finisher) and open sockets to/from the corresponding nodes, then start
     waiting for the information to arrive
 """
-
+# Logging
 script_dir = os.path.dirname(__file__)
+logger_wp = logging.getLogger("model_dist")
+logger_wp.setLevel(logging.DEBUG)
 
 
 class StarterNode(nn.Module):
@@ -430,7 +434,7 @@ class GPTServer:
         curr_msg = b""
         new_msg = True
         # Expected next msg len - allow to read the header first
-        exp_length = HEADERLENGTH
+        exp_length = HEADERLENGTH + MSGLENGTH
         while self.running:
             # Receive information from the new socket
             msg = self.sock_to_prev_prop[0].recv(exp_length)
@@ -441,11 +445,11 @@ class GPTServer:
                 # Extract message length from the header, then update exp_len
                 msg_len = int(msg[:HEADERLENGTH])
                 new_msg = False
-                exp_length = msg_len
+                # exp_length = msg_len
 
             curr_msg += msg
 
-            if len(curr_msg) - HEADERLENGTH >= msg_len:
+            if len(curr_msg) >= HEADERLENGTH + MSGLENGTH:
                 # When the full message is received, the length will be the one in the header
                 data = pickle.loads(curr_msg[HEADERLENGTH:])
 
@@ -461,13 +465,20 @@ class GPTServer:
     def send_to_next(self, data: Any):
         """
         Send any Python object to the next node.
-        The sender is a **server**.
+        The sender is a **client**.
+
+        The message is composed by a header of HEADERLENGTH bytes including the
+        length of the actual message, plus a message of MSGLENGTH bytes
+        containing the zero-padded message.
         """
         assert self.sock_to_next is not None
 
         message_str = pickle.dumps(data)
+        # Zero padding
+        message_pad = message_str + b"\0" * (MSGLENGTH - len(message_str))
+        logger_wp.debug(f"Padded message length: {len(message_pad)}")
         tx_msg = (
-            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
+            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_pad
         )
         self.sock_to_next.sendall(tx_msg)
 
@@ -491,6 +502,7 @@ class GPTServer:
 
             self._start_client()
             assert self.sock_to_next is not None
+            logger_wp.debug("Created socket to next")
 
             if VERB:
                 print("-> Done!                     ")
@@ -506,6 +518,7 @@ class GPTServer:
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
+        logger_wp.debug("Created socket to previous")
 
         if VERB:
             print("-> Done!                     ")
@@ -520,6 +533,7 @@ class GPTServer:
 
             self._start_client()
             assert self.sock_to_next is not None
+            logger_wp.debug("Created socket to next")
 
             if VERB:
                 print("-> Done!                     ")
@@ -654,7 +668,8 @@ class GPTServer:
         curr_msg = b""
         new_msg = True
         # Expected next msg len - allow to read the header first
-        exp_length = HEADERLENGTH
+        exp_length = HEADERLENGTH + MSGLENGTH
+        msg_len = MSGLENGTH
         while self.running:
             # Receive information from the new socket
             msg = self.sock_to_prev_prop[0].recv(exp_length)
@@ -666,18 +681,21 @@ class GPTServer:
                 )
                 break
             if new_msg:
-                # Extract message length from the header, then update exp_len
+                # Extract message length from the header
                 msg_len = int(msg[:HEADERLENGTH])
+                logger_wp.debug(f"Received message length: {msg_len}")
+                assert msg_len <= MSGLENGTH
                 new_msg = False
-                exp_length = msg_len
+                # exp_length = msg_len
 
             curr_msg += msg
 
-            if len(curr_msg) - HEADERLENGTH >= msg_len:
-                # When the full message is received, the length will be the one in the header
-                data = pickle.loads(curr_msg[HEADERLENGTH:])
+            if len(curr_msg) >= HEADERLENGTH + MSGLENGTH:
+                data = pickle.loads(
+                    curr_msg[HEADERLENGTH : HEADERLENGTH + msg_len]
+                )
                 curr_msg = b""
-                exp_length = HEADERLENGTH
+                # exp_length = HEADERLENGTH
                 new_msg = True
 
                 # Look for stopping msg
