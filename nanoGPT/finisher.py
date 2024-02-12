@@ -15,12 +15,9 @@ log_file = os.path.join(script_dir, "logs", "logs_finisher.log")
 if not os.path.exists(os.path.dirname(log_file)):
     os.mkdir(os.path.dirname(log_file))
 log_wp = logging.getLogger("model_dist")
-hdlr = logging.StreamHandler()
 fhdlr = logging.FileHandler(log_file, mode="w")
-formatter = logging.Formatter("%(name)s → %(levelname)s: %(message)s")
+formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
 fhdlr.setFormatter(formatter)
-hdlr.setFormatter(formatter)
-log_wp.addHandler(hdlr)
 log_wp.addHandler(fhdlr)
 log_wp.setLevel(logging.DEBUG)
 

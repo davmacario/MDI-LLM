@@ -82,6 +82,7 @@ N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
 #     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 # )
 HEADERLENGTH = 16  # Header length in chars
+MSGLENGTH = 16 * 2048  # Message length in characters
 
 # ---- System configuration ----------------------
 DTYPE = (

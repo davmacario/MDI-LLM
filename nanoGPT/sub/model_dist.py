@@ -60,7 +60,7 @@ Functioning:
 # Logging
 script_dir = os.path.dirname(__file__)
 logger_wp = logging.getLogger("model_dist")
-logger_wp.setLevel(logging.DEBUG)
+logger_wp.setLevel(logging.NOTSET)
 
 
 class StarterNode(nn.Module):
@@ -90,6 +90,7 @@ class StarterNode(nn.Module):
         self.params_init = True
         if VERB:
             print(f"Weights loaded! Moving model to {self.config.device}")
+        logger_wp.info(f"Weights loaded! Moving model to {self.config.device}")
         self.to(self.config.device)
         return 1
 
@@ -391,6 +392,8 @@ class GPTServer:
             if VERB:
                 print("[INFO] Tokenizer loaded!")
                 print("[INFO] Starting queue thread")
+            logger_wp.info("Tokenizer loaded!")
+            logger_wp.info("Starting queue thread")
 
             self.queue_thread = threading.Thread(
                 target=self._fill_queue, daemon=True
@@ -399,6 +402,7 @@ class GPTServer:
 
             if VERB:
                 print("[INFO] Starting generation loop")
+            logger_wp.info("Starting generation loop")
 
             out_text = self._starter_loop(max_new_tokens)
 
@@ -407,6 +411,7 @@ class GPTServer:
             self.running = True
             if VERB:
                 print("[INFO] Starting queue thread")
+            logger_wp.info("Starting queue thread")
             self.queue_thread = threading.Thread(
                 target=self._fill_queue, daemon=True
             )
@@ -414,53 +419,31 @@ class GPTServer:
 
             if VERB:
                 print("[INFO] Starting generation loop")
+            logger_wp.info("Starting generation loop")
             self._node_loop()
 
-    def recv_from_prev(self) -> Any:  # NOTE: not used - see self._fill_queue
+    def recv_from_prev(self, size: int) -> bytes:
         """
-        Receive a full message from the previous node.
+        Receive a message of the specified size from the previous node.
 
-        The received message should have a fixed-length header containing the
-        length in bytes of the whole message.
-
-        This method assumes the message is an encoding in bytes of any Python
-        object, which can be extracted using pickle.
+        Args:
+            size: size (in bytes) of the expected message
 
         Returns:
-            the received python object
+            the received message (NOT decoded)
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
-        curr_msg = b""
-        new_msg = True
-        # Expected next msg len - allow to read the header first
-        exp_length = HEADERLENGTH + MSGLENGTH
-        while self.running:
-            # Receive information from the new socket
-            msg = self.sock_to_prev_prop[0].recv(exp_length)
-            if msg == b"":
+        full_msg = b""
+        while len(full_msg) < size:
+            msg = self.sock_to_prev_prop[0].recv(size - len(full_msg))
+            if not msg:
                 # Prev node shut connection down (error)
                 self.running = False
-            if new_msg:
-                # Extract message length from the header, then update exp_len
-                msg_len = int(msg[:HEADERLENGTH])
-                new_msg = False
-                # exp_length = msg_len
-
-            curr_msg += msg
-
-            if len(curr_msg) >= HEADERLENGTH + MSGLENGTH:
-                # When the full message is received, the length will be the one in the header
-                data = pickle.loads(curr_msg[HEADERLENGTH:])
-
-                # Look for stopping msg
-                if "stop" in data and data["stop"]:
-                    # Stopping sequence
-                    if VERB:
-                        print("Stopping message received! Generation complete!")
-                    self.running = False
-
-                return data
+                logger_wp.error("Connection was terminated unexpectedly!")
+                break
+            full_msg += msg
+        return full_msg
 
     def send_to_next(self, data: Any):
         """
@@ -474,11 +457,8 @@ class GPTServer:
         assert self.sock_to_next is not None
 
         message_str = pickle.dumps(data)
-        # Zero padding
-        message_pad = message_str + b"\0" * (MSGLENGTH - len(message_str))
-        logger_wp.debug(f"Padded message length: {len(message_pad)}")
         tx_msg = (
-            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_pad
+            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
         self.sock_to_next.sendall(tx_msg)
 
@@ -502,7 +482,7 @@ class GPTServer:
 
             self._start_client()
             assert self.sock_to_next is not None
-            logger_wp.debug("Created socket to next")
+            logger_wp.info("Created socket to next node")
 
             if VERB:
                 print("-> Done!                     ")
@@ -518,7 +498,10 @@ class GPTServer:
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
-        logger_wp.debug("Created socket to previous")
+        # self.sock_to_prev_prop[0].setsockopt(
+        #     socket.SOL_SOCKET, socket.SO_RCVBUF, MSGLENGTH
+        # )
+        logger_wp.info("Created socket to previous node")
 
         if VERB:
             print("-> Done!                     ")
@@ -533,7 +516,7 @@ class GPTServer:
 
             self._start_client()
             assert self.sock_to_next is not None
-            logger_wp.debug("Created socket to next")
+            logger_wp.info("Created socket to next node")
 
             if VERB:
                 print("-> Done!                     ")
@@ -575,6 +558,7 @@ class GPTServer:
             print(
                 f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}"
             )
+        logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
         with open(self.tok_meta_path, "rb") as f:
             meta = pickle.load(f)
         self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
@@ -665,48 +649,39 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
+        _n_recv_msg = 0
         curr_msg = b""
         new_msg = True
         # Expected next msg len - allow to read the header first
-        exp_length = HEADERLENGTH + MSGLENGTH
+        exp_length = HEADERLENGTH
         msg_len = MSGLENGTH
         while self.running:
             # Receive information from the new socket
-            msg = self.sock_to_prev_prop[0].recv(exp_length)
-            if not msg:
-                # Prev node shut connection down (error)
+            msg = self.recv_from_prev(exp_length)
+
+            # Extract message length from the header
+            msg_len = int(msg[:HEADERLENGTH])
+            _n_recv_msg += 1
+            logger_wp.debug(f"Received message {_n_recv_msg} length: {msg_len}")
+
+            msg_payload = self.sock_to_prev_prop[0].recv(msg_len)
+
+            data = pickle.loads(msg_payload)
+            logger_wp.debug(f"Received full message {_n_recv_msg}")
+            exp_length = HEADERLENGTH
+
+            # Look for stopping msg
+            if "stop" in data and data["stop"]:
+                # Stopping sequence
+                if VERB:
+                    print("Stopping message received! Generation complete!")
+                logger_wp.info(
+                    "Stopping message received! Generation complete!"
+                )
                 self.running = False
-                warnings.warn(
-                    "[WARN] Connection to previous node failed - terminating"
-                )
-                break
-            if new_msg:
-                # Extract message length from the header
-                msg_len = int(msg[:HEADERLENGTH])
-                logger_wp.debug(f"Received message length: {msg_len}")
-                assert msg_len <= MSGLENGTH
-                new_msg = False
-                # exp_length = msg_len
 
-            curr_msg += msg
-
-            if len(curr_msg) >= HEADERLENGTH + MSGLENGTH:
-                data = pickle.loads(
-                    curr_msg[HEADERLENGTH : HEADERLENGTH + msg_len]
-                )
-                curr_msg = b""
-                # exp_length = HEADERLENGTH
-                new_msg = True
-
-                # Look for stopping msg
-                if "stop" in data and data["stop"]:
-                    # Stopping sequence
-                    if VERB:
-                        print("Stopping message received! Generation complete!")
-                    self.running = False
-
-                if self.running:  # Not here if data is stopping message
-                    self.message_queue.append(data)
+            if self.running:  # Not here if data is stopping message
+                self.message_queue.append(data)
 
     def _starter_loop(self, max_new_tokens: int) -> List[str]:
         """
@@ -744,6 +719,7 @@ class GPTServer:
             # with CTX:  # FIXME
             total_iters = max_new_tokens * self.n_nodes
             for k in range(total_iters):
+                logger_wp.info(f"Iter {k}")
                 print(
                     f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
                     end="\r",
@@ -753,9 +729,14 @@ class GPTServer:
                 if k >= self.n_nodes:
                     # We are not in the first iteration (k starts from 0)
                     # can start processing messages from finisher
+                    old_count_w = count_wait
                     while len(self.message_queue) <= 0:
                         count_wait += 1
                         # time.sleep(0.01)
+                    if count_wait - old_count_w > 0:
+                        logger_wp.warn(
+                            f"Iter {k} - Had to wait for queue to fill up!"
+                        )
                     in_msg = self.message_queue.pop(0)
                     sample_in = in_msg["sample_index"]
 
@@ -796,6 +777,7 @@ class GPTServer:
         tot_time = time.time() - start_time
         # Send stop message to the next
         self.send_to_next(self.stop_msg)
+        logger_wp.info("Generation completed")
         if VERB:
             print("[INFO] Generation completed!                          ")
             print(f"> Total time for generation: {tot_time} s")
@@ -822,9 +804,15 @@ class GPTServer:
         count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
             while self.running:
+                logger_wp.info(f"Iter {iter}")
+                old_count_w = count_wait
                 while len(self.message_queue) <= 0:  # Wait for messages
                     count_wait += 1
                     # time.sleep(0.01)
+                if count_wait - old_count_w > 0:
+                    logger_wp.warn(
+                        f"Iter {iter} - Had to wait for queue to fill up!"
+                    )
                 # Extract message from queue
                 in_msg = self.message_queue.pop(0)
                 # Unpack
@@ -900,6 +888,7 @@ class GPTServer:
                 self.init_model()
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
+                logger_wp.info("Received initialization information!")
                 self._running_thread = threading.Thread(
                     target=self.start, daemon=True
                 )
@@ -927,6 +916,7 @@ class GPTServer:
                 self._end_thr.start()
                 if VERB:
                     print("[INFO] Node stopped!")
+                logger_wp.info("Received stopping directive")
                 cp.response.status = 200
             else:
                 raise cp.HTTPError(404, "Not found!")
@@ -998,6 +988,7 @@ class GPTDistributed:
         except:
             if VERB:
                 print("Loading full model on RAM - not enough VRAM")
+            logger_wp.warn("Loading full model on RAM - not enough VRAM")
             # It may be that the model does not fit all in the VRAM
             self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
 
@@ -1091,6 +1082,7 @@ class GPTDistributed:
         for i, int_node in enumerate(self.nodes_info["nodes"]["intermediate"]):
             if VERB:
                 print(f"Initializing intermediate node n.{i}")
+
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
             curr_msg["model_config"] = self.model_config.asdict()
@@ -1121,10 +1113,12 @@ class GPTDistributed:
             if not out:
                 if VERB:
                     print("> Failed!")
+                logger_wp.error("Failed to initialize node!")
                 return out
 
             if VERB:
                 print("> Success!")
+            logger_wp.info("Node was initialized successfully")
 
         # Finisher config - can use next/prev from last loop iteration
         curr_msg = self.init_msg.copy()
@@ -1143,13 +1137,18 @@ class GPTDistributed:
         addr = f"http://{target_addr}:{target_port}/init"
         if VERB:
             print(f"Initializing finisher node ({addr})")
+        logger_wp.info(f"Initializing finisher node ({addr})")
 
         out *= self.request_to_node("post", addr, curr_msg)
 
-        if VERB and out:
-            print("> Success!")
-        elif VERB and not out:
-            print("> Failed!")
+        if out:
+            if VERB:
+                print("> Success!")
+            logger_wp.info("Node was initialized successfully!")
+        elif not out:
+            if VERB:
+                print("> Failed!")
+            logger_wp.error("Failed to initialize finisher node")
 
         return out
 
