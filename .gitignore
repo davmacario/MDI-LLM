@@ -216,3 +216,4 @@ meta.pkl
 *.pth
 # Temporary folders
 tmp/
+logs/
