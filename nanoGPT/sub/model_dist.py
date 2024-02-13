@@ -145,6 +145,8 @@ class IntermediateNode(nn.Module):
         """Load weights"""
         self.load_state_dict(params)
         self.params_init = True
+        if VERB:
+            print(f"Weights loaded! Moving model to {self.config.device}")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -182,6 +184,8 @@ class FinisherNode(nn.Module):
         """Load weights"""
         self.load_state_dict(params)
         self.params_init = True
+        if VERB:
+            print(f"Weights loaded! Moving model to {self.config.device}")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -426,6 +430,9 @@ class GPTServer:
         """
         Receive a message of the specified size from the previous node.
 
+        Remark: the size specified in socket.recv(<>) is the MAX size that will
+        be read from the receiver buffer.
+
         Args:
             size: size (in bytes) of the expected message
 
@@ -435,14 +442,15 @@ class GPTServer:
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
         full_msg = b""
-        while len(full_msg) < size:
+        while self.running and len(full_msg) < size:
             msg = self.sock_to_prev_prop[0].recv(size - len(full_msg))
             if not msg:
                 # Prev node shut connection down (error)
                 self.running = False
                 logger_wp.error("Connection was terminated unexpectedly!")
-                break
             full_msg += msg
+            if not self.running:
+                break
         return full_msg
 
     def send_to_next(self, data: Any):
@@ -460,7 +468,11 @@ class GPTServer:
         tx_msg = (
             bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         )
-        self.sock_to_next.sendall(tx_msg)
+        # NOTE: attempt at sending multiple messages in a "safe" way (no sendall)
+        while tx_msg:
+            tx_msg = tx_msg[self.sock_to_next.send(tx_msg) :]
+        logger_wp.debug("Sent full message to next")
+        # self.sock_to_next.sendall(tx_msg)
 
     def create_sockets(self):
         """
@@ -642,6 +654,9 @@ class GPTServer:
         nodes in the chain.
         As a message is received, its contents are stored in the message queue
         (`self.message_queue`).
+        This allows to store locally each of the received messages, in order.
+        The order is crucial for the correct functioning of the program
+        (pipelining).
 
         This method loops infinitely and constantly waits for incoming messages.
         For this reason, it is ran on a separate thread, and it is stopped when
@@ -650,25 +665,20 @@ class GPTServer:
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
         _n_recv_msg = 0
-        curr_msg = b""
-        new_msg = True
-        # Expected next msg len - allow to read the header first
-        exp_length = HEADERLENGTH
-        msg_len = MSGLENGTH
         while self.running:
-            # Receive information from the new socket
-            msg = self.recv_from_prev(exp_length)
+            # Receive information from the new socket (exact length)
+            msg = self.recv_from_prev(HEADERLENGTH)
 
             # Extract message length from the header
             msg_len = int(msg[:HEADERLENGTH])
             _n_recv_msg += 1
-            logger_wp.debug(f"Received message {_n_recv_msg} length: {msg_len}")
 
-            msg_payload = self.sock_to_prev_prop[0].recv(msg_len)
-
+            # Read payload (exact size - this is important)
+            msg_payload = self.recv_from_prev(msg_len)
             data = pickle.loads(msg_payload)
-            logger_wp.debug(f"Received full message {_n_recv_msg}")
-            exp_length = HEADERLENGTH
+            logger_wp.debug(
+                f"Received full message {_n_recv_msg} of length {msg_len}"
+            )
 
             # Look for stopping msg
             if "stop" in data and data["stop"]:
@@ -679,8 +689,7 @@ class GPTServer:
                     "Stopping message received! Generation complete!"
                 )
                 self.running = False
-
-            if self.running:  # Not here if data is stopping message
+            else:  # Not here if stopping message is received
                 self.message_queue.append(data)
 
     def _starter_loop(self, max_new_tokens: int) -> List[str]:
@@ -773,6 +782,8 @@ class GPTServer:
                     # Build message
                     out_msg = self._build_msg(idx_cond.to("cpu"), sample_id)
                     self.send_to_next(out_msg)
+                    # Sleep for 1 ms - do not overwhelm receiver
+                    time.sleep(0.001)
 
         tot_time = time.time() - start_time
         # Send stop message to the next
@@ -833,6 +844,8 @@ class GPTServer:
                     # Send to next
                     self.send_to_next(out_msg)
                     iter += 1
+                    # Sleep for 1 ms - do not overwhelm receiver
+                    time.sleep(0.001)
                 else:
                     print("> Generation completed!")
                     print(
