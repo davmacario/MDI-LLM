@@ -81,6 +81,9 @@ class StarterNode(nn.Module):
                     config.block_size, config.n_embd
                 ),
                 drop=nn.Dropout(config.dropout),
+                layers=nn.ModuleList(
+                    [Block(config) for _ in range(N_LAYERS_START)]
+                ),
             )
         )
 
@@ -117,6 +120,9 @@ class StarterNode(nn.Module):
         )
 
         x = self.starter_model.drop(tok_emb + pos_emb)  # (B, T, C)
+
+        for block in self.starter_model.layers:
+            x = block(x)
 
         return x
 
@@ -783,7 +789,7 @@ class GPTServer:
                     out_msg = self._build_msg(idx_cond.to("cpu"), sample_id)
                     self.send_to_next(out_msg)
                     # Sleep for 1 ms - do not overwhelm receiver
-                    time.sleep(0.001)
+                    # time.sleep(0.001)
 
         tot_time = time.time() - start_time
         # Send stop message to the next
@@ -845,7 +851,7 @@ class GPTServer:
                     self.send_to_next(out_msg)
                     iter += 1
                     # Sleep for 1 ms - do not overwhelm receiver
-                    time.sleep(0.001)
+                    # time.sleep(0.001)
                 else:
                     print("> Generation completed!")
                     print(

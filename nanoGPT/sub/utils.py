@@ -147,6 +147,7 @@ def split_parameters(
     layer_name = "layers"
     transformer_last = f"{base_name_transformer}.ln_f"
     output_layer = "lm_head"
+    n_intermediate_nodes = n_nodes - 2
 
     assert n_nodes >= 2
 
@@ -160,21 +161,34 @@ def split_parameters(
     out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params[
         f"{base_name_transformer}.{pos_emb}.weight"
     ]
-    try:
+    if f"{base_name_transformer}.{tok_emb}.bias" in model_params.keys():
         out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params[
             f"{base_name_transformer}.{tok_emb}.bias"
         ]
-    except:
-        # Here if no bias - no problem
-        pass
 
-    try:
+    if f"{base_name_transformer}.{pos_emb}.bias" in model_params.keys():
         out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params[
             f"{base_name_transformer}.{pos_emb}.bias"
         ]
-    except:
-        # Here if no bias - no problem
-        pass
+
+    # Starter may have transformer layers
+    valid_layer_ind = list(range(0, N_LAYERS_START))
+    relevant_keys = [
+        k
+        for k in list(model_params.keys())
+        if (
+            k.startswith(f"{base_name_transformer}.{layer_name}")
+            and int(k.split(".")[2]) in valid_layer_ind
+        )
+    ]
+
+    for loc_ind, layer_ind in enumerate(valid_layer_ind):
+        prefix = f"{base_name_transformer}.{layer_name}.{layer_ind}"
+        for k in relevant_keys:
+            if k.startswith(prefix):
+                end = remove_prefix(k, prefix)
+                new_k = f"starter_model.layers.{loc_ind}{end}"
+                out_chunks["starter"][new_k] = model_params[k]
 
     # 2. Select params for every Intermediate
     out_chunks["intermediate"] = []
@@ -186,9 +200,10 @@ def split_parameters(
         # As reference, the keys for the layers all start with:
         #       transformer.layer.<layer_ind>.[...]
         # so we need to select the correct layer indices
-        valid_layer_ind = list(
-            range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM)
-        )
+        valid_layer_ind = [
+            N_LAYERS_START + n
+            for n in list(range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM))
+        ]
         relevant_keys = [
             k
             for k in list(model_params.keys())
@@ -218,6 +233,10 @@ def split_parameters(
     valid_layer_ind = list(
         range((n_nodes - 2) * N_LAYERS_FINISH, (n_nodes - 1) * N_LAYERS_FINISH)
     )
+    valid_layer_ind = [
+        N_LAYERS_START + n_intermediate_nodes * N_LAYERS_INTERM + k
+        for k in range(N_LAYERS_FINISH)
+    ]
     relevant_keys = [
         k
         for k in list(model_params.keys())
