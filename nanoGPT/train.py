@@ -210,6 +210,7 @@ def main() -> int:
     )
     if INIT_FROM == "resume":
         optimizer.load_state_dict(checkpoint["optimizer"])
+
     checkpoint = None  # free up memory
 
     # compile the model

@@ -2,6 +2,7 @@
 
 import inspect
 import os
+import time
 from dataclasses import dataclass
 from typing import Union
 
@@ -9,8 +10,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
-                        N_HEADS, N_LAYER)
+from .config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
+                     N_HEADS, N_LAYER)
 
 
 class LayerNorm(nn.Module):
@@ -207,6 +208,8 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(
             dict(
                 # Each token will read the logits for the next token from a lookup table
+                # inputs dim: vocab_size (tokens)
+                # outputs dim: n_embd
                 token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
                 # Positional embedding
                 position_embedding=nn.Embedding(
@@ -350,10 +353,11 @@ class GPT(nn.Module):
         """
         device = idx.device
 
-        _, t = idx.shape  # Batch x (Time dimension)
+        _, t = idx.shape  # Batch x Time x 1 (1 token/time position)
+        print(f" time dim.: {t:>4} ", end="")
         if t > self.config.block_size:
             raise ValueError(
-                f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
+                f"Cannot forward sequence of length {t}, as max. block size (context length) is {self.config.block_size}"
             )
 
         # The logits returned are the ones in row idx of the table
@@ -368,10 +372,13 @@ class GPT(nn.Module):
         x = self.transformer.drop(tok_emb + pos_emb)  # (B, T, C)
         # x = self.transformer.layers(x)  # (B, T, C)
         # Fix use of transformer layers - using nn.ModuleList
+
+        # t_s = time.time()
         for block in self.transformer.layers:
             x = block(x)
         x = self.transformer.ln_f(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
+        # print(f"------------> {time.time() - t_s}")
 
         if targets is not None:
             # Conform to PyTorch's specs - fix dimensions
@@ -523,11 +530,15 @@ class GPT(nn.Module):
 
         Returns:
             Updated version of idx, containing the generated elements
-        ---
-        Note: compared to microGPT, here the option to crop the logits is
-        missing
         """
-        for _ in range(max_new_tokens):
+        from .utils import loading_bar
+
+        for i in range(max_new_tokens):
+            # print(
+            #     f"Generating {loading_bar(i, max_new_tokens, 30)} {i}/{max_new_tokens}",
+            #     end="\r",
+            # )
+            print(f"{i:>4}", end="")
             # NOTE: crop idx to the last 'block_size' tokens if too long
             idx_cond = (
                 idx
@@ -538,7 +549,7 @@ class GPT(nn.Module):
             logits, _ = self(idx_cond)
             # Focus only on last time step (dim: (B, C)), scale by temperature
             logits = logits[:, -1, :] / temperature  # B x C
-            # From original: optionally crop the logits to only the top k
+            # Optionally crop the logits to only the top k
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
@@ -548,5 +559,5 @@ class GPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)  # B x 1
             # Append sampled index to idx to generate next sample
             idx = torch.cat((idx, idx_next), dim=1)  # B x (T+1)
-
+        print("Generation completed!                                          ")
         return idx

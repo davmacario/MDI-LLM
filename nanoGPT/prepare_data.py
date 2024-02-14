@@ -11,6 +11,7 @@ import os
 import pickle
 
 import numpy as np
+import requests
 import tiktoken
 import torch
 
@@ -23,7 +24,8 @@ CURR_DIR = os.path.dirname(__file__)
 
 def main():
     # TODO: add arg parsing (select tokenizer and pass data dir)
-    data_set_dir = os.path.join(CURR_DIR, "data", "shakespeare")
+    # data_set_dir = os.path.join(CURR_DIR, "data", "shakespeare")
+    data_set_dir = os.path.join(CURR_DIR, "data", "shakespeare_bpe")
     # data_set_dir = os.path.join(CURR_DIR, "data", "divina_commedia")
 
     # Dataset file is the only ".txt" file inside
@@ -31,15 +33,18 @@ def main():
     for f in os.listdir(data_set_dir):
         if f.endswith(".txt"):
             data_file = f
+            in_file = os.path.join(data_set_dir, data_file)
             break
-    assert data_file is not None, "Training txt file not found!"
 
-    in_file = os.path.join(data_set_dir, data_file)
+    if data_file is None:
+        in_file = os.path.join(data_set_dir, "input.txt")
+        if not os.path.exists(in_file):
+            data_url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+            with open(in_file, "w") as f:
+                f.write(requests.get(data_url).text)
 
-    # FIXME: split dataset before encoding to prevent from breaking relationship
-    # between tokens originating from same word (MAYBE NOT NECESSARY)
-    tokenizer = CharacterTokenizer()
-    # tokenizer = tiktoken.get_encoding("gpt2")
+    # tokenizer = CharacterTokenizer()
+    tokenizer = tiktoken.get_encoding("gpt2")
     data_lst = load_dataset(in_file, tokenizer)  # data_lst is a list
     # Move to tensor here
     data = torch.tensor(data_lst, dtype=torch.long)
