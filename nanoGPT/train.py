@@ -248,10 +248,14 @@ def main() -> int:
                         "best_val_loss": best_val_loss,
                         "config": config,
                     }
-                    print(
-                        f"saving checkpoint to {os.path.join(out_dir, 'ckpt.pt')}"
-                    )
-                    torch.save(checkpoint, os.path.join(out_dir, "ckpt.pt"))
+                    # Prevent loss of old parameters - do not overwrite
+                    if INIT_FROM != "scratch":
+                        ckpt_path_upd = f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt"
+                        print(f"Saving checkpoint to {ckpt_path_upd}")
+                        torch.save(checkpoint, ckpt_path_upd)
+                    else:
+                        print(f"Saving checkpoint to {ckpt_path}")
+                        torch.save(checkpoint, ckpt_path)
         if iter_num == 0 and EVAL_ONLY:
             break
 
