@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from torch import nn
 
 from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
-                     N_LAYERS_FINISH, N_LAYERS_INTERM, N_LAYERS_START,
+                     N_LAYERS_FINISH, N_LAYERS_INTERM, N_LAYERS_START, VERB,
                      WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
@@ -148,6 +148,17 @@ def split_parameters(
     transformer_last = f"{base_name_transformer}.ln_f"
     output_layer = "lm_head"
     n_intermediate_nodes = n_nodes - 2
+
+    # Count the number of detected transformer layers
+    layer_keys = [
+        k
+        for k in model_params.keys()
+        if k.startswith(f"{base_name_transformer}.{layer_name}")
+    ]
+    layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+
+    if VERB:
+        print(layers_unique)
 
     assert n_nodes >= 2
 

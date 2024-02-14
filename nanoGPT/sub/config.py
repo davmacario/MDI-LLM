@@ -73,9 +73,9 @@ TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 
 TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 
 # ---- MDI settings ------------------------------
-N_LAYERS_START = 0  # Number of transformer layers in the starter node
-N_LAYERS_INTERM = 1  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 1  # Number of transformer layers in the finisher node
+N_LAYERS_START = 1  # Number of transformer layers in the starter node
+N_LAYERS_INTERM = 2  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 2  # Number of transformer layers in the finisher node
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}

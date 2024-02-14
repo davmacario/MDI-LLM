@@ -32,7 +32,8 @@ if __name__ == "__main__":
     data_dir = os.path.join(script_dir, "data", dataset_name)
     out_dir = os.path.join(data_dir, "out")
     settings_path = os.path.join(script_dir, "settings_distr")
-    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    # ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
     network_conf_path = os.path.join(settings_path, "configuration.json")
 
     gpt_distr = GPTDistributed(ckpt_path)
