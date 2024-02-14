@@ -7,6 +7,7 @@ import cherrypy as cp
 import torch
 
 from sub.model_dist import GPTDistributed
+from sub.parser import parse_args
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
@@ -18,9 +19,6 @@ fhdlr = logging.FileHandler(log_file, mode="w")
 formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
 fhdlr.setFormatter(formatter)
 log_wp.addHandler(fhdlr)
-log_wp.setLevel(logging.DEBUG)
-
-dataset = "shakespeare"
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
@@ -28,13 +26,31 @@ torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
 if __name__ == "__main__":
-    dataset_name = os.path.splitext(dataset)[0]
-    data_dir = os.path.join(script_dir, "data", dataset_name)
-    out_dir = os.path.join(data_dir, "out")
+    # Parse command line arguments
+    args = parse_args()
+
+    if args.dataset is not None:
+        assert os.path.isdir(args.dataset)
+        data_dir = args.dataset
+    else:
+        data_dir = os.path.join(script_dir, "data", "shakespeare")
+
+    if args.ckpt is not None:
+        assert os.path.exists(args.ckpt)
+        ckpt_path = args.ckpt
+        out_dir = os.path.dirname(args.ckpt)
+    else:
+        out_dir = os.path.join(data_dir, "out")
+        # ckpt_path = os.path.join(out_dir, "ckpt.pt")
+        ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
+
     settings_path = os.path.join(script_dir, "settings_distr")
-    # ckpt_path = os.path.join(out_dir, "ckpt.pt")
-    ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
     network_conf_path = os.path.join(settings_path, "configuration.json")
+
+    if args.debug:
+        log_wp.setLevel(logging.DEBUG)
+    else:
+        log_wp.setLevel(logging.INFO)
 
     gpt_distr = GPTDistributed(ckpt_path)
 
@@ -43,4 +59,4 @@ if __name__ == "__main__":
         gpt_distr.start()
     except KeyboardInterrupt:
         cp.engine.stop()
-        print("Starter stopped")
+        print("Starter node was stopped successfully!")
