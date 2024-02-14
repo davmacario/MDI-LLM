@@ -21,24 +21,14 @@ def parse_args(train: bool = True):
         help="Path of the data set folder used for training; it must be the name of one of the subfolders of `data`",
     )
     parser.add_argument(
-        "--out",
-        type=str,
-        default=None,
-        help="Path where to store the checkpoints (at training) and where the checkpoints are extracted from when resuming training/sampling",
-    )
-    parser.add_argument(
         "--verb", default=False, action="store_true", help="Enable verbose mode"
     )
     parser.add_argument(
         "--debug", default=False, action="store_true", help="Enable debug mode"
     )
     parser.add_argument(
-        "--ckpt",
-        default=os.path.join(
-            script_dir, "..", "data", "shakespeare", "out", "ckpt.pt"
-        ),
+        "--ckpt", default=None, help="Specify checkpoint file name"
     )
-    # TODO: dataset path - not just name
     # TODO: add args spec for non-training
     if train:
         parser.add_argument(

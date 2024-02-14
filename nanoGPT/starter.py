@@ -43,8 +43,8 @@ if __name__ == "__main__":
         out_dir = os.path.dirname(args.ckpt)
     else:
         out_dir = os.path.join(data_dir, "out")
-        # ckpt_path = os.path.join(out_dir, "ckpt.pt")
-        ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
+        ckpt_path = os.path.join(out_dir, "ckpt.pt")
+        # ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
 
     settings_path = os.path.join(script_dir, "settings_distr")
     network_conf_path = os.path.join(settings_path, "configuration.json")
