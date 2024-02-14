@@ -313,6 +313,11 @@ class GPTServer:
             {
                 "server.socket_host": self.own_addr,
                 "server.socket_port": self.own_comm_port,
+                "server.thread_pool": 8,
+                # remove any limit on the request body size; cherrypy's default is 100MB
+                "server.max_request_body_size": 0,
+                # increase server socket timeout to 60s; cherrypy's defult is 10s
+                "server.socket_timeout": 60,
             }
         )
 
@@ -1032,9 +1037,8 @@ class GPTDistributed:
             self.tok_meta_path = os.path.join(
                 script_dir,
                 "..",
-                "data",
+                # "data",
                 self.model_ckpt["config"]["DATASET"],
-                # "shakespeare",
                 "meta.pkl",
             )
             assert os.path.exists(
@@ -1198,20 +1202,32 @@ class GPTDistributed:
         n_ret = 0
         try:
             ret = req_func(addr, json=content)
+            logger_wp.debug(
+                f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
+            )
         except:
+            logger_wp.warning(
+                f"Unable to submit {req_type} request sent to {addr}"
+            )
             n_ret += 1
         while (
             ret is None or ret.status_code != 200
         ) and n_ret < max_n_requests:
             if VERB:
                 print(
-                    f"Unable to reach node - retrying in 3s ({n_ret}/{max_n_requests})"
+                    f"Unable to reach node ({addr}) - retrying in 2s ({n_ret}/{max_n_requests})"
                 )
-            time.sleep(3)
+            time.sleep(2)
             try:
                 ret = req_func(addr, json=content)
+                logger_wp.debug(
+                    f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
+                )
             except:
-                n_ret += 1
+                logger_wp.warning(
+                    f"Unable to submit {req_type} request sent to {addr}"
+                )
+            n_ret += 1
 
         if ret is not None and ret.status_code == 200:
             return 1
