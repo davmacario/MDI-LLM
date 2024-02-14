@@ -25,7 +25,7 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = "shakespeare"  # Default value
+DATASET = os.path.join(script_dir, "data", "shakespeare")  # Default value
 
 
 def main() -> int:
@@ -36,12 +36,12 @@ def main() -> int:
 
     # OVERRIDE globals with arguments
     args = parse_args()
-    # print(f"Args: {args}")
 
-    global DATASET
-    DATASET = args.dataset
-    if DATASET not in os.listdir(os.path.join(script_dir, "data")):
-        raise ValueError(f"Invalid data set name: {DATASET}")
+    if args.dataset is not None:
+        assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
+        data_dir = args.dataset
+    else:
+        data_dir = DATASET
 
     BATCH_SIZE = args.batch_size
     INIT_FROM = args.init
@@ -50,11 +50,12 @@ def main() -> int:
     VERB = args.verb
     CKPT_INTERVAL = args.ckpt_interval
 
-    data_dir = os.path.join(script_dir, "data", DATASET)  # FIXME: generalize
-    if args.out is not None:
-        out_dir = args.out
+    if args.ckpt is not None:
+        out_dir = os.path.dirname(args.ckpt)
+        ckpt_path = args.ckpt
     else:
         out_dir = os.path.join(data_dir, "out")
+        ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
     # Setting up paths
     if master_process:
@@ -151,8 +152,6 @@ def main() -> int:
         # Resume training from a checkpoint (fine-tune).
         print(f"Resuming training from {out_dir}")
 
-        # ckpt_path = os.path.join(out_dir, "ckpt.pt")
-        ckpt_path = os.path.join(out_dir, "ckpt.pt")
         checkpoint = torch.load(ckpt_path, map_location=DEVICE)
         checkpoint_model_args = checkpoint["model_args"]
         if meta_vocab_size is not None:
