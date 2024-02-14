@@ -27,6 +27,8 @@ torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
 if __name__ == "__main__":
     # Parse command line arguments
+    # Example usage:
+    #   python3 nanoGPT/starter.py --dataset=./nanoGPT/data/shakespeare --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
     args = parse_args()
 
     if args.dataset is not None:
