@@ -29,7 +29,7 @@ BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
 BATCH_SIZE = 12  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
-N_LAYER = 5  # Number of transformer blocks
+N_LAYER = 5  # Number of transformer blocks (TRAINING ONLY)
 DROPOUT = 0.2  # Dropout probability
 BIAS = True  # do we use bias inside LayerNorm and Linear layers?
 
@@ -73,7 +73,7 @@ TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 
 TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 
 # ---- MDI settings ------------------------------
-N_LAYERS_START = 0  # Number of transformer layers in the starter node
+N_LAYERS_START = 1  # Number of transformer layers in the starter node
 N_LAYERS_INTERM = 3  # Number of transformer layers in each intermediate node
 N_LAYERS_FINISH = 3  # Number of transformer layers in the finisher node
 # CTX = (
