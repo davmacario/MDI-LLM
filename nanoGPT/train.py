@@ -226,6 +226,8 @@ def main() -> int:
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
     while iter_num <= MAX_ITERS:
+        if VERB:
+            print(f"> Training iter {local_iter_num}")
         # determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if DECAY_LR else LEARNING_RATE
         for param_group in optimizer.param_groups:
