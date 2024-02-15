@@ -381,6 +381,8 @@ class GPT(nn.Module):
         """
         device = idx.device
 
+        # Need to ensure the sequence of embeddings is at most as long as the
+        # context length
         _, t = idx.shape  # Batch x Time x 1 (1 token/time position)
         # print(f" time dim.: {t:>4} ", end="")
         if t > self.config.block_size:
@@ -398,8 +400,7 @@ class GPT(nn.Module):
         )
 
         x = self.transformer.drop(tok_emb + pos_emb)  # (B, T, C)
-        # x = self.transformer.layers(x)  # (B, T, C)
-        # Fix use of transformer layers - using nn.ModuleList
+        # x = self.transformer.layers(x)  # (B, T, C) - only works if list of modules
 
         # t_s = time.time()
         for block in self.transformer.layers:
@@ -440,6 +441,7 @@ class GPT(nn.Module):
         self.transformer.position_embedding.weight = nn.Parameter(
             self.transformer.position_embedding.weight[:block_size]
         )
+        # FIXME: attn was old name for multi-head attention in block
         for block in self.transformer.layers:
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[
