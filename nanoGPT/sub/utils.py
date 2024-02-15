@@ -124,9 +124,10 @@ def split_parameters(
     The number of nodes should be at least 2 (starter and finisher).
 
     The parameters are divided as such:
-        - Starter: token embedding, positional embedding
-        - Intermediate: 2xTransformer Layer
-        - Finisher: 2xTransformer Layer, LayerNorm
+        - Starter: token embedding, positional embedding,
+            N_LAYERS_STARTxTransformer Layers
+        - Intermediate: N_LAYERS_INTERMxTransformer Layer
+        - Finisher: N_LAYERS_FINISHxTransformer Layer, LayerNorm
 
     Args:
         model_params: complete model parameters (state dict)
@@ -139,9 +140,6 @@ def split_parameters(
             "intermediate": list containing the intermediate state dicts
             "finisher": dict with the finisher state dict
     """
-    # TODO: prevent duplicates - pop keys from model_params and place elements
-    # in output dict
-
     assert n_nodes >= 2, "There must be at least 2 nodes in the network"
 
     # Set up some parameters - they are used to gather the relevant keys
