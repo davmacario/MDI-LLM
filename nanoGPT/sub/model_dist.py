@@ -1034,11 +1034,14 @@ class GPTDistributed:
             "config" in self.model_ckpt
             and "DATASET" in self.model_ckpt["config"]
         ):
+            dataset_name = os.path.basename(
+                os.path.normpath(self.model_ckpt["config"]["DATASET"])
+            )
             self.tok_meta_path = os.path.join(
                 script_dir,
                 "..",
-                # "data",
-                self.model_ckpt["config"]["DATASET"],
+                "data",
+                dataset_name,
                 "meta.pkl",
             )
             assert os.path.exists(
