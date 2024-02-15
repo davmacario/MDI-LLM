@@ -115,7 +115,7 @@ def remove_prefix(text: str, prefix: str) -> str:
 
 
 def split_parameters(
-    model_params: Mapping[str, Any], n_nodes: int
+    model_params: Dict[str, Any], n_nodes: int
 ) -> Dict[str, Any]:
     """
     Split the model parameters (contained in a state dict) among the different
@@ -139,7 +139,11 @@ def split_parameters(
             "intermediate": list containing the intermediate state dicts
             "finisher": dict with the finisher state dict
     """
-    # TODO: make more efficient (too many nested loops) - maybe
+    # TODO: prevent duplicates - pop keys from model_params and place elements
+    # in output dict
+
+    assert n_nodes >= 2, "There must be at least 2 nodes in the network"
+
     # Set up some parameters - they are used to gather the relevant keys
     base_name_transformer = "transformer"
     tok_emb = "token_embedding"
@@ -149,38 +153,43 @@ def split_parameters(
     output_layer = "lm_head"
     n_intermediate_nodes = n_nodes - 2
 
-    # Count the number of detected transformer layers
+    # Count the number of detected transformer layers and check consistency
     layer_keys = [
         k
         for k in model_params.keys()
         if k.startswith(f"{base_name_transformer}.{layer_name}")
     ]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
-
     if VERB:
-        print(layers_unique)
-
-    assert n_nodes >= 2
+        print(
+            f"Number of transformer layers found in the model: {len(layers_unique)}"
+        )
+    n_lay_req = (
+        N_LAYERS_START + (n_nodes - 2) * N_LAYERS_INTERM + N_LAYERS_FINISH
+    )
+    assert (
+        len(layers_unique) == n_lay_req
+    ), f"Required {n_lay_req} layers, found {len(layers_unique)}"
 
     out_chunks = {}
 
     # 1. Select params for Starter
     out_chunks["starter"] = {}
-    out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params[
+    out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params.pop(
         f"{base_name_transformer}.{tok_emb}.weight"
-    ]
-    out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params[
+    )
+    out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params.pop(
         f"{base_name_transformer}.{pos_emb}.weight"
-    ]
+    )
     if f"{base_name_transformer}.{tok_emb}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params[
-            f"{base_name_transformer}.{tok_emb}.bias"
-        ]
+        out_chunks["starter"][
+            f"starter_model.{tok_emb}.bias"
+        ] = model_params.pop(f"{base_name_transformer}.{tok_emb}.bias")
 
     if f"{base_name_transformer}.{pos_emb}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params[
-            f"{base_name_transformer}.{pos_emb}.bias"
-        ]
+        out_chunks["starter"][
+            f"starter_model.{pos_emb}.bias"
+        ] = model_params.pop(f"{base_name_transformer}.{pos_emb}.bias")
 
     # Starter may have transformer layers
     valid_layer_ind = list(range(0, N_LAYERS_START))
@@ -199,7 +208,7 @@ def split_parameters(
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
                 new_k = f"starter_model.layers.{loc_ind}{end}"
-                out_chunks["starter"][new_k] = model_params[k]
+                out_chunks["starter"][new_k] = model_params.pop(k)
 
     # 2. Select params for every Intermediate
     out_chunks["intermediate"] = []
@@ -232,7 +241,7 @@ def split_parameters(
                 if k.startswith(prefix):
                     end = remove_prefix(k, prefix)
                     new_k = f"intermediate_model.layers.{local_layer_ind}{end}"
-                    curr_params[new_k] = model_params[k]
+                    curr_params[new_k] = model_params.pop(k)
             local_layer_ind += 1
 
         out_chunks["intermediate"].append(curr_params)
@@ -263,28 +272,24 @@ def split_parameters(
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
                 new_k = f"finisher_model.layers.{local_layer_ind}{end}"
-                out_chunks["finisher"][new_k] = model_params[k]
+                out_chunks["finisher"][new_k] = model_params.pop(k)
         local_layer_ind += 1
-    # OK below
-    out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params[
-        f"{transformer_last}.weight"
-    ]
-    try:
-        out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params[
-            f"{transformer_last}.bias"
-        ]
-    except:
-        pass
 
-    out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params[
+    out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params.pop(
+        f"{transformer_last}.weight"
+    )
+    if f"{transformer_last}.bias" in model_params.keys():
+        out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params.pop(
+            f"{transformer_last}.bias"
+        )
+
+    out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params.pop(
         f"{output_layer}.weight"
-    ]
-    try:
-        out_chunks["finisher"][f"finisher_model.lm_head.bias"] = model_params[
-            f"{output_layer}.bias"
-        ]
-    except:
-        pass
+    )
+    if f"{output_layer}.bias" in model_params.keys():
+        out_chunks["finisher"][
+            f"finisher_model.lm_head.bias"
+        ] = model_params.pop(f"{output_layer}.bias")
 
     return out_chunks
 
