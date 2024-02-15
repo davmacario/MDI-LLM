@@ -715,9 +715,6 @@ class GPTServer:
         Returns:
             list containing the `n_nodes` generated samples
 
-        ---
-
-        TODO:
         """
         assert self.model_config is not None and self.model is not None
 
@@ -994,10 +991,9 @@ class GPTDistributed:
             self.nodes_info = json.load(f)
             f.close()
 
-        if VERB:
-            print("Nodes information:\n", json.dumps(self.nodes_info))
+        logger_wp.info("Loaded nodes information JSON file!")
 
-        # Store important parameters:
+        # Store own information:
         self.own_config = self.nodes_info["nodes"]["starter"]
         self.own_addr = self.own_config["addr"]
         self.own_comm_port = self.own_config["communication"]["port"]
@@ -1010,24 +1006,32 @@ class GPTDistributed:
         try:
             self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
         except:
+            # It may be that the model does not fit all in the VRAM
             if VERB:
                 print("Loading full model on RAM - not enough VRAM")
             logger_wp.warn("Loading full model on RAM - not enough VRAM")
-            # It may be that the model does not fit all in the VRAM
             self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
 
-        # Extract state dict & remove problematic keys
+        # Extract state dict
         self.complete_model = self.model_ckpt["model"]  # State dict
-        unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
+
+        # Remove problematic keys
+        # NOTE: this shouldn't happen anymore (it was a problem in nanoGPT)
+        unwanted_prefix = "_orig_mod."
         for k, _ in list(self.complete_model.items()):
             if k.startswith(unwanted_prefix):
                 self.complete_model[
                     k[len(unwanted_prefix) :]
                 ] = self.complete_model.pop(k)
-        # Split model
+
+        # Split model - NOTE: the function removes the elements from
+        # self.complete_model, saving memory (no duplicate values)
         self.model_chunks = split_parameters(
             model_params=self.complete_model, n_nodes=self.n_total_nodes
         )
+        assert (
+            len(self.complete_model) == 0
+        ), "Something went wrong when splitting model"
 
         # Extract tokenizer metadata information and check it exists
         if (
@@ -1208,6 +1212,10 @@ class GPTDistributed:
             logger_wp.debug(
                 f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
             )
+            if ret.status_code == 413:
+                raise ConnectionError(
+                    f"Max payload for {req_type} was exceeded!"
+                )
         except:
             logger_wp.warning(
                 f"Unable to submit {req_type} request sent to {addr}"
@@ -1256,7 +1264,7 @@ class GPTDistributed:
         print("Produced output:\n")
         for i, smpl in enumerate(out):
             print("-------------------------------------------------")
-            print(f"Sample {i}:")
+            print(f"Sample {i + 1}:")
             print(smpl, "\n")
         print("-------------------------------------------------")
 
