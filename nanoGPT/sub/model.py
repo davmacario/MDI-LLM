@@ -86,7 +86,8 @@ class Head(nn.Module):
         self.value = nn.Linear(config.n_embd, head_size, bias=False)
         # 'tril' is not a parameter - assign it to a buffer
         # It contains the info about the triangular matrix used to compute
-        # attention
+        # attention - whose size is at most (block_size x block_size) - cropped
+        # when smaller
         self.register_buffer(
             "tril", torch.tril(torch.ones(config.block_size, config.block_size))
         )
@@ -94,14 +95,31 @@ class Head(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor):
-        """Forward pass, single attention head"""
-        _, T, _ = x.shape  # (B, T, C)
+        """
+        Forward pass, single attention head.
+
+        First, evaluate the scaled self-attention matrix multiplying queries and
+        keys.
+        Then, mask the matrix using the triangular matrix - this implies that
+        attention scores are only evaluated between a token and its predecessors
+        (no relationship is accounted for with the following ones).
+
+        Lastly, the masked matrix is used to multiply the values, returning the
+        output - the weighted sum of all values by the attention score.
+
+        Notice that the size of the time dimension (T) changes based on the
+        context length.
+        In particular, at the beginning of generation, when the number of tokens
+        is lower than the contex length, T will be lower than the context
+        length.
+        """
+        _, T, _ = x.shape  # (B, T, C) - this is the current context length
         k = self.key(x)  # (B, T, hs) - hs: "head size"
         q = self.query(x)  # (B, T, hs)
 
         # Compute attention scores
         # Scaled self-attention
-        hs = q.shape[-1]
+        hs = q.shape[-1]  # Normalization factor (head size - len of Q, K, V)
         wei = q @ k.transpose(-2, -1) * (hs**-0.5)  # (B, T, hs) @ (B, hs, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
@@ -122,7 +140,6 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
 
         # Create a Module List containing all the heads
-        # TODO: add n_embd as parameters of Head
         self.heads = nn.ModuleList([Head(config) for _ in range(config.n_head)])
         # Projection - linear transform. of the output of attention heads
         self.proj = nn.Linear(config.n_embd, config.n_embd)
@@ -130,7 +147,8 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         # The output is the concatenation of the outputs from each head
-        # Concat. on "last" dim
+        # Concat. on "last" dim (n_head * head_size = n_embd -> return to
+        # original dimension)
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.dropout(self.proj(out))
         return out
@@ -239,7 +257,6 @@ class GPT(nn.Module):
         # Initialization
         self.apply(self._init_weights)
 
-        # FIXME: needed here? it depends on whether the device is in the config
         self = self.to(self.config.device)
 
         # NOTE: from original implementation:
@@ -265,9 +282,11 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding: bool = True):
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
+        For non-embedding count (default), the position embeddings get
+        subtracted.
+        The token embeddings would too, except due to the parameter sharing
+        these params are actually used as weights in the final layer, so we
+        include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -278,7 +297,13 @@ class GPT(nn.Module):
         self, weight_decay, learning_rate, betas, device_type
     ):
         """
-        TODO
+        Set up optimizers used for training the model.
+
+        Args:
+            weight_decay
+            learning_rate
+            betas: tuple containing the hyperparameters of Adam optimizer.
+            device_type: type of the available device for training
         """
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -314,7 +339,10 @@ class GPT(nn.Module):
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
+        """
+        Estimate model flops utilization (MFU) in units of A100 bfloat16 peak
+        FLOPS
+        """
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
@@ -349,12 +377,12 @@ class GPT(nn.Module):
 
         Returns:
             logits - row 'idx' of the token embedding table; size is
-                BxTxvocab_size
+                B x T x vocab_size
         """
         device = idx.device
 
         _, t = idx.shape  # Batch x Time x 1 (1 token/time position)
-        print(f" time dim.: {t:>4} ", end="")
+        # print(f" time dim.: {t:>4} ", end="")
         if t > self.config.block_size:
             raise ValueError(
                 f"Cannot forward sequence of length {t}, as max. block size (context length) is {self.config.block_size}"
@@ -412,7 +440,6 @@ class GPT(nn.Module):
         self.transformer.position_embedding.weight = nn.Parameter(
             self.transformer.position_embedding.weight[:block_size]
         )
-        # FIXME: does this only work if the bias is used??
         for block in self.transformer.layers:
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[
