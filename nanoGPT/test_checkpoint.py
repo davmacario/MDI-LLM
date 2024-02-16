@@ -39,6 +39,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt", type=str, default=ckpt_path, help="Checkpoint path"
     )
+    parser.add_argument(
+        "--split",
+        default=False,
+        action="store_true",
+        help="Perform model split",
+    )
     args = parser.parse_args()
 
     checkpoint = torch.load(args.ckpt, map_location="cpu")
@@ -68,7 +74,7 @@ if __name__ == "__main__":
     # Count the number of detected transformer layers
     layer_keys = [k for k in mod_keys if k.startswith("transformer.layers")]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
-    if VERB:
+    if VERB and not args.split:
         print(
             f"Number of transformer layers found in the model: {len(layers_unique)}"
         )
@@ -81,16 +87,17 @@ if __name__ == "__main__":
     # Print first element (first key)
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
-    par_split = split_parameters(checkpoint["model"], 3)
-    print("Intermediate node keys:")
-    int_k = list(par_split["intermediate"][0].keys())
-    for k in int_k:
-        print(k)
-    print("Finisher node keys:")
-    fin_k = list(par_split["finisher"].keys())
-    for k in fin_k:
-        print(k)
+    if args.split:
+        par_split = split_parameters(checkpoint["model"], 3)
+        print("Intermediate node keys:")
+        int_k = list(par_split["intermediate"][0].keys())
+        for k in int_k:
+            print(k)
+        print("Finisher node keys:")
+        fin_k = list(par_split["finisher"].keys())
+        for k in fin_k:
+            print(k)
 
-    fn = FinisherNode(GPTConfig(**checkpoint["model_args"]))
+        fn = FinisherNode(GPTConfig(**checkpoint["model_args"]))
 
-    fn.load_weights(par_split["finisher"])
+        fn.load_weights(par_split["finisher"])
