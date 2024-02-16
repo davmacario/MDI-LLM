@@ -56,9 +56,17 @@ if __name__ == "__main__":
     keys_begin = [k.split(".")[0] for k in mod_keys]
     begin_once = list(set(keys_begin))
 
-    print(
-        f"\nProblematic keys:\nlm_head.weight: {checkpoint['model']['lm_head.weight'].shape}\nlm_head.bias: {checkpoint['model']['lm_head.bias'].shape}\n"
-    )
+    # Count the number of detected transformer layers
+    layer_keys = [k for k in mod_keys if k.startswith("transformer.layers")]
+    layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+    if VERB:
+        print(
+            f"Number of transformer layers found in the model: {len(layers_unique)}"
+        )
+
+    # print(
+    #     f"\nProblematic keys:\nlm_head.weight: {checkpoint['model']['lm_head.weight'].shape}\nlm_head.bias: {checkpoint['model']['lm_head.bias'].shape}\n"
+    # )
     # print("> Beginnings of keys: ", begin_once)
 
     # Print first element (first key)
