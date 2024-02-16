@@ -563,11 +563,11 @@ class GPT(nn.Module):
         from .utils import loading_bar
 
         for i in range(max_new_tokens):
-            # print(
-            #     f"Generating {loading_bar(i, max_new_tokens, 30)} {i}/{max_new_tokens}",
-            #     end="\r",
-            # )
-            print(f"{i:>4}", end="")
+            print(
+                f"Generating {loading_bar(i, max_new_tokens, 30)} {i}/{max_new_tokens}",
+                end="\r",
+            )
+            # print(f"{i:>4}", end="")
             # NOTE: crop idx to the last 'block_size' tokens if too long
             idx_cond = (
                 idx

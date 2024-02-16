@@ -33,8 +33,8 @@ def main():
     # configuration parameters
 
     start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-    num_samples = 1  # number of samples to draw
-    max_new_tokens = 256  # number of tokens generated in each sample
+    num_samples = 3  # number of samples to draw
+    max_new_tokens = 1000  # number of tokens generated in each sample
     seed = 1337
     # exec(open("configurator.py").read())  # overrides from command line or config file
 
@@ -88,6 +88,7 @@ def main():
 
     # Look for the meta pickle in case it is available in the dataset folder
     load_meta = False
+    meta_path = None
     if (
         INIT_FROM == "resume"
         and "config" in checkpoint
@@ -103,7 +104,7 @@ def main():
     # Free up memory
     checkpoint = None
 
-    if load_meta:
+    if load_meta and meta_path is not None:
         print(f"Loading meta from {meta_path}...")
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
@@ -123,7 +124,7 @@ def main():
         with open(start[5:], "r", encoding="utf-8") as f:
             start = f.read()
     start_ids = encode(start)
-    x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
+    # x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
     # Run generation
     with torch.no_grad():
@@ -132,6 +133,9 @@ def main():
             print("Beginning generation")
         t_start = time.time()
         for k in range(num_samples):
+            x = torch.tensor(encode("\n"), dtype=torch.long, device=DEVICE)[
+                None, ...
+            ]
             print(x)
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
