@@ -4,6 +4,7 @@
 Test contents of checkpoint
 """
 
+import argparse
 import os
 import pickle
 from contextlib import nullcontext
@@ -30,9 +31,17 @@ elif "mps" in DEVICE:
 else:
     device_type = "cpu"
 
+
 if __name__ == "__main__":
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ckpt", type=str, default=ckpt_path, help="Checkpoint path"
+    )
+    args = parser.parse_args()
+
+    checkpoint = torch.load(args.ckpt, map_location="cpu")
 
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
