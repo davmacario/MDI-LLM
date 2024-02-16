@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from contextlib import nullcontext
+
 import torch
 
 """
@@ -24,10 +26,10 @@ Configuration file - GPT
 
 # ---- Model configuration -----------------------
 BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
-BATCH_SIZE = 12  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
+BATCH_SIZE = 24  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
-N_HEADS = 6  # Number of attention heads (head size = 384 / 6 = 64)
-N_LAYER = 6  # Number of transformer blocks
+N_HEADS = 6  # Number of attention heads (NOTE: head size = 384 / 6 = 64)
+N_LAYER = 12  # Number of transformer blocks (TRAINING ONLY)
 DROPOUT = 0.2  # Dropout probability
 BIAS = True  # do we use bias inside LayerNorm and Linear layers?
 
@@ -40,14 +42,16 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = "cpu"
 
+# DEVICE = "cpu"  # On macOS there are some issues with MPS
+
 # ---- Training configuration --------------------
-INIT_FROM = "scratch"  # "scratch" or "resume" ("gpt2" not implemented)
+INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
-EVAL_INTERVAL = 2000
+CKPT_INTERVAL = 2000
 EVAL_ITERS = 200
-LOG_INTERVAL = 1
+LOG_INTERVAL = 10
 EVAL_ONLY = False  # if True, script exits right after the first eval
 ALWAYS_SAVE_CHECKPOINT = True  # T: always save a checkpoint after each eval
 
@@ -66,6 +70,19 @@ MIN_LR: float = 6e-5  # ~= .1*lr
 
 # ---- Generation settings ----------------------
 TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 probability
+TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+
+# ---- MDI settings ------------------------------
+N_LAYERS_START = 1  # Number of transformer layers in the starter node
+N_LAYERS_INTERM = 3  # Number of transformer layers in each intermediate node
+N_LAYERS_FINISH = 3  # Number of transformer layers in the finisher node
+# CTX = (
+#     nullcontext()
+#     if DEVICE in {"cpu", "mps"}
+#     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+# )
+HEADERLENGTH = 16  # Header length in chars
+MSGLENGTH = 16 * 2048  # Message length in characters
 
 # ---- System configuration ----------------------
 DTYPE = (

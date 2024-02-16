@@ -2,6 +2,7 @@
 
 import inspect
 import os
+import time
 from dataclasses import dataclass
 from typing import Union
 
@@ -9,9 +10,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from sub.config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT,
-                        EVAL_INTERVAL, EVAL_ITERS, LEARNING_RATE, N_EMBD,
-                        N_HEADS, N_ITER_TRAIN, N_LAYER)
+from .config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
+                     N_HEADS, N_LAYER)
 
 
 class LayerNorm(nn.Module):
@@ -36,10 +36,41 @@ class LayerNorm(nn.Module):
         )
 
 
+@dataclass
+class GPTConfig:
+    """Wrapper for GPT configuration parameters"""
+
+    batch_size: int = BATCH_SIZE  # NOTE: value can be overwritten by parser
+    block_size: int = BLOCK_SIZE  # Context length
+    vocab_size: Union[
+        int, None
+    ] = 50304  # from GPT-2: 50257 (round to multiple of 64)
+    n_layer: int = N_LAYER  # Number of transformer blocks
+    n_head: int = N_HEADS
+    n_embd: int = N_EMBD
+    dropout: float = DROPOUT
+    bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    #
+    device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
+
+    def asdict(self):
+        return {
+            "batch_size": self.batch_size,
+            "block_size": self.block_size,
+            "vocab_size": self.vocab_size,
+            "n_layer": self.n_layer,
+            "n_head": self.n_head,
+            "n_embd": self.n_embd,
+            "dropout": self.dropout,
+            "bias": self.bias,
+            "device": self.device,
+        }
+
+
 class Head(nn.Module):
     """Single self-attention head"""
 
-    def __init__(self, head_size: int):
+    def __init__(self, config: GPTConfig):
         """
         Instantiate single attention head.
 
@@ -47,27 +78,48 @@ class Head(nn.Module):
             head_size: size of the Query, Key and Value vectors [$d_{head}$]
         """
         super().__init__()
+        head_size = config.n_embd // config.n_head
 
         # Linear projection
-        self.key = nn.Linear(N_EMBD, head_size, bias=False)
-        self.query = nn.Linear(N_EMBD, head_size, bias=False)
-        self.value = nn.Linear(N_EMBD, head_size, bias=False)
+        self.key = nn.Linear(config.n_embd, head_size, bias=False)
+        self.query = nn.Linear(config.n_embd, head_size, bias=False)
+        self.value = nn.Linear(config.n_embd, head_size, bias=False)
         # 'tril' is not a parameter - assign it to a buffer
+        # It contains the info about the triangular matrix used to compute
+        # attention - whose size is at most (block_size x block_size) - cropped
+        # when smaller
         self.register_buffer(
-            "tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))
+            "tril", torch.tril(torch.ones(config.block_size, config.block_size))
         )
 
-        self.dropout = nn.Dropout(DROPOUT)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor):
-        """Forward pass, single attention head"""
-        _, T, _ = x.shape  # (B, T, C)
+        """
+        Forward pass, single attention head.
+
+        First, evaluate the scaled self-attention matrix multiplying queries and
+        keys.
+        Then, mask the matrix using the triangular matrix - this implies that
+        attention scores are only evaluated between a token and its predecessors
+        (no relationship is accounted for with the following ones).
+
+        Lastly, the masked matrix is used to multiply the values, returning the
+        output - the weighted sum of all values by the attention score.
+
+        Notice that the size of the time dimension (T) changes based on the
+        context length.
+        In particular, at the beginning of generation, when the number of tokens
+        is lower than the contex length, T will be lower than the context
+        length.
+        """
+        _, T, _ = x.shape  # (B, T, C) - this is the current context length
         k = self.key(x)  # (B, T, hs) - hs: "head size"
         q = self.query(x)  # (B, T, hs)
 
         # Compute attention scores
         # Scaled self-attention
-        hs = q.shape[-1]
+        hs = q.shape[-1]  # Normalization factor (head size - len of Q, K, V)
         wei = q @ k.transpose(-2, -1) * (hs**-0.5)  # (B, T, hs) @ (B, hs, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
@@ -84,19 +136,19 @@ class MultiHeadAttention(nn.Module):
     Multi-Head Attention module: use multiple attention heads in parallel.
     """
 
-    def __init__(self, num_heads, head_size):
+    def __init__(self, config: GPTConfig):
         super().__init__()
-        n_embd = num_heads * head_size
 
         # Create a Module List containing all the heads
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.heads = nn.ModuleList([Head(config) for _ in range(config.n_head)])
         # Projection - linear transform. of the output of attention heads
-        self.proj = nn.Linear(n_embd, n_embd)
-        self.dropout = nn.Dropout(DROPOUT)
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         # The output is the concatenation of the outputs from each head
-        # Concat. on "last" dim
+        # Concat. on "last" dim (n_head * head_size = n_embd -> return to
+        # original dimension)
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.dropout(self.proj(out))
         return out
@@ -105,7 +157,7 @@ class MultiHeadAttention(nn.Module):
 class FeedForward(nn.Module):
     """Simple linear layer, used after MHA"""
 
-    def __init__(self, n_embd):
+    def __init__(self, config: GPTConfig):
         """
         Create feed-forward layer.
 
@@ -117,10 +169,10 @@ class FeedForward(nn.Module):
         # necessary for residual connections & it brings the dimension down
         # to the value we want (n_embd)
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
+            nn.Linear(config.n_embd, 4 * config.n_embd),
             nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd),  # Projection layer
-            nn.Dropout(DROPOUT),
+            nn.Linear(4 * config.n_embd, config.n_embd),  # Projection layer
+            nn.Dropout(config.dropout),
         )
 
     def forward(self, x):
@@ -144,44 +196,17 @@ class Block(nn.Module):
                 each head will work with dim. n_embd // n_head)
         """
         super().__init__()
-        head_size = config.n_embd // config.n_head
-        self.sa = MultiHeadAttention(config.n_head, head_size)
-        self.ffwd = FeedForward(config.n_embd)
-        # LayerNorm
         self.ln1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mha = MultiHeadAttention(config)
         self.ln2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ffwd = FeedForward(config)
 
     def forward(self, x: torch.Tensor):
         # NOTE: using residual connections (sum the inputs to the outputs)
         # LayerNorm applied before each layer
-        x = x + self.sa(self.ln1(x))
+        x = x + self.mha(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
-
-
-@dataclass
-class GPTConfig:
-    """Wrapper for GPT configuration parameters"""
-
-    # block_size: int = 1024  # Context length
-    # vocab_size: int = 50304  # from GPT-2: 50257 (round to multiple of 64)
-    # n_layer: int = 12  # Number of transformer blocks
-    # n_head: int = 12
-    # n_embd: int = 768
-    # dropout: float = 0.0
-    # bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-
-    batch_size: int = BATCH_SIZE  # FIXME: it wasn't here before, see if needed
-    block_size: int = BLOCK_SIZE  # Context length
-    vocab_size: Union[
-        int, None
-    ] = 50304  # from GPT-2: 50257 (round to multiple of 64)
-    n_layer: int = N_LAYER  # Number of transformer blocks
-    n_head: int = N_HEADS
-    n_embd: int = N_EMBD
-    dropout: float = DROPOUT
-    bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    device: str = DEVICE  # FIXME: new - where to put this?
 
 
 class GPT(nn.Module):
@@ -195,25 +220,26 @@ class GPT(nn.Module):
             config: GPTConfig object with all the configuration parameters
         """
         assert config.vocab_size is not None
-        assert config.block_size is not None
 
         super().__init__()
         self.config: GPTConfig = config
         self.transformer = nn.ModuleDict(
             dict(
                 # Each token will read the logits for the next token from a lookup table
+                # inputs dim: vocab_size (tokens)
+                # outputs dim: n_embd
                 token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
                 # Positional embedding
                 position_embedding=nn.Embedding(
                     config.block_size, config.n_embd
                 ),
-                # Dropout layer before MHA
+                # Dropout layer before transformer layers
                 drop=nn.Dropout(config.dropout),
-                # Multi-Head Attention
-                mha=nn.ModuleList(
+                # Multi-Head Attention + FC layers
+                layers=nn.ModuleList(
                     [Block(config) for _ in range(config.n_layer)]
                 ),
-                # mha=nn.Sequential(
+                # layers=nn.Sequential(
                 #     *[
                 #         Block(config.n_embd, config.n_head)
                 #         for _ in range(config.n_layer)
@@ -222,8 +248,8 @@ class GPT(nn.Module):
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
-        # Output linear layer, producing logits before softmax
-        self.lm_head = nn.Linear(N_EMBD, config.vocab_size)
+        # Output linear layer, producing logits before softmax (only important at training)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
 
         # Weight-Tying: share weights of embedding and output layers
         self.transformer.token_embedding.weight = self.lm_head.weight
@@ -231,7 +257,6 @@ class GPT(nn.Module):
         # Initialization
         self.apply(self._init_weights)
 
-        # FIXME: needed here? it depends on whether the device is in the config
         self = self.to(self.config.device)
 
         # NOTE: from original implementation:
@@ -257,9 +282,11 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding: bool = True):
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
+        For non-embedding count (default), the position embeddings get
+        subtracted.
+        The token embeddings would too, except due to the parameter sharing
+        these params are actually used as weights in the final layer, so we
+        include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -270,7 +297,13 @@ class GPT(nn.Module):
         self, weight_decay, learning_rate, betas, device_type
     ):
         """
-        TODO
+        Set up optimizers used for training the model.
+
+        Args:
+            weight_decay
+            learning_rate
+            betas: tuple containing the hyperparameters of Adam optimizer.
+            device_type: type of the available device for training
         """
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -306,7 +339,10 @@ class GPT(nn.Module):
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
+        """
+        Estimate model flops utilization (MFU) in units of A100 bfloat16 peak
+        FLOPS
+        """
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
@@ -341,14 +377,17 @@ class GPT(nn.Module):
 
         Returns:
             logits - row 'idx' of the token embedding table; size is
-                BxTxvocab_size
+                B x T x vocab_size
         """
         device = idx.device
 
-        _, t = idx.shape  # Batch x (Time dimension)
+        # Need to ensure the sequence of embeddings is at most as long as the
+        # context length
+        _, t = idx.shape  # Batch x Time x 1 (1 token/time position)
+        # print(f" time dim.: {t:>4} ", end="")
         if t > self.config.block_size:
             raise ValueError(
-                f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
+                f"Cannot forward sequence of length {t}, as max. block size (context length) is {self.config.block_size}"
             )
 
         # The logits returned are the ones in row idx of the table
@@ -361,12 +400,14 @@ class GPT(nn.Module):
         )
 
         x = self.transformer.drop(tok_emb + pos_emb)  # (B, T, C)
-        # x = self.transformer.mha(x)  # (B, T, C)
-        # Fix use of MHA - using nn.ModuleList
-        for block in self.transformer.mha:
+        # x = self.transformer.layers(x)  # (B, T, C) - only works if list of modules
+
+        # t_s = time.time()
+        for block in self.transformer.layers:
             x = block(x)
         x = self.transformer.ln_f(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
+        # print(f"------------> {time.time() - t_s}")
 
         if targets is not None:
             # Conform to PyTorch's specs - fix dimensions
@@ -400,8 +441,8 @@ class GPT(nn.Module):
         self.transformer.position_embedding.weight = nn.Parameter(
             self.transformer.position_embedding.weight[:block_size]
         )
-        # FIXME: does this only work if the bias is used??
-        for block in self.transformer.mha:
+        # FIXME: attn was old name for multi-head attention in block
+        for block in self.transformer.layers:
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[
                     :, :, :block_size, :block_size
@@ -518,11 +559,15 @@ class GPT(nn.Module):
 
         Returns:
             Updated version of idx, containing the generated elements
-        ---
-        Note: compared to microGPT, here the option to crop the logits is
-        missing
         """
-        for _ in range(max_new_tokens):
+        from .utils import loading_bar
+
+        for i in range(max_new_tokens):
+            print(
+                f"Generating {loading_bar(i, max_new_tokens, 30)} {i}/{max_new_tokens}",
+                end="\r",
+            )
+            # print(f"{i:>4}", end="")
             # NOTE: crop idx to the last 'block_size' tokens if too long
             idx_cond = (
                 idx
@@ -533,7 +578,7 @@ class GPT(nn.Module):
             logits, _ = self(idx_cond)
             # Focus only on last time step (dim: (B, C)), scale by temperature
             logits = logits[:, -1, :] / temperature  # B x C
-            # From original: optionally crop the logits to only the top k
+            # Optionally crop the logits to only the top k
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
@@ -543,5 +588,5 @@ class GPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)  # B x 1
             # Append sampled index to idx to generate next sample
             idx = torch.cat((idx, idx_next), dim=1)  # B x (T+1)
-
+        print("Generation completed!                                          ")
         return idx

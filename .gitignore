@@ -214,3 +214,6 @@ meta.pkl
 # Pretrained models
 *.pt
 *.pth
+# Temporary folders
+tmp/
+logs/
