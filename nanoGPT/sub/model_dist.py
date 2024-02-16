@@ -314,9 +314,9 @@ class GPTServer:
                 "server.socket_host": self.own_addr,
                 "server.socket_port": self.own_comm_port,
                 "server.thread_pool": 8,
-                # remove any limit on the request body size; cherrypy's default is 100MB
+                # remove any limit on the request body size; default is 100MB
                 "server.max_request_body_size": 0,
-                # increase server socket timeout to 60s; cherrypy's defult is 10s
+                # increase server socket timeout to 60s; default is 10s
                 "server.socket_timeout": 60,
             }
         )
@@ -351,6 +351,7 @@ class GPTServer:
         self.model.load_weights(self.model_params)
         self.model = self.model.to(DEVICE)
         if set_eval:
+            # Set to evaluation mode (no backpropagation)
             self.model.eval()
 
     def start(
@@ -1244,7 +1245,7 @@ class GPTDistributed:
             return 1
         return 0
 
-    def start(self):
+    def start(self, tokens_per_sample: int = 1000):
         """
         Start the operation - webserver + model
 
@@ -1257,7 +1258,7 @@ class GPTDistributed:
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        out = self.webserv.start(max_new_tokens=1000)
+        out = self.webserv.start(max_new_tokens=tokens_per_sample)
         assert out is not None
 
         print("-------------------------------------------------")
