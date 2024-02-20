@@ -92,9 +92,8 @@ class StarterNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
-        logger_wp.info(f"Weights loaded! Moving model to {self.config.device}")
-        self.to(self.config.device)
+            print(f"Weights loaded!")
+        logger_wp.info(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -152,7 +151,7 @@ class IntermediateNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
+            print(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -191,7 +190,7 @@ class FinisherNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
+            print(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -327,7 +326,9 @@ class GPTServer:
 
     def init_model(self, set_eval: bool = True):
         """
-        Initialize the node's model chunk, passing the parameters
+        Initialize the node's model chunk, passing the parameters.
+
+        The model will also be moved to the target device.
 
         Args:
             set_eval: if set to true, the model will be set to "eval" mode, used
@@ -348,8 +349,8 @@ class GPTServer:
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
+        self.model = self.model.to(self.model_config.device)
         self.model.load_weights(self.model_params)
-        self.model = self.model.to(DEVICE)
         if set_eval:
             # Set to evaluation mode (no backpropagation)
             self.model.eval()
@@ -842,10 +843,9 @@ class GPTServer:
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
                 exp_ind = (samp_ind + 1) % self.n_nodes
 
-                ins = in_msg["data"]
+                ins = in_msg["data"].to(self.model_config.device)
                 if self.running:
                     print(f"> Generating {loopsigns[iter % 4]}", end="\r")
-                    ins = ins.to(self.model_config.device)
                     # Forward pass
                     outs = self.model(ins)
                     # Build msg
@@ -853,8 +853,6 @@ class GPTServer:
                     # Send to next
                     self.send_to_next(out_msg)
                     iter += 1
-                    # Sleep for 1 ms - do not overwhelm receiver
-                    # time.sleep(0.001)
                 else:
                     print("> Generation completed!")
                     print(
