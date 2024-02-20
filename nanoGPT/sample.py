@@ -49,6 +49,8 @@ def main():
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
     VERB = args.verb
+    global PROFILE
+    PROFILE = args.debug
 
     # --------------------------------------------------------------------------
 
