@@ -104,9 +104,10 @@ def main():
         and "config" in checkpoint
         and "DATASET" in checkpoint["config"]
     ):  # older checkpoints might not have these...
-        meta_path = os.path.join(
-            script_dir, "data", checkpoint["config"]["DATASET"], "meta.pkl"
+        dataset_name = os.path.basename(
+            os.path.normpath(checkpoint["config"]["DATASET"])
         )
+        meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
         if VERB:
             print("Looking for tokenizer info in: ", meta_path)
         load_meta = os.path.exists(meta_path)
