@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import datetime
 
 import cherrypy as cp
 import torch
@@ -29,7 +30,7 @@ if __name__ == "__main__":
     # Parse command line arguments
     # Example usage:
     #   python3 nanoGPT/starter.py --dataset=./nanoGPT/data/shakespeare --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
-    args = parse_args()
+    args = parse_args(train=False)
 
     if args.dataset is not None:
         assert os.path.isdir(args.dataset)
@@ -54,11 +55,25 @@ if __name__ == "__main__":
     else:
         log_wp.setLevel(logging.INFO)
 
+    out_stats_file = args.time_run
+    assert os.path.exists(os.path.dirname(out_stats_file))
+
     gpt_distr = GPTDistributed(ckpt_path)
 
     # Operation
     try:
-        gpt_distr.start(tokens_per_sample=1000)
+        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=1000)
     except KeyboardInterrupt:
         cp.engine.stop()
         print("Starter node was stopped successfully!")
+    else:
+        # Print the stats to file (we are sure directory exists)
+        if out_stats_file is not None:
+            with open(out_stats_file, "a") as f:
+                # Format: datetime - number of samples - model info - total time
+                curr_ts = datetime.now()
+                f.write(
+                    f"[{curr_ts.strftime('%Y-%m-%d %H:%M:%S')}] - {str(len(gen_samples)).rjust(3)} samples, {gpt_distr.n_layers_tot} layers, context size: {gpt_distr.model_config.block_size}, total generation time: {gen_time} s\n"
+                )
+                f.close()
+                print("Stats written to ", out_stats_file)

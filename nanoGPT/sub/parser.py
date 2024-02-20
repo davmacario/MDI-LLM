@@ -55,4 +55,12 @@ def parse_args(train: bool = True):
             default=CKPT_INTERVAL,
             help="Number of iterations between each checkpoint (when weights get stored)",
         )
+    else:
+        # Output file for storing times
+        parser.add_argument(
+            "--time-run",
+            type=str,
+            default=None,
+            help="Path of the file where to store the run information and generation time",
+        )
     return parser.parse_args()
