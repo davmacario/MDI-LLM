@@ -21,7 +21,10 @@ def parse_args(train: bool = True):
         "--verb", default=False, action="store_true", help="Enable verbose mode"
     )
     parser.add_argument(
-        "--debug", default=False, action="store_true", help="Enable debug mode"
+        "--debug",
+        default=False,
+        action="store_true",
+        help="Enable debug mode (enable profiler)",
     )
     parser.add_argument(
         "--ckpt", default=None, help="Specify checkpoint file name"
