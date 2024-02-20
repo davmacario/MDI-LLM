@@ -357,7 +357,7 @@ class GPTServer:
     def start(
         self,
         max_new_tokens: Union[None, int] = None,
-    ) -> Union[None, List[str]]:
+    ) -> Union[None, Tuple[List[str], float]]:
         """
         Perform normal operation (open sockets, wait for communication from
         previous node and forward activations to next one)
@@ -420,9 +420,9 @@ class GPTServer:
                 print("[INFO] Starting generation loop")
             logger_wp.info("Starting generation loop")
 
-            out_text = self._starter_loop(max_new_tokens)
+            out_text, gen_time = self._starter_loop(max_new_tokens)
 
-            return out_text
+            return out_text, gen_time
         else:
             self.running = True
             if VERB:
@@ -704,7 +704,7 @@ class GPTServer:
             else:  # Not here if stopping message is received
                 self.message_queue.append(data)
 
-    def _starter_loop(self, max_new_tokens: int) -> List[str]:
+    def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
         This loop has a finite duration, as the starter knows what is the length
@@ -715,7 +715,7 @@ class GPTServer:
 
         Returns:
             list containing the `n_nodes` generated samples
-
+            total generation time in seconds
         """
         assert self.model_config is not None and self.model is not None
 
@@ -789,7 +789,7 @@ class GPTServer:
                     idx_cond = self.model(idx_cond)
 
                     # Build message
-                    out_msg = self._build_msg(idx_cond.to("cpu"), sample_id)
+                    out_msg = self._build_msg(idx_cond, sample_id)
                     self.send_to_next(out_msg)
                     # Sleep for 1 ms - do not overwhelm receiver
                     # time.sleep(0.001)
@@ -805,7 +805,7 @@ class GPTServer:
                 f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
             )
 
-        return [self.tok_decode(smp[0].tolist()) for smp in idx]
+        return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
 
     def _node_loop(self):
         """
@@ -849,7 +849,7 @@ class GPTServer:
                     # Forward pass
                     outs = self.model(ins)
                     # Build msg
-                    out_msg = self._build_msg(outs.to("cpu"), samp_ind)
+                    out_msg = self._build_msg(outs, samp_ind)
                     # Send to next
                     self.send_to_next(out_msg)
                     iter += 1
@@ -1032,7 +1032,13 @@ class GPTDistributed:
         )
         assert (
             len(self.complete_model) == 0
-        ), "Something went wrong when splitting model"
+        ), "Something went wrong when splitting model - leftover parameters!"
+
+        self.n_layers_tot = (
+            N_LAYERS_START
+            + N_LAYERS_FINISH
+            + self.n_intermediate * N_LAYERS_INTERM
+        )
 
         # Extract tokenizer metadata information and check it exists
         if (
@@ -1245,7 +1251,7 @@ class GPTDistributed:
             return 1
         return 0
 
-    def start(self, tokens_per_sample: int = 1000):
+    def start(self, tokens_per_sample: int = 1000) -> Tuple[List[str], float]:
         """
         Start the operation - webserver + model
 
@@ -1253,13 +1259,21 @@ class GPTDistributed:
         generated.
 
         This method calls back self.configure_nodes() and self.webserv.start()
+
+        Args:
+            tokens_per_sample: number of generated tokens per sample; the number
+                of samples is the same as the number of nodes
+
+        Returns:
+            List of produced samples
+            Total generation time in seconds
         """
         # TODO: add assertions (uninitialized values)
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        out = self.webserv.start(max_new_tokens=tokens_per_sample)
-        assert out is not None
+        # The code below assumes we will receive the correct info (not None)
+        out, time_gen = self.webserv.start(max_new_tokens=tokens_per_sample)
 
         print("-------------------------------------------------")
         print("Produced output:\n")
@@ -1271,6 +1285,8 @@ class GPTDistributed:
 
         # Once finished, send PUT to each node to terminate execution for them
         self.stop()
+
+        return out, time_gen
 
     def stop(self) -> int:
         """
