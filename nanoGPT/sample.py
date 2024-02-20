@@ -22,7 +22,7 @@ from sub.parser import parse_args
 
 script_dir = os.path.dirname(__file__)
 
-PROFILE = False
+PROFILE = True
 
 
 def main():
