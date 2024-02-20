@@ -12,9 +12,6 @@ script_dir = os.path.dirname(__file__)
 def parse_args(train: bool = True):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--batch-size", type=int, default=BATCH_SIZE, help="Batch size"
-    )
-    parser.add_argument(
         "--dataset",
         type=str,
         default=os.path.join(script_dir, "..", "data", "shakespeare"),
@@ -29,8 +26,10 @@ def parse_args(train: bool = True):
     parser.add_argument(
         "--ckpt", default=None, help="Specify checkpoint file name"
     )
-    # TODO: add args spec for non-training
     if train:
+        parser.add_argument(
+            "--batch-size", type=int, default=BATCH_SIZE, help="Batch size"
+        )
         parser.add_argument(
             "--init",
             type=str,
@@ -62,5 +61,23 @@ def parse_args(train: bool = True):
             type=str,
             default=None,
             help="Path of the file where to store the run information and generation time",
+        )
+        parser.add_argument(
+            "--n-samples",
+            type=int,
+            default=3,
+            help="Number of samples to be generated",
+        )
+        parser.add_argument(
+            "--n-tokens",
+            type=int,
+            default=1000,
+            help="Maximum number of tokens per sample to be generated",
+        )
+        parser.add_argument(
+            "--prompt",
+            type=str,
+            default="\n",
+            help="Prompt for generation - can specify a file by name calling 'FILE:<path>.txt'",
         )
     return parser.parse_args()

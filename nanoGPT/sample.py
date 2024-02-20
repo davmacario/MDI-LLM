@@ -18,8 +18,11 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import (COMPILE, DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K,
                         VERB)
 from sub.model import GPT, GPTConfig
+from sub.parser import parse_args
 
 script_dir = os.path.dirname(__file__)
+
+PROFILE = False
 
 
 def main():
@@ -27,16 +30,25 @@ def main():
     dataset = "shakespeare"
     dataset_name = os.path.splitext(dataset)[0]
     data_dir = os.path.join(script_dir, "data", dataset_name)
-    out_dir = os.path.join(data_dir, "out")
 
-    # TODO: write configurator - command line arg parser to overwrite
-    # configuration parameters
+    args = parse_args(train=False)
 
-    start = "\n"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-    num_samples = 3  # number of samples to draw
-    max_new_tokens = 1000  # number of tokens generated in each sample
+    if args.prompt.startswith("FILE:"):
+        with open(args.prompt[5:], "r") as f:
+            start = f.read()
+    else:
+        start = args.prompt
+    num_samples = args.n_samples  # number of samples to draw
+    max_new_tokens = args.n_tokens  # number of tokens generated in each sample
     seed = 1337
-    # exec(open("configurator.py").read())  # overrides from command line or config file
+
+    if args.ckpt is not None:
+        assert os.path.exists(args.ckpt)
+        ckpt_path = args.ckpt
+    else:
+        ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
+
+    VERB = args.verb
 
     # --------------------------------------------------------------------------
 
@@ -63,26 +75,22 @@ def main():
     )
 
     # model
-    if INIT_FROM == "resume":
-        # init from a model saved in a specific directory
-        ckpt_path = os.path.join(out_dir, "ckpt.pt")
-        checkpoint = torch.load(ckpt_path, map_location=DEVICE)
-        gptconf = GPTConfig(**checkpoint["model_args"])
-        model = GPT(gptconf)
-        state_dict = checkpoint["model"]
-        unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
-        for k, v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
+    # init from a model saved in a specific directory
+    checkpoint = torch.load(ckpt_path, map_location=DEVICE)
+    gptconf = GPTConfig(**checkpoint["model_args"])
+    model = GPT(gptconf)
+    state_dict = checkpoint["model"]
+    unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+    model.load_state_dict(state_dict)
     # elif INIT_FROM.startswith("gpt2"):
     #     # init from a given GPT-2 model
     #     model = GPT.from_pretrained(INIT_FROM, dict(dropout=0.0))
-    else:
-        raise ValueError(f"Unknown initialization: {INIT_FROM}")
 
-    model.eval()
     model.to(DEVICE)
+    model.eval()
     # if COMPILE:
     #     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
 
@@ -124,7 +132,7 @@ def main():
         with open(start[5:], "r", encoding="utf-8") as f:
             start = f.read()
     start_ids = encode(start)
-    # x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
+    x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
     # Run generation
     with torch.no_grad():
@@ -133,10 +141,6 @@ def main():
             print("Beginning generation")
         t_start = time.time()
         for k in range(num_samples):
-            x = torch.tensor(encode("\n"), dtype=torch.long, device=DEVICE)[
-                None, ...
-            ]
-            print(x)
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
@@ -148,12 +152,16 @@ def main():
 
 
 if __name__ == "__main__":
-    profiler = cProfile.Profile()
-    profiler.enable()
+    if PROFILE:
+        profiler = cProfile.Profile()
+        profiler.enable()
 
     main()
 
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats("tottime")
-    stats.print_stats()
-    stats.dump_stats(os.path.join(script_dir, "logs", "sample_profile.prof"))
+    if PROFILE:
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats("tottime")
+        stats.print_stats()
+        stats.dump_stats(
+            os.path.join(script_dir, "logs", "sample_profile.prof")
+        )
