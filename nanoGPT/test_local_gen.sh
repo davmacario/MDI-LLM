@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Test model on a single device and record times
 # Perform 10 runs with the same model - the "name" is the 1st command line arg
 # Example usage:
 #       ./test_local_gen.sh 7layers
