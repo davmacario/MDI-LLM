@@ -7,10 +7,10 @@
 
 if [ "$#" -eq 0 ];
 then
-    echo "Missing model type/name in args"
-else
-    for i in $(seq 1 10);
-    do
-        python3 "$(dirname $0)"/sample.py --ckpt="$(dirname $0)"/data/shakespeare/out/ckpt_"$1".pt --time-run="$(dirname $0)"/logs/run_times_single_"$1".csv --verb
-    done
+    echo "ERROR: missing model type/name in args"
+    exit
 fi
+for i in $(seq 1 10);
+do
+    python3 "$(dirname $0)"/sample.py --ckpt="$(dirname $0)"/data/shakespeare/out/ckpt_"$1".pt --time-run="$(dirname $0)"/logs/run_times_single_"$1".csv --verb
+done
