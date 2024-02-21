@@ -76,6 +76,23 @@ TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, 
 N_LAYERS_START = 1  # Number of transformer layers in the starter node
 N_LAYERS_INTERM = 3  # Number of transformer layers in each intermediate node
 N_LAYERS_FINISH = 3  # Number of transformer layers in the finisher node
+# Adaptive layer number - first key is the number of nodes, second is the number
+# of layers in the model
+N_LAYERS_NODES = {
+    2: {
+        5: {"N_LAYERS_START": 2, "N_LAYERS_FINISH": 3},
+        7: {"N_LAYERS_START": 3, "N_LAYERS_FINISH": 4},
+        9: {"N_LAYERS_START": 4, "N_LAYERS_FINISH": 5},
+        12: {"N_LAYERS_START": 5, "N_LAYERS_FINISH": 7},
+    },
+    3: {
+        5: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 2, "N_LAYERS_FINISH": 2},
+        7: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 3, "N_LAYERS_FINISH": 3},
+        9: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 4, "N_LAYERS_FINISH": 4},
+        12: {"N_LAYERS_START": 2, "N_LAYERS_INTERM": 5, "N_LAYERS_FINISH": 5},
+    },
+}
+
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}

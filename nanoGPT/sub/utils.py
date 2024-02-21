@@ -8,8 +8,7 @@ from numpy.typing import NDArray
 from torch import nn
 
 from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
-                     N_LAYERS_FINISH, N_LAYERS_INTERM, N_LAYERS_START, VERB,
-                     WARMUP_ITERS)
+                     N_LAYERS_NODES, VERB, WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
 
@@ -158,16 +157,23 @@ def split_parameters(
         if k.startswith(f"{base_name_transformer}.{layer_name}")
     ]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+    n_layers_model = len(layers_unique)
     if VERB:
         print(
-            f"Number of transformer layers found in the model: {len(layers_unique)}"
+            f"Number of transformer layers found in the model: {n_layers_model}"
         )
-    n_lay_req = (
-        N_LAYERS_START + (n_nodes - 2) * N_LAYERS_INTERM + N_LAYERS_FINISH
-    )
-    assert (
-        len(layers_unique) == n_lay_req
-    ), f"Required {n_lay_req} layers, found {len(layers_unique)}"
+
+    n_layers_start = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_START"]
+    if n_nodes > 2:
+        n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model][
+            "N_LAYERS_INTERM"
+        ]
+    n_layers_finish = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_FINISH"]
+    if VERB:
+        print(f"Number of layers - starter node: {n_layers_start}")
+        if n_nodes > 2:
+            print(f"Number of layers - intermediate node: {n_layers_interm}")
+        print(f"Number of lauers - finisher node: {n_layers_finish}")
 
     out_chunks = {}
 
@@ -190,7 +196,7 @@ def split_parameters(
         ] = model_params.pop(f"{base_name_transformer}.{pos_emb}.bias")
 
     # Starter may have transformer layers
-    valid_layer_ind = list(range(0, N_LAYERS_START))
+    valid_layer_ind = list(range(0, n_layers_start))
     relevant_keys = [
         k
         for k in list(model_params.keys())
@@ -219,8 +225,8 @@ def split_parameters(
         #       transformer.layer.<layer_ind>.[...]
         # so we need to select the correct layer indices
         valid_layer_ind = [
-            N_LAYERS_START + n
-            for n in list(range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM))
+            n_layers_start + n
+            for n in list(range((i - 1) * n_layers_interm, i * n_layers_interm))
         ]
         relevant_keys = [
             k
@@ -249,11 +255,11 @@ def split_parameters(
 
     # Layers:
     valid_layer_ind = list(
-        range((n_nodes - 2) * N_LAYERS_FINISH, (n_nodes - 1) * N_LAYERS_FINISH)
+        range((n_nodes - 2) * n_layers_finish, (n_nodes - 1) * n_layers_finish)
     )
     valid_layer_ind = [
-        N_LAYERS_START + n_intermediate_nodes * N_LAYERS_INTERM + k
-        for k in range(N_LAYERS_FINISH)
+        n_layers_start + n_intermediate_nodes * n_layers_interm + k
+        for k in range(n_layers_finish)
     ]
     relevant_keys = [
         k
