@@ -10,15 +10,16 @@ import pickle
 import pstats
 import time
 from contextlib import nullcontext
+from datetime import datetime
 
 import tiktoken
 import torch
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import (COMPILE, DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K,
-                        VERB)
+from sub.config import DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
+from sub.utils import count_model_layers
 
 script_dir = os.path.dirname(__file__)
 
@@ -31,6 +32,7 @@ def main():
     dataset_name = os.path.splitext(dataset)[0]
     data_dir = os.path.join(script_dir, "data", dataset_name)
 
+    # Parse command line args
     args = parse_args(train=False)
 
     if args.prompt.startswith("FILE:"):
@@ -51,6 +53,10 @@ def main():
     VERB = args.verb
     global PROFILE
     PROFILE = args.debug
+
+    out_stats_file = args.time_run
+    if out_stats_file is not None:
+        assert os.path.exists(os.path.dirname(out_stats_file))
 
     # --------------------------------------------------------------------------
 
@@ -82,6 +88,7 @@ def main():
     gptconf = GPTConfig(**checkpoint["model_args"])
     model = GPT(gptconf)
     state_dict = checkpoint["model"]
+    n_model_layers = count_model_layers(state_dict)
     unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
     for k, v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -150,21 +157,26 @@ def main():
             print(decode(y[0].tolist()))
             print("---------------")
 
+    tot_gen_time = time.time() - t_start
     if VERB:
-        print(f"Total generation time: {time.time() - t_start} s")
+        print(f"Total generation time: {tot_gen_time} s")
+
+    if out_stats_file is not None:
+        with open(out_stats_file, "a") as f:
+            curr_ts = datetime.now()
+            f.write(
+                f"[{curr_ts.strftime('%Y-%m-%d %H:%M:%S')}] - {str(len(num_samples)).rjust(3)} samples, {n_model_layers} layers, context size: {gptconf.block_size}, total generation time: {tot_gen_time} s\n"
+            )
 
 
 if __name__ == "__main__":
-    if PROFILE:
-        profiler = cProfile.Profile()
-        profiler.enable()
+    profiler = cProfile.Profile()
+    profiler.enable()
 
     main()
 
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats("tottime")
     if PROFILE:
-        profiler.disable()
-        stats = pstats.Stats(profiler).sort_stats("tottime")
         stats.print_stats()
-        stats.dump_stats(
-            os.path.join(script_dir, "logs", "sample_profile.prof")
-        )
+    stats.dump_stats(os.path.join(script_dir, "logs", "sample_profile.prof"))

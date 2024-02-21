@@ -56,7 +56,8 @@ if __name__ == "__main__":
         log_wp.setLevel(logging.INFO)
 
     out_stats_file = args.time_run
-    assert os.path.exists(os.path.dirname(out_stats_file))
+    if out_stats_file is not None:
+        assert os.path.exists(os.path.dirname(out_stats_file))
 
     gpt_distr = GPTDistributed(ckpt_path)
 
