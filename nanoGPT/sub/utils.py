@@ -320,3 +320,17 @@ def deserialize_params(params: Dict) -> Mapping[str, Any]:
             deserialized_params[key] = value
 
     return deserialized_params
+
+
+def count_model_layers(model_params: Dict[str, Any]) -> int:
+    base_name_transformer = "transformer"
+    layer_name = "layers"
+
+    # Count the number of detected transformer layers
+    layer_keys = [
+        k
+        for k in model_params.keys()
+        if k.startswith(f"{base_name_transformer}.{layer_name}")
+    ]
+    layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+    return len(layers_unique)
