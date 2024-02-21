@@ -70,11 +70,29 @@ if __name__ == "__main__":
     else:
         # Print the stats to file (we are sure directory exists)
         if out_stats_file is not None:
+            # Output csv
+            existed = True
+            if not os.path.exists(out_stats_file):
+                existed = False
             with open(out_stats_file, "a") as f:
                 # Format: datetime - number of samples - model info - total time
                 curr_ts = datetime.now()
+                if not existed:
+                    # header
+                    f.write(
+                        ",".join(
+                            [
+                                "timestamp",
+                                "n_samples",
+                                "n_layers",
+                                "context_size",
+                                "gen_time",
+                            ]
+                        )
+                        + "\n"
+                    )
                 f.write(
-                    f"[{curr_ts.strftime('%Y-%m-%d %H:%M:%S')}] - {str(len(gen_samples)).rjust(3)} samples, {gpt_distr.n_layers_tot} layers, context size: {gpt_distr.model_config.block_size}, total generation time: {gen_time} s\n"
+                    f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{len(gen_samples)},{gpt_distr.n_layers_tot},{gpt_distr.model_config.block_size},{gen_time}\n"
                 )
                 f.close()
                 print("Stats written to ", out_stats_file)

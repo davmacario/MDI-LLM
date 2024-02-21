@@ -162,10 +162,28 @@ def main():
         print(f"Total generation time: {tot_gen_time} s")
 
     if out_stats_file is not None:
+        # Output csv
+        existed = True
+        if not os.path.exists(out_stats_file):
+            existed = False
         with open(out_stats_file, "a") as f:
             curr_ts = datetime.now()
+            if not existed:
+                # header
+                f.write(
+                    ",".join(
+                        [
+                            "timestamp",
+                            "n_samples",
+                            "n_layers",
+                            "context_size",
+                            "gen_time",
+                        ]
+                    )
+                    + "\n"
+                )
             f.write(
-                f"[{curr_ts.strftime('%Y-%m-%d %H:%M:%S')}] - {str(len(num_samples)).rjust(3)} samples, {n_model_layers} layers, context size: {gptconf.block_size}, total generation time: {tot_gen_time} s\n"
+                f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{num_samples},{n_model_layers},{gptconf.block_size},{tot_gen_time}\n"
             )
 
 
