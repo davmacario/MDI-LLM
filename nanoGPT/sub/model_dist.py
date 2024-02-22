@@ -1031,8 +1031,6 @@ class GPTDistributed:
             len(self.complete_model) == 0
         ), "Something went wrong when splitting model - leftover parameters!"
 
-        print(self.layers_info)
-
         self.n_layers_tot = (
             self.layers_info["N_LAYERS_START"]
             + self.layers_info["N_LAYERS_FINISH"]
