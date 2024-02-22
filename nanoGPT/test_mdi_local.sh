@@ -13,7 +13,7 @@ fi
 
 if [ ! -f "$(dirname $0)"/data/shakespeare/out/ckpt_"$1".pt ];
 then
-    echo "ERROR: $(dirname ${0})/data/shakespeare/out/ckpt_${1}.pt} does not exist"
+    echo "ERROR: $(dirname ${0})/data/shakespeare/out/ckpt_${1}.pt does not exist"
     exit 2
 fi
 
