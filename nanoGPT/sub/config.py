@@ -73,11 +73,8 @@ TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 
 TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 
 # ---- MDI settings ------------------------------
-N_LAYERS_START = 1  # Number of transformer layers in the starter node
-N_LAYERS_INTERM = 3  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 3  # Number of transformer layers in the finisher node
-# Adaptive layer number - first key is the number of nodes, second is the number
-# of layers in the model
+# Adaptive layer number - first key is the number of nodes, second is the node
+# type
 N_LAYERS_NODES = {
     2: {
         5: {"N_LAYERS_START": 2, "N_LAYERS_FINISH": 3},

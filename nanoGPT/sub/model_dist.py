@@ -17,9 +17,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import (DEVICE, HEADERLENGTH, MSGLENGTH, N_LAYERS_FINISH,
-                        N_LAYERS_INTERM, N_LAYERS_START, TEMPERATURE, TOP_K,
-                        VERB)
+from sub.config import DEVICE, HEADERLENGTH, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
 from sub.utils import (deserialize_params, loading_bar, serialize_params,
@@ -68,7 +66,7 @@ class StarterNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -82,7 +80,7 @@ class StarterNode(nn.Module):
                 ),
                 drop=nn.Dropout(config.dropout),
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_START)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 ),
             )
         )
@@ -131,7 +129,7 @@ class IntermediateNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -141,7 +139,7 @@ class IntermediateNode(nn.Module):
         self.intermediate_model = nn.ModuleDict(
             dict(
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_INTERM)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 )
             )
         )
@@ -169,7 +167,7 @@ class FinisherNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -178,7 +176,7 @@ class FinisherNode(nn.Module):
         self.finisher_model = nn.ModuleDict(
             dict(
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_FINISH)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 ),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size),
@@ -292,7 +290,7 @@ class GPTServer:
             self.model_config = starter_config["model_config"]
             self.tok_meta_path = str(starter_config["tok_metadata_path"])
 
-            self.init_model(set_eval=True)
+            self.init_model(starter_config["n_layers"], set_eval=True)
 
         else:
             # Configuration of "secondary" (intermediate or finisher) node
@@ -324,7 +322,7 @@ class GPTServer:
 
     # ----- Public ------------------------------------------------------------
 
-    def init_model(self, set_eval: bool = True):
+    def init_model(self, n_transf_layers: int, set_eval: bool = True):
         """
         Initialize the node's model chunk, passing the parameters.
 
@@ -341,11 +339,11 @@ class GPTServer:
         assert self.model is None, "The model was already initialized!"
 
         if self.node_type == "starter":
-            self.model = StarterNode(self.model_config)
+            self.model = StarterNode(self.model_config, n_transf_layers)
         elif self.node_type == "intermediate":
-            self.model = IntermediateNode(self.model_config)
+            self.model = IntermediateNode(self.model_config, n_transf_layers)
         elif self.node_type == "finisher":
-            self.model = FinisherNode(self.model_config)
+            self.model = FinisherNode(self.model_config, n_transf_layers)
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
@@ -905,7 +903,7 @@ class GPTServer:
                 self.model_params = deserialize_params(init_msg["params"])
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
-                self.init_model()
+                self.init_model(init_msg["n_layers"])
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 logger_wp.info("Received initialization information!")
@@ -959,6 +957,7 @@ class GPTDistributed:
         "n_nodes": 0,
         "prev_node": {},  # From .json
         "next_node": {},  # From .json
+        "n_layers": 0,  # Number of transformer layers
     }
 
     def __init__(
@@ -1025,17 +1024,19 @@ class GPTDistributed:
 
         # Split model - NOTE: the function removes the elements from
         # self.complete_model, saving memory (no duplicate values)
-        self.model_chunks = split_parameters(
+        self.model_chunks, self.layers_info = split_parameters(
             model_params=self.complete_model, n_nodes=self.n_total_nodes
         )
         assert (
             len(self.complete_model) == 0
         ), "Something went wrong when splitting model - leftover parameters!"
 
+        print(self.layers_info)
+
         self.n_layers_tot = (
-            N_LAYERS_START
-            + N_LAYERS_FINISH
-            + self.n_intermediate * N_LAYERS_INTERM
+            self.layers_info["N_LAYERS_START"]
+            + self.layers_info["N_LAYERS_FINISH"]
+            + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
         )
 
         # Extract tokenizer metadata information and check it exists
@@ -1068,6 +1069,7 @@ class GPTDistributed:
         starter_config["model_config"] = self.model_config
         starter_config["n_nodes"] = self.n_total_nodes
         starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
+        starter_config["n_layers"] = self.layers_info["N_LAYERS_START"]
         if self.n_intermediate:
             starter_config["next_node"] = self.nodes_info["nodes"][
                 "intermediate"
@@ -1129,6 +1131,8 @@ class GPTDistributed:
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
 
+            curr_msg["n_layers"] = self.layers_info["N_LAYERS_INTERM"]
+
             # Update next and prev for next iteration
             prev = int_node
             if i == n_interm - 1:  # Last iter in loop
@@ -1164,6 +1168,8 @@ class GPTDistributed:
 
         curr_msg["prev_node"] = prev
         curr_msg["next_node"] = next
+
+        curr_msg["n_layers"] = self.layers_info["N_LAYERS_FINISH"]
 
         target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
         target_port = self.nodes_info["nodes"]["finisher"]["communication"][

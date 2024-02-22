@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import math
-from typing import Any, Dict, Mapping, Union
+from typing import Any, Dict, Mapping, Tuple, Union
 
 import torch
 from numpy.typing import NDArray
@@ -115,7 +115,7 @@ def remove_prefix(text: str, prefix: str) -> str:
 
 def split_parameters(
     model_params: Dict[str, Any], n_nodes: int
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """
     Split the model parameters (contained in a state dict) among the different
     available nodes.
@@ -163,17 +163,23 @@ def split_parameters(
             f"Number of transformer layers found in the model: {n_layers_model}"
         )
 
+    layers_info = {}
     n_layers_start = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_START"]
+    layers_info["N_LAYERS_START"] = n_layers_start
     if n_nodes > 2:
         n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model][
             "N_LAYERS_INTERM"
         ]
+        layers_info["N_LAYERS_INTERM"] = n_layers_interm
+
     n_layers_finish = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_FINISH"]
+    layers_info["N_LAYERS_FINISH"] = n_layers_finish
+
     if VERB:
         print(f"Number of layers - starter node: {n_layers_start}")
         if n_nodes > 2:
             print(f"Number of layers - intermediate node: {n_layers_interm}")
-        print(f"Number of lauers - finisher node: {n_layers_finish}")
+        print(f"Number of layers - finisher node: {n_layers_finish}")
 
     out_chunks = {}
 
@@ -295,7 +301,7 @@ def split_parameters(
             f"finisher_model.lm_head.bias"
         ] = model_params.pop(f"{output_layer}.bias")
 
-    return out_chunks
+    return out_chunks, layers_info
 
 
 def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
