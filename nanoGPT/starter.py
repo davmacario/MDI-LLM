@@ -55,6 +55,8 @@ if __name__ == "__main__":
     else:
         log_wp.setLevel(logging.INFO)
 
+    VERB = args.verb
+
     out_stats_file = args.time_run
     if out_stats_file is not None:
         assert os.path.exists(os.path.dirname(out_stats_file))
