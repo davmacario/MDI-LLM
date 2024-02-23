@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test model on a single device and record times
+# Test the distributed model on a single device and record times
 # Perform a number of runs with the same model - the "name" is the 1st command
 # line arg and the number of iterations is the 2nd one
 # Example usage:
