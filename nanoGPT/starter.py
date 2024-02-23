@@ -7,6 +7,7 @@ from datetime import datetime
 import cherrypy as cp
 import torch
 
+from sub.config import PLOTS, VERB
 from sub.model_dist import GPTDistributed
 from sub.parser import parse_args
 
@@ -56,12 +57,15 @@ if __name__ == "__main__":
         log_wp.setLevel(logging.INFO)
 
     VERB = args.verb
+    PLOTS = args.plots
+
+    setup = {"verb": VERB, "plots": PLOTS}
 
     out_stats_file = args.time_run
     if out_stats_file is not None:
         assert os.path.exists(os.path.dirname(out_stats_file))
 
-    gpt_distr = GPTDistributed(ckpt_path)
+    gpt_distr = GPTDistributed(ckpt_path, **setup)
 
     # Operation
     try:

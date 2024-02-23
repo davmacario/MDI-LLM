@@ -4,7 +4,7 @@ import argparse
 import os
 
 from .config import (BATCH_SIZE, CKPT_INTERVAL, INIT_FROM, LOG_INTERVAL,
-                     MAX_ITERS)
+                     MAX_ITERS, PLOTS)
 
 script_dir = os.path.dirname(__file__)
 
@@ -82,5 +82,11 @@ def parse_args(train: bool = True):
             type=str,
             default="\n",
             help="Prompt for generation - can specify a file by name calling 'FILE:<path>.txt'",
+        )
+        parser.add_argument(
+            "--plots",
+            default=PLOTS,
+            action="store_true",
+            help="Produce plots",
         )
     return parser.parse_args()

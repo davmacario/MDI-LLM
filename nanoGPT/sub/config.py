@@ -111,3 +111,4 @@ BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 # ---- Runtime configuration ---------------------
 VERB = True
 DEBUG = True
+PLOTS = True

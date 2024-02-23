@@ -17,11 +17,11 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import DEVICE, HEADERLENGTH, TEMPERATURE, TOP_K, VERB
+from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import (deserialize_params, loading_bar, serialize_params,
-                       split_parameters)
+from sub.utils import (deserialize_params, loading_bar, plot_tokens_per_time,
+                       serialize_params, split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -59,6 +59,8 @@ Functioning:
 script_dir = os.path.dirname(__file__)
 logger_wp = logging.getLogger("model_dist")
 logger_wp.setLevel(logging.NOTSET)
+
+MODEL_TYPE = ""
 
 
 class StarterNode(nn.Module):
@@ -234,6 +236,9 @@ class GPTServer:
     # Some model configs:
     top_k = TOP_K
     temperature = TEMPERATURE
+
+    # Stats - n. tokens/time (tuples)
+    tok_time = []
 
     def __init__(
         self,
@@ -732,6 +737,8 @@ class GPTServer:
 
         start_time = time.time()
         count_wait = 0  # Count the number of times the loop had to wait
+        if PLOTS:
+            self.tok_time.append((0, 0))
         with torch.no_grad():
             # with CTX:  # FIXME
             total_iters = max_new_tokens * self.n_nodes
@@ -741,6 +748,8 @@ class GPTServer:
                     f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
                     end="\r",
                 )
+                if PLOTS:
+                    self.tok_time.append((k, time.time() - start_time))
                 sample_id = k % self.n_nodes  # Which of the n_nodes samples
 
                 if k >= self.n_nodes:
@@ -794,6 +803,15 @@ class GPTServer:
                     # time.sleep(0.001)
 
         tot_time = time.time() - start_time
+        if PLOTS:
+            self.tok_time.append((total_iters, tot_time))
+            plot_tokens_per_time(
+                self.tok_time,
+                out_path=os.path.join(
+                    script_dir, "..", "img", f"tokens_time_mdi_{MODEL_TYPE}.png"
+                ),
+            )
+
         # Send stop message to the next
         self.send_to_next(self.stop_msg)
         logger_wp.info("Generation completed")
@@ -964,6 +982,7 @@ class GPTDistributed:
         self,
         ckpt_path: str,
         nodes_info_path: Union[str, None] = None,
+        **setup,
     ):
         """
         Instantiate a GPTDistributed object to perform model-distributed
@@ -984,6 +1003,14 @@ class GPTDistributed:
                 "settings_distr",
                 "configuration.json",
             )
+
+        # Override global constants
+        if "verb" in setup:
+            global VERB
+            VERB = bool(setup["verb"])
+        if "plots" in setup:
+            global PLOTS
+            PLOTS = bool(setup["plots"])
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
@@ -1036,6 +1063,9 @@ class GPTDistributed:
             + self.layers_info["N_LAYERS_FINISH"]
             + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
         )
+
+        global MODEL_TYPE
+        MODEL_TYPE = f"{self.n_layers_tot}layers"
 
         # Extract tokenizer metadata information and check it exists
         if (

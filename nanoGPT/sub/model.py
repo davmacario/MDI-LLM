@@ -4,14 +4,14 @@ import inspect
 import os
 import time
 from dataclasses import dataclass
-from typing import Union
+from typing import List, Tuple, Union
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 from .config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
-                     N_HEADS, N_LAYER)
+                     N_HEADS, N_LAYER, PLOTS)
 
 
 class LayerNorm(nn.Module):
@@ -212,14 +212,19 @@ class Block(nn.Module):
 class GPT(nn.Module):
     """GPT implementation"""
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, **setup):
         """
         Create GPT object.
 
         Args:
             config: GPTConfig object with all the configuration parameters
+            setup: dict containing overrides for global constants
         """
         assert config.vocab_size is not None
+
+        if "plots" in setup:
+            global PLOTS
+            PLOTS = setup["plots"]
 
         super().__init__()
         self.config: GPTConfig = config
@@ -545,7 +550,7 @@ class GPT(nn.Module):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: Union[int, None] = None,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, List]:
         """
         Generate new tokens using GPT, provided the input sequence of integers
         "idx".
@@ -562,7 +567,12 @@ class GPT(nn.Module):
         """
         from .utils import loading_bar
 
+        t_start = time.time()
+        tok_time = []
+
         for i in range(max_new_tokens):
+            # TODO: add plots
+            tok_time.append((i, time.time() - t_start))
             print(
                 f"Generating {loading_bar(i, max_new_tokens, 30)} {i}/{max_new_tokens}",
                 end="\r",
@@ -588,5 +598,7 @@ class GPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)  # B x 1
             # Append sampled index to idx to generate next sample
             idx = torch.cat((idx, idx_next), dim=1)  # B x (T+1)
+        tot_gen_time = time.time() - t_start
+        tok_time.append((max_new_tokens, tot_gen_time))
         print("Generation completed!                                          ")
-        return idx
+        return (idx, tok_time)

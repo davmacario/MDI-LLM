@@ -19,7 +19,7 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
-from sub.utils import count_model_layers
+from sub.utils import count_model_layers, plot_tokens_per_time
 
 script_dir = os.path.dirname(__file__)
 
@@ -50,9 +50,13 @@ def main():
     else:
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
+    model_type = os.path.basename(ckpt_path).split(".")[0][4:]
+
     VERB = args.verb
     global PROFILE
     PROFILE = args.debug
+
+    PLOTS = args.plots
 
     out_stats_file = args.time_run
     if out_stats_file is not None:
@@ -145,21 +149,41 @@ def main():
     x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
     # Run generation
+    tok_time_all = []
     with torch.no_grad():
         # with ctx:
         if VERB:
             print("Beginning generation")
         t_start = time.time()
         for k in range(num_samples):
-            y = model.generate(
+            t_start_sample = time.time()
+            y, tok_time = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
+            if PLOTS:
+                tok_time_all.append(
+                    [
+                        (
+                            x[0] + k * max_new_tokens,
+                            x[1] + t_start_sample - t_start,
+                        )
+                        for x in tok_time
+                    ]
+                )
             print(decode(y[0].tolist()))
             print("---------------")
 
     tot_gen_time = time.time() - t_start
     if VERB:
         print(f"Total generation time: {tot_gen_time} s")
+
+    if PLOTS:
+        plot_tokens_per_time(
+            tok_time_all,
+            out_path=os.path.join(
+                script_dir, "img", f"tokens_time_standalone_{model_type}.png"
+            ),
+        )
 
     if out_stats_file is not None:
         # Output csv
