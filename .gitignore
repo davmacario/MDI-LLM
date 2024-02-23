@@ -217,3 +217,5 @@ meta.pkl
 # Temporary folders
 tmp/
 logs/
+# Images folder
+img/
