@@ -805,6 +805,22 @@ class GPTServer:
         tot_time = time.time() - start_time
         if PLOTS:
             self.tok_time.append((total_iters, tot_time))
+            # Store plotted points as txt file
+            points_file_path = os.path.join(
+                script_dir,
+                "..",
+                "logs",
+                "tok-per-time",
+                f"tokens_time_samples_mdi_{MODEL_TYPE}.csv",
+            )
+            if not os.path.exists(os.path.dirname(points_file_path)):
+                os.mkdir(os.path.dirname(points_file_path))
+            with open(points_file_path, "w") as f:
+                times = [x[1] for x in self.tok_time]
+                n_samples = [x[0] for x in self.tok_time]
+                for i in range(len(times)):
+                    f.write(f"{times[i]},{n_samples[i]}\n")
+
             plot_tokens_per_time(
                 self.tok_time,
                 out_path=os.path.join(
