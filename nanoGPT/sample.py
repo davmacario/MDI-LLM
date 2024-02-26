@@ -95,6 +95,8 @@ def main():
     model = GPT(gptconf)
     state_dict = checkpoint["model"]
     n_model_layers = count_model_layers(state_dict)
+    if VERB:
+        print(f"Using model with {n_model_layers} layers")
     unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
     for k, v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
