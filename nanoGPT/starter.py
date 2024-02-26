@@ -13,14 +13,8 @@ from sub.parser import parse_args
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
-log_file = os.path.join(script_dir, "logs", "logs_starter.log")
-if not os.path.exists(os.path.dirname(log_file)):
-    os.mkdir(os.path.dirname(log_file))
 log_wp = logging.getLogger("model_dist")
-fhdlr = logging.FileHandler(log_file, mode="w")
 formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
-fhdlr.setFormatter(formatter)
-log_wp.addHandler(fhdlr)
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
@@ -52,9 +46,15 @@ if __name__ == "__main__":
     network_conf_path = os.path.join(settings_path, "configuration.json")
 
     if args.debug:
+        log_file = os.path.join(script_dir, "logs", "logs_starter.log")
+        if not os.path.exists(os.path.dirname(log_file)):
+            os.mkdir(os.path.dirname(log_file))
+        fhdlr = logging.FileHandler(log_file, mode="w")
+        fhdlr.setFormatter(formatter)
         log_wp.setLevel(logging.DEBUG)
+        log_wp.addHandler(fhdlr)
     else:
-        log_wp.setLevel(logging.INFO)
+        log_wp.setLevel(logging.WARN)
 
     VERB = args.verb
     PLOTS = args.plots
