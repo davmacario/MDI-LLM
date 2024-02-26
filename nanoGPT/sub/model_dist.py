@@ -58,7 +58,7 @@ Functioning:
 # Logging
 script_dir = os.path.dirname(__file__)
 logger_wp = logging.getLogger("model_dist")
-logger_wp.setLevel(logging.NOTSET)
+logger_wp.setLevel(logging.ERROR)
 
 MODEL_TYPE = ""
 

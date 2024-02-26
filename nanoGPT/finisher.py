@@ -12,8 +12,6 @@ from sub.parser import parse_args
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
-log_wp = logging.getLogger("model_dist")
-formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
 
 if __name__ == "__main__":
     torch.manual_seed(1337)
@@ -25,14 +23,16 @@ if __name__ == "__main__":
     args = parse_args(train=False)
     if args.debug:
         log_file = os.path.join(script_dir, "logs", "logs_finisher.log")
+        log_wp = logging.getLogger("model_dist")
+        formatter = logging.Formatter(
+            "[%(asctime)s] → %(levelname)s: %(message)s"
+        )
         if not os.path.exists(os.path.dirname(log_file)):
             os.mkdir(os.path.dirname(log_file))
         fhdlr = logging.FileHandler(log_file, mode="w")
         log_wp.setLevel(logging.DEBUG)
         fhdlr.setFormatter(formatter)
         log_wp.addHandler(fhdlr)
-    else:
-        log_wp.setLevel(logging.INFO)
 
     settings_path = os.path.join(script_dir, "settings_distr")
     network_conf_path = os.path.join(settings_path, "configuration.json")
