@@ -40,6 +40,8 @@ def main():
             start = f.read()
     else:
         start = args.prompt
+
+    # Default values: 3 samples, 1000 tokens each
     num_samples = args.n_samples  # number of samples to draw
     max_new_tokens = args.n_tokens  # number of tokens generated in each sample
     seed = 1337
@@ -181,7 +183,7 @@ def main():
         plot_tokens_per_time(
             tok_time_all,
             out_path=os.path.join(
-                script_dir, "img", f"tokens_time_standalone_{model_type}.png"
+                script_dir, "img", f"tokens_time_standalone{model_type}.png"
             ),
         )
 

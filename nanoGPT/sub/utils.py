@@ -372,7 +372,7 @@ def plot_tokens_per_time(
     """
     assert len(tok_time) >= 1
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(12, 8))
     if isinstance(tok_time[0], Tuple):
         time = [x[1] for x in tok_time]
         n_samples = [x[0] for x in tok_time]
