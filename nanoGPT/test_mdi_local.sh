@@ -31,3 +31,7 @@ do
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
         --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}".csv
 done
+
+kill $(pgrep -f 'starter.py')
+kill $(pgrep -f 'intermediate.py')
+kill $(pgrep -f 'finisher.py')

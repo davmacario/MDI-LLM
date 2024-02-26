@@ -173,6 +173,9 @@ def split_parameters(
             "N_LAYERS_INTERM"
         ]
         layers_info["N_LAYERS_INTERM"] = n_layers_interm
+    else:
+        n_layers_interm = 0
+        layers_info["N_LAYERS_INTERM"] = n_layers_interm
 
     n_layers_finish = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_FINISH"]
     layers_info["N_LAYERS_FINISH"] = n_layers_finish
