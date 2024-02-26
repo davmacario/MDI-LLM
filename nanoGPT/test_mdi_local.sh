@@ -22,6 +22,16 @@ then
 fi
 
 n_iter=${2:-10}
+# Differentiate based on the number of nodes (for now: 2 or 3)
+n_nodes=${3:3}
+if [ "${n_nodes}" -eq 3 ];
+then
+    config_file="$(dirname "${0}")"/settings_distr/configuration.json
+elif [ "${n_nodes}" -eq 2 ];
+then
+    config_file="$(dirname "${0}")"/settings_distr/configuration_2.json
+fi
+
 for i in $(seq 1 "${n_iter}");
 do
     echo "Launching run number ${i}"
@@ -29,7 +39,8 @@ do
     python3 "$(dirname "${0}")"/intermediate.py &
     python3 "$(dirname "${0}")"/starter.py \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
-        --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}".csv
+        --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}".csv \
+        --nodes-config="${config_file}"
 done
 
 kill $(pgrep -f 'starter.py')
