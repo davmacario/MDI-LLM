@@ -23,7 +23,7 @@ fi
 
 n_iter=${2:-10}
 # Differentiate based on the number of nodes (for now: 2 or 3)
-n_nodes=${3:3}
+n_nodes=${3:-3}
 if [ "${n_nodes}" -eq 3 ];
 then
     config_file="$(dirname "${0}")"/settings_distr/configuration.json
