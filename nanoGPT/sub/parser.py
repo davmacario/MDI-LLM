@@ -84,6 +84,14 @@ def parse_args(train: bool = True):
             help="Prompt for generation - can specify a file by name calling 'FILE:<path>.txt'",
         )
         parser.add_argument(
+            "--nodes-config",
+            type=str,
+            default=os.path.join(
+                script_dir, "..", "settings_distr", "configuration.json"
+            ),
+            help="Path to the JSON configuration file for the nodes",
+        )
+        parser.add_argument(
             "--plots",
             default=PLOTS,
             action="store_true",

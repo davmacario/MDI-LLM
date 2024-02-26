@@ -65,7 +65,10 @@ if __name__ == "__main__":
     if out_stats_file is not None:
         assert os.path.exists(os.path.dirname(out_stats_file))
 
-    gpt_distr = GPTDistributed(ckpt_path, **setup)
+    # Init. distributed model, config file from parser
+    gpt_distr = GPTDistributed(
+        ckpt_path, nodes_info_path=args.nodes_config, **setup
+    )
 
     # Operation
     try:
