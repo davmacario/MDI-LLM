@@ -44,7 +44,8 @@ do
     python3 "$(dirname "${0}")"/starter.py \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
         --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}"_"${n_nodes}"samples.csv \
-        --nodes-config="${config_file}"
+        --nodes-config="${config_file}" \
+        --plots
 done
 
 kill $(pgrep -f 'starter.py')

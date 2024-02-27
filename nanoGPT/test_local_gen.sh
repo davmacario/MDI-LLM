@@ -32,5 +32,5 @@ do
         --n-samples="${n_samples}" \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
         --time-run="$(dirname "${0}")"/logs/run_times_single_"${1}"_"${n_samples}"samples.csv \
-        --verb
+        --plots
 done
