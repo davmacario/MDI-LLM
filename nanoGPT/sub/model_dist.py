@@ -1081,7 +1081,7 @@ class GPTDistributed:
         )
 
         global MODEL_TYPE
-        MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ckpt"
+        MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
 
         # Extract tokenizer metadata information and check it exists
         if (
