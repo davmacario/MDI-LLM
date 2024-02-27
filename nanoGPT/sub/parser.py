@@ -9,7 +9,7 @@ from .config import (BATCH_SIZE, CKPT_INTERVAL, INIT_FROM, LOG_INTERVAL,
 script_dir = os.path.dirname(__file__)
 
 
-def parse_args(train: bool = True):
+def parse_args(train: bool = True, mdi: bool = False):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
@@ -66,12 +66,6 @@ def parse_args(train: bool = True):
             help="Path of the file where to store the run information and generation time",
         )
         parser.add_argument(
-            "--n-samples",
-            type=int,
-            default=3,
-            help="Number of samples to be generated",
-        )
-        parser.add_argument(
             "--n-tokens",
             type=int,
             default=1000,
@@ -84,17 +78,25 @@ def parse_args(train: bool = True):
             help="Prompt for generation - can specify a file by name calling 'FILE:<path>.txt'",
         )
         parser.add_argument(
-            "--nodes-config",
-            type=str,
-            default=os.path.join(
-                script_dir, "..", "settings_distr", "configuration.json"
-            ),
-            help="Path to the JSON configuration file for the nodes",
-        )
-        parser.add_argument(
             "--plots",
             default=PLOTS,
             action="store_true",
             help="Produce plots",
         )
+        if not mdi:
+            parser.add_argument(
+                "--n-samples",
+                type=int,
+                default=3,
+                help="Number of samples to be generated",
+            )
+        else:
+            parser.add_argument(
+                "--nodes-config",
+                type=str,
+                default=os.path.join(
+                    script_dir, "..", "settings_distr", "configuration.json"
+                ),
+                help="Path to the JSON configuration file for the nodes",
+            )
     return parser.parse_args()

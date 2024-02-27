@@ -182,6 +182,23 @@ def main():
         print(f"Total generation time: {tot_gen_time} s")
 
     if PLOTS:
+        # Store points on csv file
+        points_file_path = os.path.join(
+            script_dir,
+            "logs",
+            "tok-per-time",
+            f"tokens_time_samples_standalone_{model_type}.csv",
+        )
+        if not os.path.exists(os.path.dirname(points_file_path)):
+            os.mkdir(os.path.dirname(points_file_path))
+        with open(points_file_path, "w") as f:
+            for tok_t_lst in tok_time_all:
+                times = [x[1] for x in tok_t_lst]
+                n_samples = [x[0] for x in tok_t_lst]
+                for i in range(len(times)):
+                    f.write(f"{times[i]},{n_samples[i]}\n")
+
+        # Plot tokens/time
         plot_tokens_per_time(
             tok_time_all,
             out_path=os.path.join(

@@ -23,7 +23,7 @@ if __name__ == "__main__":
     # Parse command line arguments
     # Example usage:
     #   python3 nanoGPT/starter.py --dataset=./nanoGPT/data/shakespeare --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
-    args = parse_args(train=False)
+    args = parse_args(train=False, mdi=True)
 
     if args.dataset is not None:
         assert os.path.isdir(args.dataset)
