@@ -38,7 +38,7 @@ fi
 
 for i in $(seq 1 "${n_iter}");
 do
-    echo "Launching run number ${i}"
+    echo "============ Launching run number ${i} ==========="
     python3 "$(dirname "${0}")"/finisher.py &
     python3 "$(dirname "${0}")"/intermediate.py &
     python3 "$(dirname "${0}")"/starter.py \

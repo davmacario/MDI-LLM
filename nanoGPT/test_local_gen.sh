@@ -27,7 +27,7 @@ n_iter=${2:-10}
 n_samples=${3:-3}
 for i in $(seq 1 "${n_iter}");
 do
-    echo "Launching run number ${i}"
+    echo "============ Launching run number ${i} ==========="
     python3 "$(dirname "${0}")"/sample.py \
         --n-samples="${n_samples}" \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
