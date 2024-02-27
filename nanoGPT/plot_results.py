@@ -31,12 +31,13 @@ if __name__ == "__main__":
         # Ugly :/
         if model_type in fname and samples_info in fname:
             label = "MDI" if "mdi" in fname else "Standalone"
+            style = "b" if "mdi" in fname else "r"
             points = pd.read_csv(
                 os.path.join(tok_t_folder, fname),
                 sep=",",
                 names=["time", "tokens"],
             )
-            plt.plot(points["time"], points["tokens"], label=label)
+            plt.plot(points["time"], points["tokens"], style, label=label)
 
     plt.xlabel("Time (s)")
     plt.ylabel("N. tokens")
