@@ -52,6 +52,7 @@ def main():
     else:
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
+    # Note: remove first 4 chars ("ckpt"), not the underscore (there may not be)
     model_type = os.path.basename(ckpt_path).split(".")[0][4:]
 
     VERB = args.verb
@@ -187,7 +188,7 @@ def main():
             script_dir,
             "logs",
             "tok-per-time",
-            f"tokens_time_samples_standalone_{model_type}.csv",
+            f"tokens_time_samples_standalone{model_type}_{num_samples}samples.csv",
         )
         if not os.path.exists(os.path.dirname(points_file_path)):
             os.mkdir(os.path.dirname(points_file_path))

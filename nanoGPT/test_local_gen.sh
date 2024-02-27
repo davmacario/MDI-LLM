@@ -1,10 +1,13 @@
 #!/bin/bash
 
 # Test model on a single device and record times
-# Perform a number of runs with the same model - the "name" is the 1st command
-# line arg and the number of iterations is the 2nd one
+# Perform a number of runs with the same model
+# Args:
+#   1: model type (e.g., 7layers)
+#   2: number of runs (default: 10)
+#   3: number of samples (default: 3)
 # Example usage:
-#       ./test_local_gen.sh 7layers 100
+#       ./test_local_gen.sh 7layers 100 2
 
 # Clean shutdown (catch dangling processes - finisher and intermediate)
 trap 'kill $(pgrep -f 'sample.py')' INT
@@ -28,6 +31,6 @@ do
     python3 "$(dirname "${0}")"/sample.py \
         --n-samples="${n_samples}" \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
-        --time-run="$(dirname "${0}")"/logs/run_times_single_"${1}".csv \
+        --time-run="$(dirname "${0}")"/logs/run_times_single_"${1}"_"${n_samples}"samples.csv \
         --verb
 done

@@ -805,13 +805,13 @@ class GPTServer:
         tot_time = time.time() - start_time
         if PLOTS:
             self.tok_time.append((total_iters, tot_time))
-            # Store plotted points as txt file
+            # Store plotted points as csv file
             points_file_path = os.path.join(
                 script_dir,
                 "..",
                 "logs",
                 "tok-per-time",
-                f"tokens_time_samples_mdi_{MODEL_TYPE}.csv",
+                f"tokens_time_samples_mdi_{MODEL_TYPE}_{self.n_nodes}samples.csv",
             )
             if not os.path.exists(os.path.dirname(points_file_path)):
                 os.mkdir(os.path.dirname(points_file_path))

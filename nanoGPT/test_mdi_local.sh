@@ -1,10 +1,13 @@
 #!/bin/bash
 
 # Test the distributed model on a single device and record times
-# Perform a number of runs with the same model - the "name" is the 1st command
-# line arg and the number of iterations is the 2nd one
+# Perform a number of runs with the same model
+# Args:
+#   1: model type (e.g., 7layers)
+#   2: number of runs (default: 10)
+#   3: number of nodes (default: 3)
 # Example usage:
-#       ./test_mdi_local.sh 7layers 100
+#       ./test_mdi_local.sh 7layers 100 2
 
 # Clean shutdown (catch dangling processes - finisher and intermediate)
 trap 'kill $(pgrep -f 'finisher.py'); kill $(pgrep -f 'intermediate.py'); kill $(pgrep -f 'starter.py')' INT
@@ -22,6 +25,7 @@ then
 fi
 
 n_iter=${2:-10}
+
 # Differentiate based on the number of nodes (for now: 2 or 3)
 n_nodes=${3:-3}
 if [ "${n_nodes}" -eq 3 ];
@@ -39,7 +43,7 @@ do
     python3 "$(dirname "${0}")"/intermediate.py &
     python3 "$(dirname "${0}")"/starter.py \
         --ckpt="$(dirname "${0}")"/data/shakespeare/out/ckpt_"${1}".pt \
-        --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}".csv \
+        --time-run="$(dirname "${0}")"/logs/run_times_mdi_single_"${1}"_"${n_nodes}"samples.csv \
         --nodes-config="${config_file}"
 done
 
