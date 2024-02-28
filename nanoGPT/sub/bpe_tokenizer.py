@@ -2,10 +2,12 @@
 
 from typing import Dict, Iterable, List, Mapping, Tuple, Union
 
+import regex as re
+
 VERB = True
 
 
-def get_pairs_stats(ids: List[int]) -> Mapping[Tuple[int], int]:
+def get_pairs_stats(ids: List[int]) -> Mapping[Tuple[int, int], int]:
     """
     Considering the couples of subsequent elements in the input list, return
     the occurrence of each pair.
@@ -25,6 +27,10 @@ def get_pairs_stats(ids: List[int]) -> Mapping[Tuple[int], int]:
 
 
 def replace_pair(ids: List[int], pair: Tuple[int, int], idx: int):
+    """
+    Return copy of 'ids' where the consecutive pairs 'pair' have been replaced
+    by 'idx'
+    """
     newids = []
     i = 0
     while i < len(ids):
@@ -38,6 +44,11 @@ def replace_pair(ids: List[int], pair: Tuple[int, int], idx: int):
     return newids
 
 
+# TODO: save output files containing 'merges' and 'vocab'
+# TODO: add regex - need to figure out training
+# TODO: include new tokenizer in model
+
+
 class BPETokenizer:
     """
     Byte-Pair Encoding tokenizer (from A. Karpathy)
@@ -49,6 +60,7 @@ class BPETokenizer:
     """
 
     merges = {}
+    vocab = {}  # Integers-to-bytes mapping (decoding)
 
     def __init__(self):
         pass
@@ -71,8 +83,48 @@ class BPETokenizer:
                 print(f"Merging {top_pair} into new token {idx}")
 
             ids = replace_pair(ids, top_pair, idx)
+
+            # We assume the new k-v pair is inserted in the LAST position
             self.merges[top_pair] = idx
 
         compression_ratio = len(tokens) / len(ids)
         if VERB:
             print(f"Compression ratio: {compression_ratio:.2f}X")
+
+        self.build_mapping()
+
+    def build_mapping(self):
+        self.vocab = {idx: bytes([idx]) for idx in range(256)}
+        # It's crucial this runs in the right order! NEED Python >= 3.7
+        for (p0, p1), idx in self.merges.items():
+            self.vocab[idx] = self.vocab[p0] + self.vocab[p1]  # Concat. 2 bytes
+
+    def encode(self, text: str) -> List[int]:
+        tokens = list(text.encode("utf-8"))
+        finished_merges = False
+        # Need at l. 2 tokens (else no pairs to merge and the function fails)
+        while len(tokens) >= 2 and not finished_merges:
+            # Get set of "merge candidates"
+            stats = get_pairs_stats(tokens)
+            # This works because we assigned lower values to pairs we replaced first
+            # Use 'inf' as fallback for pairs that don't occur in self.merges
+            pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
+            # ISSUE: this fails if no pairs can be merged
+            if pair not in self.merges:
+                finished_merges = True
+            else:
+                idx = self.merges[pair]
+                tokens = replace_pair(tokens, pair, idx)
+
+        return tokens
+
+    def decode(self, ids: Iterable) -> str:
+        """
+        Given a list of integers (ids), return a python string.
+        """
+        assert len(self.vocab) > 0, "The tokenizer was not trained!"
+        tokens = b"".join(self.vocab[idx] for idx in ids)
+        # Issue: may have decoding issues - UTF-8 requires specific byte format
+        # -> Add errors="replace"
+        text = tokens.decode("utf-8", errors="replace")
+        return text
