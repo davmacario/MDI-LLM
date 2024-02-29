@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Dict, Iterable, List, Mapping, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Tuple, Union
 
 import regex as re
 
@@ -12,55 +12,85 @@ Implemetation of BPE tokenizer on byte encoding of UTF-8-coded characters.
 VERB = True
 
 
-def get_pairs_stats(ids: List[int]) -> Mapping[Tuple[int, int], int]:
+def get_pairs_stats(ids: List[Any]) -> Mapping[Tuple[int, int], int]:
     """
     Considering the couples of subsequent elements in the input list, return
     the occurrence of each pair.
 
     Args:
-        ids: list of integer values (order matters)
+        ids: list of integer values (order matters) or list of list of ints (if
+            using regex to separate words)
 
     Returns:
         mapping between each pair and the n. of occurrences
     """
     counts = {}
 
-    for pair in zip(ids, ids[1:]):
-        counts[pair] = counts.get(pair, 0) + 1
+    if isinstance(ids[0], int):
+        lst = [ids]
+    elif isinstance(ids[0], list):
+        lst = ids
+    else:
+        raise ValueError(f"Unsupported type for argument: {type(ids)}")
+
+    for sublist in lst:
+        for pair in zip(sublist, sublist[1:]):
+            counts[pair] = counts.get(pair, 0) + 1
 
     return counts
 
 
-def replace_pair(ids: List[int], pair: Tuple[int, int], idx: int):
+def replace_pair(
+    ids: List[Any], pair: Tuple[int, int], idx: int
+) -> Union[List[int], List[List[int]]]:
     """
     Return copy of 'ids' where the consecutive pairs 'pair' have been replaced
     by 'idx'.
+
+    Note: the variable 'ids' can also be a list of lists containing in each
+    sublist the tokens of separate words (from regex).
     """
+    if isinstance(ids[0], int):
+        lst = [ids]
+    elif isinstance(ids[0], list):
+        lst = ids
+    else:
+        raise ValueError(f"Unsupported type for argument: {type(ids)}")
+
     newids = []
     i = 0
-    while i < len(ids):
-        # Jump to 1st occurrence of elem. in pair (prevent useless iterations)
-        try:
-            j = ids.index(pair[0], i)  # Fallback to i if not found
-            newids.extend(ids[i:j])
-            i = j
-        except:
-            # 1st element of pair not found -> copy all elem. in ids and stop
-            newids.extend(ids[i:])
-            break
+    for sublist in lst:
+        newids_word = []
+        while i < len(sublist):
+            # Jump to 1st occurrence of elem. in pair (prevent useless iterations)
+            try:
+                j = sublist.index(pair[0], i)  # Fallback to i if not found
+                newids_word.extend(sublist[i:j])
+                i = j
+            except:
+                # 1st element of pair not found -> copy all elem. in ids and stop
+                newids_word.extend(sublist[i:])
+                break
 
-        # If couple is present, replace, else add the element
-        if i < len(ids) - 1 and ids[i] == pair[0] and ids[i + 1] == pair[1]:
-            newids.append(idx)
-            i += 2
-        else:
-            newids.append(ids[i])
-            i += 1
+            # If couple is present, replace, else add the element
+            if (
+                i < len(sublist) - 1
+                and sublist[i] == pair[0]
+                and sublist[i + 1] == pair[1]
+            ):
+                newids_word.append(idx)
+                i += 2
+            else:
+                newids_word.append(sublist[i])
+                i += 1
+        newids.append(newids_word)
 
-    return newids
+    if len(newids) == 1:
+        return newids[0]
+    else:
+        return newids
 
 
-# TODO: add regex - need to figure out training
 # TODO: include new tokenizer in model
 
 
