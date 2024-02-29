@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 from typing import Any, Dict, Iterable, List, Mapping, Tuple, Union
 
@@ -106,6 +107,7 @@ class BPETokenizer:
 
     merges = {}  # Mapping *byte* couples -> value of the merge
     vocab = {}  # Integers-to-bytes mapping (decoding)
+    n_vocab = 256
 
     cache = {}  # Cache the translated words to make encoding faster
 
@@ -118,6 +120,7 @@ class BPETokenizer:
 
     def tokenize(self, text: str, out_vocab_size: int = 1000):
         """Train tokenizer from text"""
+        self.n_vocab = out_vocab_size
         if self.pat is not None:
             # FIXME: need to handle case when there is no more tokens to merge
             tokens = []
@@ -154,8 +157,48 @@ class BPETokenizer:
 
     # TODO: save output files containing 'merges' and 'vocab'
     def store_tokenizer_info(self, info_dir: str):
-        if not os.path.isdir(info_dir):
+        if not (os.path.exists(info_dir) and os.path.isdir(info_dir)):
             raise FileNotFoundError(f"The directory {info_dir} does not exist!")
+
+        # Save merges as .bpe file (txt)
+        with open(
+            os.path.join(info_dir, "merges.bpe"), "w", encoding="utf-8"
+        ) as f:
+            for (p0, p1), idx in self.merges.items():
+                f.write(f"{p0} {p1} {idx}\n")
+            f.close()
+
+        # Save "inverted" vocab as json
+        inv_vocab = {v: k for k, v in self.vocab.items()}
+        with open(os.path.join(info_dir, "encoder.json"), "w") as f:
+            json.dump(inv_vocab, f)
+            f.close()
+
+    def load_data(self, info_dir: str):
+        if not (os.path.exists(info_dir) and os.path.isdir(info_dir)):
+            raise FileNotFoundError(f"The directory {info_dir} does not exist!")
+
+        if self.merges != {} or self.vocab != {}:
+            raise ValueError("Tokenizer is already initialized!")
+
+        # Load merges
+        with open(
+            os.path.join(info_dir, "merges.bpe"), "r", encoding="utf-8"
+        ) as f:
+            bpe_data = f.read()
+            f.close()
+
+        self.merges = {
+            (p[0], p[1]): p[2]
+            for line in bpe_data.split("\n")
+            for p in line.split()
+        }
+
+        # Load vocab
+        with open(os.path.join(info_dir, "encoder.json"), "r") as f:
+            inv_vocab = json.load(f)
+            self.vocab = {v: k for k, v in inv_vocab.items()}
+            f.close()
 
     def build_mapping(self):
         """
