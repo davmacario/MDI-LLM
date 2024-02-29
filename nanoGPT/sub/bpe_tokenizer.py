@@ -2,6 +2,7 @@
 
 import json
 import os
+import warnings
 from typing import Any, Dict, Iterable, List, Mapping, Tuple, Union
 
 import regex as re
@@ -111,12 +112,20 @@ class BPETokenizer:
 
     cache = {}  # Cache the translated words to make encoding faster
 
-    def __init__(self):
+    def __init__(self, data_dir: Union[None, str] = None):
         # RegEx for separating words and expressions (from Tiktoken, GPT-2)
         self.pat = re.compile(
             r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""",
             re.IGNORECASE,
         )
+
+        if data_dir is not None:
+            if not (os.path.exists(data_dir) and os.path.isdir(data_dir)):
+                raise FileNotFoundError(
+                    f"The path {data_dir} is not a valid directory!"
+                )
+
+            self.load_data(data_dir)
 
     def tokenize(self, text: str, out_vocab_size: int = 1000):
         """Train tokenizer from text"""
@@ -155,26 +164,48 @@ class BPETokenizer:
 
         self.build_mapping()
 
-    # TODO: save output files containing 'merges' and 'vocab'
-    def store_tokenizer_info(self, info_dir: str):
+    def store_tokenizer_info(self, info_dir: str, overwrite=True):
+        """
+        Store the tokenizer information to output files "merges.bpe" and
+        "encoder.json", placed in the given directory.
+
+        If overwrite = True, it will overwrite existing files.
+        """
         if not (os.path.exists(info_dir) and os.path.isdir(info_dir)):
             raise FileNotFoundError(f"The directory {info_dir} does not exist!")
 
         # Save merges as .bpe file (txt)
-        with open(
-            os.path.join(info_dir, "merges.bpe"), "w", encoding="utf-8"
-        ) as f:
+        merges_path = os.path.join(info_dir, "merges.bpe")
+        if os.path.exists(merges_path):
+            if overwrite:
+                warnings.warn("Overwriting merges file!")
+            else:
+                warnings.warn("Merges file already exists!")
+                return
+        with open(merges_path, "w", encoding="utf-8") as f:
             for (p0, p1), idx in self.merges.items():
                 f.write(f"{p0} {p1} {idx}\n")
             f.close()
 
         # Save "inverted" vocab as json
         inv_vocab = {v: k for k, v in self.vocab.items()}
-        with open(os.path.join(info_dir, "encoder.json"), "w") as f:
+        vocab_path = os.path.join(info_dir, "encoder.json")
+        if os.path.exists(vocab_path):
+            if overwrite:
+                warnings.warn("Overwriting vocabulary file!")
+            else:
+                warnings.warn("Vocabulary file already exists!")
+                return
+        with open(vocab_path, "w") as f:
             json.dump(inv_vocab, f)
             f.close()
 
     def load_data(self, info_dir: str):
+        """
+        Initialize tokenizer mappings and vocabulary from files.
+
+        The provided directory must contain a 'merges.bpe' and an 'encoder.json'
+        """
         if not (os.path.exists(info_dir) and os.path.isdir(info_dir)):
             raise FileNotFoundError(f"The directory {info_dir} does not exist!")
 
