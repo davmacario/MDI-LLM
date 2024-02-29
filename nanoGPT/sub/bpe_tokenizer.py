@@ -118,11 +118,15 @@ class BPETokenizer:
 
     def tokenize(self, text: str, out_vocab_size: int = 1000):
         """Train tokenizer from text"""
-        # FIXME: need to handle case when there is no more tokens to merge
-        tokens = []
-        for split in re.findall(self.pat, text):
-            # Convert text to list of 8-bit integers - byte representation [0,255]
-            tokens.append(list(map(int, split.encode("utf-8"))))
+        if self.pat is not None:
+            # FIXME: need to handle case when there is no more tokens to merge
+            tokens = []
+            for split in re.findall(self.pat, text):
+                # Convert text to list of 8-bit integers - byte representation [0,255]
+                tokens.append(list(map(int, split.encode("utf-8"))))
+        else:
+            # FIXME: not consistent...
+            tokens = list(map(int, text.encode("utf-8")))
 
         # Number of iterations to get right output vocab size
         num_merges = out_vocab_size - 256
