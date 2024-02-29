@@ -14,6 +14,14 @@ Implemetation of BPE tokenizer on byte encoding of UTF-8-coded characters.
 VERB = True
 
 
+def int_to_bytes(x: int) -> bytes:
+    return x.to_bytes((x.bit_length() + 7) // 8, "big")
+
+
+def bytes_to_int(xb: bytes) -> int:
+    return int.from_bytes(xb, "big")
+
+
 def get_pairs_stats(ids: List[Any]) -> Mapping[Tuple[int, int], int]:
     """
     Considering the couples of subsequent elements in the input list, return
@@ -107,7 +115,7 @@ class BPETokenizer:
     """
 
     merges = {}  # Mapping *byte* couples -> value of the merge
-    vocab = {}  # Integers-to-bytes mapping (decoding)
+    vocab = {}  # Integers-to-bytes mapping (decoding) - Actually, int -> int
     n_vocab = 256
 
     cache = {}  # Cache the translated words to make encoding faster
@@ -127,18 +135,14 @@ class BPETokenizer:
 
             self.load_data(data_dir)
 
-    def tokenize(self, text: str, out_vocab_size: int = 1000):
+    def tokenize(self, text: str, out_vocab_size: int = 500):
         """Train tokenizer from text"""
         self.n_vocab = out_vocab_size
-        if self.pat is not None:
-            # FIXME: need to handle case when there is no more tokens to merge
-            tokens = []
-            for split in re.findall(self.pat, text):
-                # Convert text to list of 8-bit integers - byte representation [0,255]
-                tokens.append(list(map(int, split.encode("utf-8"))))
-        else:
-            # FIXME: not consistent...
-            tokens = list(map(int, text.encode("utf-8")))
+        # FIXME: need to handle case when there is no more tokens to merge
+        tokens = []
+        for split in re.findall(self.pat, text):
+            # Convert text to list of 8-bit integers - byte representation [0,255]
+            tokens.append(list(map(int, split.encode("utf-8"))))
 
         # Number of iterations to get right output vocab size
         num_merges = out_vocab_size - 256
@@ -158,11 +162,32 @@ class BPETokenizer:
             # We assume the new k-v pair is inserted in the LAST position (!)
             self.merges[top_pair] = idx
 
-        compression_ratio = len(tokens) / len(ids)
+        len_init = sum([len(x) for x in tokens])
+        len_fin = sum([len(x) for x in ids])
+        compression_ratio = len_init / len_fin
         if VERB:
             print(f"Compression ratio: {compression_ratio:.2f}X")
 
         self.build_mapping()
+
+    def build_mapping(self):
+        """
+        Build the mapping from integer values to bytes/byte pairs.
+
+        Can use this mapping to substitute the tokens (integers) with the full
+        set of bytes they map to (even more than 2 if multiple pairs were
+        linked)
+        """
+        tmp_vocab = {idx: bytes([idx]) for idx in range(256)}
+        # It's crucial this runs in the right order! NEED Python >= 3.7
+        for (p0, p1), idx in self.merges.items():
+            # Add to the vocab. the encoding of pairs
+            tmp_vocab[idx] = tmp_vocab[p0] + tmp_vocab[p1]  # Concat. bytes
+            # NOTE: this unpacks all couples into bytes! vocab[p] may already be
+            # a couple!
+
+        for idx in tmp_vocab:
+            self.vocab[idx] = bytes_to_int(tmp_vocab[idx])
 
     def store_tokenizer_info(self, info_dir: str, overwrite=False):
         """
@@ -188,7 +213,6 @@ class BPETokenizer:
             f.close()
 
         # Save "inverted" vocab as json
-        inv_vocab = {v: k for k, v in self.vocab.items()}
         vocab_path = os.path.join(info_dir, "encoder.json")
         if os.path.exists(vocab_path):
             if overwrite:
@@ -197,7 +221,7 @@ class BPETokenizer:
                 warnings.warn("Vocabulary file already exists!")
                 return
         with open(vocab_path, "w") as f:
-            json.dump(inv_vocab, f)
+            json.dump(self.vocab, f)
             f.close()
 
     def load_data(self, info_dir: str):
@@ -220,32 +244,15 @@ class BPETokenizer:
             f.close()
 
         self.merges = {
-            (p[0], p[1]): p[2]
+            (int(p[0]), int(p[1])): int(p[2])
             for line in bpe_data.split("\n")
             for p in line.split()
         }
 
         # Load vocab
         with open(os.path.join(info_dir, "encoder.json"), "r") as f:
-            inv_vocab = json.load(f)
-            self.vocab = {v: k for k, v in inv_vocab.items()}
+            self.vocab = json.load(f)
             f.close()
-
-    def build_mapping(self):
-        """
-        Build the mapping from integer values to bytes/byte pairs.
-
-        Can use this mapping to substitute the tokens (integers) with the full
-        set of bytes they map to (even more than 2 if multiple pairs were
-        linked)
-        """
-        self.vocab = {idx: bytes([idx]) for idx in range(256)}
-        # It's crucial this runs in the right order! NEED Python >= 3.7
-        for (p0, p1), idx in self.merges.items():
-            # Add to the vocab. the encoding of pairs
-            self.vocab[idx] = self.vocab[p0] + self.vocab[p1]  # Concat. bytes
-            # NOTE: this unpacks all couples into bytes! vocab[p] may already be
-            # a couple!
 
     def encode(self, text: str) -> List[int]:
         if not self.trained():
@@ -288,7 +295,7 @@ class BPETokenizer:
         Given a list of integers (ids), return a python string.
         """
         assert len(self.vocab) > 0, "The tokenizer was not trained!"
-        tokens = b"".join(self.vocab[idx] for idx in ids)
+        tokens = b"".join([int_to_bytes(self.vocab[idx]) for idx in ids])
         # errors="replace" solves issues with utf-8 format
         text = tokens.decode("utf-8", errors="replace")
         return text
