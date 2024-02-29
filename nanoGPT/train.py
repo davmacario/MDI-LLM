@@ -4,6 +4,7 @@
 Aadapted/rewritten from karpathy/nanoGPT/train.py
 """
 
+import json
 import os
 import pickle
 import time
@@ -120,7 +121,17 @@ def main() -> int:
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
         meta_vocab_size = meta["vocab_size"]
-        print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+        print(f"Found vocab_size = {meta_vocab_size} (inside {meta_path})")
+
+    # Look for bpe tokenizer TODO
+    vocab_path = os.path.join(data_dir, "encoder.json")
+    merges_path = os.path.join(data_dir, "merges.bpe")
+    if os.path.exists(vocab_path) and os.path.exists(merges_path):
+        with open(vocab_path, "r") as f:
+            tok_vocab = json.load(f)
+            f.close()
+        meta_vocab_size = len(tok_vocab)
+        print(f"Found vocab_size = {meta_vocab_size} (inside {vocab_path})")
 
     # Model init
     model_args = dict(
