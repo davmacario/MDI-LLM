@@ -58,8 +58,8 @@ def replace_pair(
         raise ValueError(f"Unsupported type for argument: {type(ids)}")
 
     newids = []
-    i = 0
     for sublist in lst:
+        i = 0
         newids_word = []
         while i < len(sublist):
             # Jump to 1st occurrence of elem. in pair (prevent useless iterations)
@@ -116,11 +116,13 @@ class BPETokenizer:
             re.IGNORECASE,
         )
 
-    def tokenize(self, text: str, out_vocab_size: int = 2000):
+    def tokenize(self, text: str, out_vocab_size: int = 1000):
         """Train tokenizer from text"""
-        # TODO: introduce word splitting at training
-        # Convert text to list of 8-bit integers - byte representation [0,255]
-        tokens = list(map(int, text.encode("utf-8")))
+        # FIXME: need to handle case when there is no more tokens to merge
+        tokens = []
+        for split in re.findall(self.pat, text):
+            # Convert text to list of 8-bit integers - byte representation [0,255]
+            tokens.append(list(map(int, split.encode("utf-8"))))
 
         # Number of iterations to get right output vocab size
         num_merges = out_vocab_size - 256
