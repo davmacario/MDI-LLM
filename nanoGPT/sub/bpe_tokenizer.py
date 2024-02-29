@@ -164,7 +164,7 @@ class BPETokenizer:
 
         self.build_mapping()
 
-    def store_tokenizer_info(self, info_dir: str, overwrite=True):
+    def store_tokenizer_info(self, info_dir: str, overwrite=False):
         """
         Store the tokenizer information to output files "merges.bpe" and
         "encoder.json", placed in the given directory.
