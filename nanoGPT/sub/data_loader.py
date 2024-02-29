@@ -7,12 +7,14 @@ import numpy as np
 import tiktoken
 import torch
 
+from .bpe_tokenizer import BPETokenizer
 from .char_tokenizer import CharacterTokenizer
 from .model import GPTConfig
 
 
 def load_dataset(
-    input_path: str, tokenizer: Union[CharacterTokenizer, tiktoken.Encoding]
+    input_path: str,
+    tokenizer: Union[CharacterTokenizer, BPETokenizer, tiktoken.Encoding],
 ) -> List:
     """
     Load a data set from a text file and tokenize its content.
@@ -40,6 +42,9 @@ def load_dataset(
     if isinstance(tokenizer, CharacterTokenizer):
         # Encode and move to tensor
         # NOTE: the tokenizer gets updated automatically
+        data = tokenizer.encode(text)
+    elif isinstance(tokenizer, BPETokenizer):
+        assert tokenizer.trained(), "Tokenizer was not trained!"
         data = tokenizer.encode(text)
     elif isinstance(tokenizer, tiktoken.Encoding):
         data = tokenizer.encode_ordinary(text)

@@ -15,7 +15,7 @@ import requests
 import tiktoken
 import torch
 
-from sub import CharacterTokenizer
+from sub import BPETokenizer, CharacterTokenizer
 from sub.config import VERB
 from sub.data_loader import load_dataset, split_dataset
 
@@ -44,6 +44,7 @@ def main():
                 f.write(requests.get(data_url).text)
 
     # tokenizer = CharacterTokenizer()
+    tokenizer = BPETokenizer()
     tokenizer = tiktoken.get_encoding("gpt2")
     data_lst = load_dataset(in_file, tokenizer)  # data_lst is a list
     # Move to tensor here
@@ -63,7 +64,7 @@ def main():
 
     # Store tokenizer metadata if of type CharacterTokenizer (alphabet and
     # encodings change with data set)
-    if type(tokenizer) == CharacterTokenizer:
+    if isinstance(tokenizer, CharacterTokenizer):
         if VERB:
             print("Dumping character-based tokenizer metadata")
         meta = {
@@ -73,6 +74,11 @@ def main():
         }
         with open(os.path.join(data_set_dir, "meta.pkl"), "wb") as f:
             pickle.dump(meta, f)
+    elif isinstance(tokenizer, BPETokenizer):
+        if VERB:
+            print(
+                f"Storing trained BPE tokenizer data inside '{data_set_dir}' folder"
+            )
 
 
 if __name__ == "__main__":
