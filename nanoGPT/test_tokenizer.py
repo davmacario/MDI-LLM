@@ -15,7 +15,7 @@ if __name__ == "__main__":
         f.close()
 
     # Tokenize
-    tok.tokenize(text, out_vocab_size=1000)
+    tok.tokenize(text, out_vocab_size=500)
 
     input_str = "O, that this too too solid flesh would melt"
     print(f"Encoding the string:\n{input_str}")

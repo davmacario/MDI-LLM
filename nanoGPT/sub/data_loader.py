@@ -44,7 +44,6 @@ def load_dataset(
         # NOTE: the tokenizer gets updated automatically
         data = tokenizer.encode(text)
     elif isinstance(tokenizer, BPETokenizer):
-        assert tokenizer.trained(), "Tokenizer was not trained!"
         data = tokenizer.encode(text)
     elif isinstance(tokenizer, tiktoken.Encoding):
         data = tokenizer.encode_ordinary(text)
