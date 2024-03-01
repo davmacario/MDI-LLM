@@ -123,7 +123,7 @@ def main() -> int:
         meta_vocab_size = meta["vocab_size"]
         print(f"Found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
-    # Look for bpe tokenizer TODO
+    # Look for bpe tokenizer
     vocab_path = os.path.join(data_dir, "encoder.json")
     merges_path = os.path.join(data_dir, "merges.bpe")
     if os.path.exists(vocab_path) and os.path.exists(merges_path):
@@ -212,6 +212,11 @@ def main() -> int:
     # Should not be needed here - model is moved to device at initialization
     # model.to(device)
 
+    if VERB:
+        print("Model settings:")
+        for k, v in model_args.items():
+            print(f"> {k}: {v}")
+
     # Initialize a GradScaler. If enabled=False scaler is a no-op
     scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
 
@@ -263,7 +268,10 @@ def main() -> int:
                     }
                     # Prevent loss of old parameters - do not overwrite
                     if INIT_FROM != "scratch":
-                        ckpt_path_upd = f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt"
+                        ckpt_path_upd = os.path.join(
+                            out_dir,
+                            f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt",
+                        )
                         print(f"Saving checkpoint to {ckpt_path_upd}")
                         torch.save(checkpoint, ckpt_path_upd)
                     else:

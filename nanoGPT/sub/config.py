@@ -25,7 +25,7 @@ Configuration file - GPT
 """
 
 # ---- Model configuration -----------------------
-BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
+BLOCK_SIZE = 256  # (context length in chars) - affects VRAM
 BATCH_SIZE = 24  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (NOTE: head size = 384 / 6 = 64)

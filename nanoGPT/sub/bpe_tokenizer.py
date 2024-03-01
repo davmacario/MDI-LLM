@@ -108,10 +108,10 @@ class BPETokenizer:
     """
     Byte-Pair Encoding tokenizer (from A. Karpathy)
 
-    To be implemented (common API):
-        Methods:
-            encode
-            decode
+    Public API:
+        tokenize: train tokenizer
+        encode: encode a sequence (if not already trained, will
+        decode
     """
 
     merges = {}  # Mapping *byte* couples -> value of the merge
@@ -120,20 +120,19 @@ class BPETokenizer:
 
     cache = {}  # Cache the translated words to make encoding faster
 
-    def __init__(self, data_dir: Union[None, str] = None):
+    def __init__(
+        self,
+        voc_path: Union[None, str] = None,
+        merges_path: Union[None, str] = None,
+    ):
         # RegEx for separating words and expressions (from Tiktoken, GPT-2)
         self.pat = re.compile(
             r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""",
             re.IGNORECASE,
         )
 
-        if data_dir is not None:
-            if not (os.path.exists(data_dir) and os.path.isdir(data_dir)):
-                raise FileNotFoundError(
-                    f"The path {data_dir} is not a valid directory!"
-                )
-
-            self.load_data(data_dir)
+        if voc_path is not None and merges_path is not None:
+            self.load_tokenizer_info(voc_path, merges_path)
 
     def tokenize(self, text: str, out_vocab_size: int = 500):
         """Train tokenizer from text"""
@@ -224,22 +223,21 @@ class BPETokenizer:
             json.dump(self.vocab, f)
             f.close()
 
-    def load_data(self, info_dir: str):
+    def load_tokenizer_info(self, vocab_path: str, meta_path: str):
         """
         Initialize tokenizer mappings and vocabulary from files.
 
         The provided directory must contain a 'merges.bpe' and an 'encoder.json'
         """
-        if not (os.path.exists(info_dir) and os.path.isdir(info_dir)):
-            raise FileNotFoundError(f"The directory {info_dir} does not exist!")
+        for pt in [vocab_path, meta_path]:
+            if not os.path.exists(pt):
+                raise FileNotFoundError(f"Invalid path {pt}")
 
         if self.merges != {} or self.vocab != {}:
             raise ValueError("Tokenizer is already initialized!")
 
         # Load merges
-        with open(
-            os.path.join(info_dir, "merges.bpe"), "r", encoding="utf-8"
-        ) as f:
+        with open(meta_path, "r", encoding="utf-8") as f:
             bpe_data = f.read()
             f.close()
 
@@ -250,9 +248,10 @@ class BPETokenizer:
         }
 
         # Load vocab
-        with open(os.path.join(info_dir, "encoder.json"), "r") as f:
+        with open(vocab_path, "r") as f:
             self.vocab = json.load(f)
             f.close()
+        self.n_vocab = len(self.vocab)
 
     def encode(self, text: str) -> List[int]:
         if not self.trained():
@@ -301,4 +300,6 @@ class BPETokenizer:
         return text
 
     def trained(self) -> bool:
-        return len(self.vocab) > 0
+        """Returns true iff the tokenizer has already been trained"""
+        self.n_vocab = len(self.vocab)
+        return self.n_vocab > 0
