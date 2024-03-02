@@ -242,14 +242,13 @@ class BPETokenizer:
             f.close()
 
         self.merges = {
-            (int(p[0]), int(p[1])): int(p[2])
-            for line in bpe_data.split("\n")
-            for p in line.split()
+            (int(line.split()[0]), int(line.split()[1])): int(line.split()[2])
+            for line in bpe_data.split("\n")[:-1]
         }
 
         # Load vocab
         with open(vocab_path, "r") as f:
-            self.vocab = json.load(f)
+            self.vocab = {int(k): v for k, v in json.load(f).items()}
             f.close()
         self.n_vocab = len(self.vocab)
 
