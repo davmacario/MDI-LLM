@@ -15,7 +15,7 @@ from datetime import datetime
 import tiktoken
 import torch
 
-from sub.char_tokenizer import CharacterTokenizer
+from sub import BPETokenizer, CharacterTokenizer
 from sub.config import DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
@@ -113,31 +113,55 @@ def main():
     #     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
 
     # Look for the meta pickle in case it is available in the dataset folder
-    load_meta = False
+    load_char = False
+    load_bpe = False
     meta_path = None
+    vocab_path = None
+    merges_path = None
     if (
-        INIT_FROM == "resume"
+        INIT_FROM != "gpt2"
         and "config" in checkpoint
         and "DATASET" in checkpoint["config"]
-    ):  # older checkpoints might not have these...
-        dataset_name = os.path.basename(
-            os.path.normpath(checkpoint["config"]["DATASET"])
+    ):
+        dataset_name = (
+            os.path.basename(os.path.normpath(checkpoint["config"]["DATASET"]))
+            + "_bpe"
         )
+        # Char
         meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
-        if VERB:
-            print("Looking for tokenizer info in: ", meta_path)
-        load_meta = os.path.exists(meta_path)
+        # BPE
+        vocab_path = os.path.join(
+            script_dir, "data", dataset_name, "encoder.json"
+        )
+        merges_path = os.path.join(
+            script_dir, "data", dataset_name, "merges.bpe"
+        )
+        if os.path.exists(meta_path):
+            # Use char token
+            load_char = True
+        elif os.path.exists(vocab_path) and os.path.exists(merges_path):
+            # Use BPE token
+            load_bpe = True
 
     # Free up memory
     checkpoint = None
 
-    if load_meta and meta_path is not None:
-        print(f"Loading meta from {meta_path}...")
+    if load_char and meta_path is not None:
+        if VERB:
+            print(f"Loading meta from {meta_path}...")
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
         tok = CharacterTokenizer(meta["stoi"], meta["itos"])
-        encode = lambda s: tok.encode(s)
-        decode = lambda l: tok.decode(l)
+        encode = tok.encode
+        decode = tok.decode
+    elif load_bpe and vocab_path is not None:
+        if VERB:
+            print(
+                f"Loading BPE tokenizer from:\n\t{vocab_path}\n\t{merges_path}..."
+            )
+        tok = BPETokenizer(vocab_path, merges_path)
+        encode = tok.encode
+        decode = tok.decode
     else:
         # Assume gpt-2 encodings by default FIXME
         print("No meta.pkl found, assuming GPT-2 encodings...")

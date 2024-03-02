@@ -26,10 +26,11 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = os.path.join(script_dir, "data", "shakespeare")  # Default value
+DATASET = "shakespeare"  # Default value
 
 
 def main() -> int:
+    global DATASET
     # various inits, derived attributes, I/O setup
     master_process = True
     seed_offset = 0
@@ -38,12 +39,6 @@ def main() -> int:
     # OVERRIDE globals with arguments
     args = parse_args()
 
-    if args.dataset is not None:
-        assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
-        data_dir = args.dataset
-    else:
-        data_dir = DATASET
-
     BATCH_SIZE = args.batch_size
     INIT_FROM = args.init
     MAX_ITERS = args.max_iters
@@ -51,9 +46,24 @@ def main() -> int:
     VERB = args.verb
     CKPT_INTERVAL = args.ckpt_interval
 
+    # --dataset: folder containing the dataset
+    if args.dataset is not None:
+        assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
+        data_dir = args.dataset
+        DATASET = os.path.basename(args.dataset)
+        out_dir = os.path.join(data_dir, "out")
+    else:
+        data_dir = os.path.join(script_dir, "data", DATASET)
+
+    # --ckpt: checkpoint file (either output or from which to resume)
+    # NOTE: can be in different dir than the dataset
     if args.ckpt is not None:
         out_dir = os.path.dirname(args.ckpt)
         ckpt_path = args.ckpt
+        if args.dataset is None:
+            out_dir = os.path.dirname(ckpt_path)
+            data_dir = os.path.dirname(out_dir)
+            DATASET = os.path.basename(data_dir)
     else:
         out_dir = os.path.join(data_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
@@ -68,6 +78,8 @@ def main() -> int:
         for k, v in globals().items()
         if not k.startswith("_") and isinstance(v, (int, float, bool, str))
     ]
+
+    # Store globals in the config of the checkpoint
     config = {k: globals()[k] for k in config_keys}  # useful for logging
     # -------------------------------------------------------------------------
 

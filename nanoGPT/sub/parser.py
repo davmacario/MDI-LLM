@@ -13,8 +13,7 @@ def parse_args(train: bool = True, mdi: bool = False):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
-        type=str,
-        default=os.path.join(script_dir, "..", "data", "shakespeare"),
+        default=None,
         help="Path of the data set folder used for training; it must be the name of one of the subfolders of `data`",
     )
     parser.add_argument(
