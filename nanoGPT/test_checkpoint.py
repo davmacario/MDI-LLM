@@ -33,6 +33,10 @@ else:
 
 
 if __name__ == "__main__":
+    """
+    Example usage:
+        python3 test_checkpoint.py --ckpt data/shakespeare_bpe/out/ckpt_12layers_128ctx.pt --split
+    """
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
     parser = argparse.ArgumentParser()
