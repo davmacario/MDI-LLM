@@ -2,6 +2,7 @@
 
 import math
 import os
+from contextlib import nullcontext
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -20,6 +21,8 @@ def estimate_loss(
     model: Union[GPT, nn.Module],
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
+    *args,
+    **kwargs,
 ):
     """
     Evaluate the mean loss over a fixed number of iterations during training.
@@ -36,6 +39,8 @@ def estimate_loss(
             "train": mean loss over EVAL_ITERS iterations for training set
             "val": mean loss over EVAL_ITERS iterations for validation set
     """
+    ctx = kwargs.get("ctx", nullcontext())
+
     out = {}
     dss = {
         "train": train,
@@ -43,11 +48,12 @@ def estimate_loss(
     }
     # Set model to evaluation mode
     model.eval()
-    for split in ["train", "val"]:
+    for split in dss.keys():
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
             x, y = get_batch(dss[split], model.config)
-            _, loss = model(x, y)
+            with ctx:
+                _, loss = model(x, y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     # Re-set the model to training mode

@@ -22,6 +22,7 @@ from sub.data_loader import load_dataset, split_dataset
 
 CURR_DIR = os.path.dirname(__file__)
 
+# PARSER -----------------------------------------------------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--tokenizer",
@@ -35,6 +36,7 @@ parser.add_argument(
     default=os.path.join(CURR_DIR, "data", "shakespeare"),
     help="Path of the data set. It must be a directory containing a text file that will be used as the trainingdata for the tokenizer, and it will be split in training/test data sets",
 )
+# ------------------------------------------------------------------------------
 
 
 def main():
@@ -52,9 +54,6 @@ def main():
             f"Unsupported tokenizer type: {tokenizer_type}\nSupported ones are: 'character', 'bpe', 'gpt2'"
         )
 
-    # data_set_dir = os.path.join(CURR_DIR, "data", "shakespeare")
-    # data_set_dir = os.path.join(CURR_DIR, "data", "shakespeare_bpe")
-    # data_set_dir = os.path.join(CURR_DIR, "data", "divina_commedia")
     if os.path.exists(args.data_path) and os.path.isdir(args.data_path):
         data_set_dir = args.data_path
     else:

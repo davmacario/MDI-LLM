@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+from sub.bpe_tokenizer import BPETokenizer
 from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
@@ -587,9 +588,19 @@ class GPTServer:
                 f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}"
             )
         logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
-        with open(self.tok_meta_path, "rb") as f:
-            meta = pickle.load(f)
-        self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+
+        if self.tok_meta_path.endswith(".pkl"):
+            with open(self.tok_meta_path, "rb") as f:
+                meta = pickle.load(f)
+            self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+        elif os.path.isdir(self.tok_meta_path):
+            vocab_path = os.path.join(self.tok_meta_path, "encoder.json")
+            merges_path = os.path.join(self.tok_meta_path, "merges.bpe")
+            self.tok = BPETokenizer(vocab_path, merges_path)
+        else:
+            raise FileNotFoundError(
+                f"Unable to find tokenizer information at {self.tok_meta_path}"
+            )
 
         return self.tok
 
@@ -1091,16 +1102,19 @@ class GPTDistributed:
             dataset_name = os.path.basename(
                 os.path.normpath(self.model_ckpt["config"]["DATASET"])
             )
-            self.tok_meta_path = os.path.join(
-                script_dir,
-                "..",
-                "data",
-                dataset_name,
-                "meta.pkl",
-            )
-            assert os.path.exists(
-                self.tok_meta_path
-            ), f"Unable to find tokenizer data at {self.tok_meta_path}"
+            dataset_dir = os.path.join(script_dir, "..", "data", dataset_name)
+            if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
+                if VERB:
+                    print(
+                        f"Using character-level tokenizer ({self.tok_meta_path})"
+                    )
+                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
+            elif os.path.exists(
+                os.path.join(dataset_dir, "encoder.json")
+            ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
+                if VERB:
+                    print(f"Using BPE tokenizer found in {dataset_dir}")
+                self.tok_meta_path = dataset_dir
         else:
             raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
 

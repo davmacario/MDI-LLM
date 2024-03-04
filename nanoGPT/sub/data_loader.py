@@ -123,10 +123,10 @@ def get_batch(
     else:
         raise TypeError(f"Unsuppoerted data type {type(dataset)}")
 
-    if model_conf.device == "cuda":
-        x, y = x.pin_memory().to(
+    if "cuda" in model_conf.device:
+        x, y = x.pin_memory().to("cuda", non_blocking=True), y.pin_memory().to(
             model_conf.device, non_blocking=True
-        ), y.pin_memory().to(model_conf.device, non_blocking=True)
+        )
     else:
         x, y = x.to(model_conf.device), y.to(model_conf.device)
     return x, y

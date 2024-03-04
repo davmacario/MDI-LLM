@@ -15,8 +15,8 @@ import torch
 
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
                         COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
-                        GRAD_CLIP, GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE,
-                        N_EMBD, N_HEADS, N_LAYER, WEIGHT_DECAY)
+                        GRAD_CLIP, LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER,
+                        WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
@@ -68,6 +68,8 @@ def main() -> int:
         out_dir = os.path.join(data_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
+    GRADIENT_ACCUMULATION_STEPS = args.grad_acc_steps
+
     # Setting up paths
     if master_process:
         os.makedirs(out_dir, exist_ok=True)
@@ -112,7 +114,7 @@ def main() -> int:
         else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     )
 
-    # Data loader
+    # Data loader (the partition needs to be created with prepare_data.py)
     train_data = np.memmap(
         os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
     )
@@ -263,11 +265,12 @@ def main() -> int:
 
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
-            losses = estimate_loss(model, train_data, val_data)
+            losses = estimate_loss(model, train_data, val_data, {"ctx": ctx})
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
             if losses["val"] < best_val_loss or ALWAYS_SAVE_CHECKPOINT:
+                # Only store ckpt if loss has decreased
                 best_val_loss = losses["val"]
                 if iter_num > 0:
                     checkpoint = {
@@ -289,17 +292,19 @@ def main() -> int:
                     else:
                         print(f"Saving checkpoint to {ckpt_path}")
                         torch.save(checkpoint, ckpt_path)
+
         if iter_num == 0 and EVAL_ONLY:
+            # Exit after 1 evaluation of the loss
             break
 
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         # and using the GradScaler if data type is float16
         for micro_step in range(GRADIENT_ACCUMULATION_STEPS):
+            # Missing: ddp update step
             with ctx:
                 logits, loss = model(X, Y)
-                loss = (
-                    loss / GRADIENT_ACCUMULATION_STEPS
-                )  # scale the loss to account for gradient accumulation
+                # scale the loss to account for gradient accumulation
+                loss = loss / GRADIENT_ACCUMULATION_STEPS
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y = get_batch(train_data, gptconf)
             # backward pass, with gradient scaling if training in fp16

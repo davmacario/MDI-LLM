@@ -3,8 +3,8 @@
 import argparse
 import os
 
-from .config import (BATCH_SIZE, CKPT_INTERVAL, INIT_FROM, LOG_INTERVAL,
-                     MAX_ITERS, PLOTS)
+from .config import (BATCH_SIZE, CKPT_INTERVAL, GRADIENT_ACCUMULATION_STEPS,
+                     INIT_FROM, LOG_INTERVAL, MAX_ITERS, PLOTS)
 
 script_dir = os.path.dirname(__file__)
 
@@ -14,7 +14,7 @@ def parse_args(train: bool = True, mdi: bool = False):
     parser.add_argument(
         "--dataset",
         default=None,
-        help="Path of the data set folder used for training; it must be the name of one of the subfolders of `data`",
+        help="Name of the data set used; it must be the name of one of the subfolders of `data`",
     )
     parser.add_argument(
         "--verb", default=False, action="store_true", help="Enable verbose mode"
@@ -56,6 +56,12 @@ def parse_args(train: bool = True, mdi: bool = False):
             default=CKPT_INTERVAL,
             help="Number of iterations between each checkpoint (when weights get stored)",
         )
+        parser.add_argument(
+            "--grad-acc-steps",
+            type=int,
+            default=GRADIENT_ACCUMULATION_STEPS,
+            help="Gradient accumulation steps - used to simulate larger batch size at training",
+        )
     else:
         # Output file for storing times
         parser.add_argument(
@@ -80,7 +86,7 @@ def parse_args(train: bool = True, mdi: bool = False):
             "--plots",
             default=PLOTS,
             action="store_true",
-            help="Produce plots",
+            help="Produce plots and store points as csv files (./logs/tok-per-time)",
         )
         if not mdi:
             parser.add_argument(

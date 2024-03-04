@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import inspect
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -244,12 +245,6 @@ class GPT(nn.Module):
                 layers=nn.ModuleList(
                     [Block(config) for _ in range(config.n_layer)]
                 ),
-                # layers=nn.Sequential(
-                #     *[
-                #         Block(config.n_embd, config.n_head)
-                #         for _ in range(config.n_layer)
-                #     ]
-                # ),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
@@ -265,10 +260,13 @@ class GPT(nn.Module):
         self = self.to(self.config.device)
 
         # NOTE: from original implementation:
-        # # apply special scaled init to the residual projections, per GPT-2 paper
-        # for pn, p in self.named_parameters():
-        #     if pn.endswith('c_proj.weight'):
-        #         torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+        # apply special scaled init to the residual projections, per GPT-2 paper
+        for pn, p in self.named_parameters():
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
+        print(f"Number of parameters: {self.get_num_params()}")
 
     def _init_weights(self, module):
         """
