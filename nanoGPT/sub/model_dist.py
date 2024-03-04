@@ -407,8 +407,8 @@ class GPTServer:
             assert max_new_tokens is not None
 
             self._load_tokenizer()
-            self.tok_encode = lambda s: self.tok.encode(s)
-            self.tok_decode = lambda l: self.tok.decode(l)
+            self.tok_encode = self.tok.encode
+            self.tok_decode = self.tok.decode
 
             if VERB:
                 print("[INFO] Tokenizer loaded!")
