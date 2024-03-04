@@ -123,9 +123,8 @@ def main():
         and "config" in checkpoint
         and "DATASET" in checkpoint["config"]
     ):
-        dataset_name = (
-            os.path.basename(os.path.normpath(checkpoint["config"]["DATASET"]))
-            + "_bpe"
+        dataset_name = os.path.basename(
+            os.path.normpath(checkpoint["config"]["DATASET"])
         )
         # Char
         meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
