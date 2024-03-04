@@ -49,11 +49,11 @@ INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
-CKPT_INTERVAL = 2000
+CKPT_INTERVAL = 2000  # Iters between each ckpt update
 EVAL_ITERS = 200
 LOG_INTERVAL = 10
 EVAL_ONLY = False  # if True, script exits right after the first eval
-ALWAYS_SAVE_CHECKPOINT = True  # T: always save a checkpoint after each eval
+ALWAYS_SAVE_CHECKPOINT = False  # T: always save a checkpoint after each eval
 
 # Optimizer settings (AdamW)
 WEIGHT_DECAY = 1e-1
@@ -111,4 +111,4 @@ BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 # ---- Runtime configuration ---------------------
 VERB = True
 DEBUG = True
-PLOTS = True
+PLOTS = False
