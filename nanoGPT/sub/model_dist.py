@@ -1104,17 +1104,17 @@ class GPTDistributed:
             )
             dataset_dir = os.path.join(script_dir, "..", "data", dataset_name)
             if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
+                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
                 if VERB:
                     print(
                         f"Using character-level tokenizer ({self.tok_meta_path})"
                     )
-                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
             elif os.path.exists(
                 os.path.join(dataset_dir, "encoder.json")
             ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
+                self.tok_meta_path = dataset_dir
                 if VERB:
                     print(f"Using BPE tokenizer found in {dataset_dir}")
-                self.tok_meta_path = dataset_dir
         else:
             raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
 
