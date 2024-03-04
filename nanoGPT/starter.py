@@ -26,8 +26,7 @@ if __name__ == "__main__":
     args = parse_args(train=False, mdi=True)
 
     if args.dataset is not None:
-        assert os.path.isdir(args.dataset)
-        data_dir = args.dataset
+        data_dir = os.path.join(script_dir, "data", args.dataset)
     else:
         data_dir = os.path.join(script_dir, "data", "shakespeare")
 
@@ -38,7 +37,6 @@ if __name__ == "__main__":
     else:
         out_dir = os.path.join(data_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
-        # ckpt_path = os.path.join(out_dir, "ckpt_5layers.pt")
 
     settings_path = os.path.join(script_dir, "settings_distr")
     network_conf_path = os.path.join(settings_path, "configuration.json")
