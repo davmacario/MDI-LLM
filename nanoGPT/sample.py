@@ -52,9 +52,6 @@ def main():
     else:
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
-    # Note: remove first 4 chars ("ckpt"), not the underscore (there may not be)
-    model_type = os.path.basename(ckpt_path).split(".")[0][4:]
-
     VERB = args.verb
     global PROFILE
     PROFILE = args.debug
@@ -93,6 +90,12 @@ def main():
     # init from a model saved in a specific directory
     checkpoint = torch.load(ckpt_path, map_location=DEVICE)
     gptconf = GPTConfig(**checkpoint["model_args"])
+
+    # Note: remove first 4 chars ("ckpt"), not the underscore (there may not be)
+    model_type = os.path.basename(ckpt_path).split(".")[0][4:]
+    if "ctx" not in model_type:
+        model_type += f"_{gptconf.block_size}ctx"
+
     model = GPT(gptconf)
     state_dict = checkpoint["model"]
     n_model_layers = count_model_layers(state_dict)
