@@ -9,3 +9,5 @@ tiktoken
 wandb
 tqdm
 cherrypy
+psutil
+gputil

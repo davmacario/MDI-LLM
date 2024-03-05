@@ -211,9 +211,13 @@ Temporary Items
 *.bin
 # Tokenizer metadata
 meta.pkl
+encoder.json
+merges.bpe
 # Pretrained models
 *.pt
 *.pth
 # Temporary folders
 tmp/
 logs/
+# Images folder
+img/

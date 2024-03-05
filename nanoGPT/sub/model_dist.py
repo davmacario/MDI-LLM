@@ -16,14 +16,13 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+from sub.bpe_tokenizer import BPETokenizer
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import (DEVICE, HEADERLENGTH, MSGLENGTH, N_LAYERS_FINISH,
-                        N_LAYERS_INTERM, N_LAYERS_START, TEMPERATURE, TOP_K,
-                        VERB)
+from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import (deserialize_params, loading_bar, serialize_params,
-                       split_parameters)
+from sub.utils import (deserialize_params, loading_bar, plot_tokens_per_time,
+                       serialize_params, split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -60,7 +59,9 @@ Functioning:
 # Logging
 script_dir = os.path.dirname(__file__)
 logger_wp = logging.getLogger("model_dist")
-logger_wp.setLevel(logging.NOTSET)
+logger_wp.setLevel(logging.ERROR)
+
+MODEL_TYPE = ""
 
 
 class StarterNode(nn.Module):
@@ -68,7 +69,7 @@ class StarterNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -82,7 +83,7 @@ class StarterNode(nn.Module):
                 ),
                 drop=nn.Dropout(config.dropout),
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_START)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 ),
             )
         )
@@ -92,9 +93,8 @@ class StarterNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
-        logger_wp.info(f"Weights loaded! Moving model to {self.config.device}")
-        self.to(self.config.device)
+            print(f"Weights loaded!")
+        logger_wp.info(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -132,7 +132,7 @@ class IntermediateNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -142,7 +142,7 @@ class IntermediateNode(nn.Module):
         self.intermediate_model = nn.ModuleDict(
             dict(
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_INTERM)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 )
             )
         )
@@ -152,7 +152,7 @@ class IntermediateNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
+            print(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -170,7 +170,7 @@ class FinisherNode(nn.Module):
 
     params_init = False
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, config: GPTConfig, n_transf_layers: int):
         super().__init__()
         assert config.vocab_size is not None
 
@@ -179,7 +179,7 @@ class FinisherNode(nn.Module):
         self.finisher_model = nn.ModuleDict(
             dict(
                 layers=nn.ModuleList(
-                    [Block(config) for _ in range(N_LAYERS_FINISH)]
+                    [Block(config) for _ in range(n_transf_layers)]
                 ),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size),
@@ -191,7 +191,7 @@ class FinisherNode(nn.Module):
         self.load_state_dict(params)
         self.params_init = True
         if VERB:
-            print(f"Weights loaded! Moving model to {self.config.device}")
+            print(f"Weights loaded!")
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
@@ -237,6 +237,9 @@ class GPTServer:
     # Some model configs:
     top_k = TOP_K
     temperature = TEMPERATURE
+
+    # Stats - n. tokens/time (tuples)
+    tok_time = []
 
     def __init__(
         self,
@@ -293,7 +296,7 @@ class GPTServer:
             self.model_config = starter_config["model_config"]
             self.tok_meta_path = str(starter_config["tok_metadata_path"])
 
-            self.init_model(set_eval=True)
+            self.init_model(starter_config["n_layers"], set_eval=True)
 
         else:
             # Configuration of "secondary" (intermediate or finisher) node
@@ -325,9 +328,11 @@ class GPTServer:
 
     # ----- Public ------------------------------------------------------------
 
-    def init_model(self, set_eval: bool = True):
+    def init_model(self, n_transf_layers: int, set_eval: bool = True):
         """
-        Initialize the node's model chunk, passing the parameters
+        Initialize the node's model chunk, passing the parameters.
+
+        The model will also be moved to the target device.
 
         Args:
             set_eval: if set to true, the model will be set to "eval" mode, used
@@ -340,16 +345,16 @@ class GPTServer:
         assert self.model is None, "The model was already initialized!"
 
         if self.node_type == "starter":
-            self.model = StarterNode(self.model_config)
+            self.model = StarterNode(self.model_config, n_transf_layers)
         elif self.node_type == "intermediate":
-            self.model = IntermediateNode(self.model_config)
+            self.model = IntermediateNode(self.model_config, n_transf_layers)
         elif self.node_type == "finisher":
-            self.model = FinisherNode(self.model_config)
+            self.model = FinisherNode(self.model_config, n_transf_layers)
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
+        self.model = self.model.to(self.model_config.device)
         self.model.load_weights(self.model_params)
-        self.model = self.model.to(DEVICE)
         if set_eval:
             # Set to evaluation mode (no backpropagation)
             self.model.eval()
@@ -357,7 +362,7 @@ class GPTServer:
     def start(
         self,
         max_new_tokens: Union[None, int] = None,
-    ) -> Union[None, List[str]]:
+    ) -> Union[None, Tuple[List[str], float]]:
         """
         Perform normal operation (open sockets, wait for communication from
         previous node and forward activations to next one)
@@ -402,8 +407,8 @@ class GPTServer:
             assert max_new_tokens is not None
 
             self._load_tokenizer()
-            self.tok_encode = lambda s: self.tok.encode(s)
-            self.tok_decode = lambda l: self.tok.decode(l)
+            self.tok_encode = self.tok.encode
+            self.tok_decode = self.tok.decode
 
             if VERB:
                 print("[INFO] Tokenizer loaded!")
@@ -420,9 +425,9 @@ class GPTServer:
                 print("[INFO] Starting generation loop")
             logger_wp.info("Starting generation loop")
 
-            out_text = self._starter_loop(max_new_tokens)
+            out_text, gen_time = self._starter_loop(max_new_tokens)
 
-            return out_text
+            return out_text, gen_time
         else:
             self.running = True
             if VERB:
@@ -583,9 +588,19 @@ class GPTServer:
                 f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}"
             )
         logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
-        with open(self.tok_meta_path, "rb") as f:
-            meta = pickle.load(f)
-        self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+
+        if self.tok_meta_path.endswith(".pkl"):
+            with open(self.tok_meta_path, "rb") as f:
+                meta = pickle.load(f)
+            self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
+        elif os.path.isdir(self.tok_meta_path):
+            vocab_path = os.path.join(self.tok_meta_path, "encoder.json")
+            merges_path = os.path.join(self.tok_meta_path, "merges.bpe")
+            self.tok = BPETokenizer(vocab_path, merges_path)
+        else:
+            raise FileNotFoundError(
+                f"Unable to find tokenizer information at {self.tok_meta_path}"
+            )
 
         return self.tok
 
@@ -704,7 +719,7 @@ class GPTServer:
             else:  # Not here if stopping message is received
                 self.message_queue.append(data)
 
-    def _starter_loop(self, max_new_tokens: int) -> List[str]:
+    def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
         This loop has a finite duration, as the starter knows what is the length
@@ -715,7 +730,7 @@ class GPTServer:
 
         Returns:
             list containing the `n_nodes` generated samples
-
+            total generation time in seconds
         """
         assert self.model_config is not None and self.model is not None
 
@@ -733,6 +748,8 @@ class GPTServer:
 
         start_time = time.time()
         count_wait = 0  # Count the number of times the loop had to wait
+        if PLOTS:
+            self.tok_time.append((0, 0))
         with torch.no_grad():
             # with CTX:  # FIXME
             total_iters = max_new_tokens * self.n_nodes
@@ -742,6 +759,8 @@ class GPTServer:
                     f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
                     end="\r",
                 )
+                if PLOTS:
+                    self.tok_time.append((k, time.time() - start_time))
                 sample_id = k % self.n_nodes  # Which of the n_nodes samples
 
                 if k >= self.n_nodes:
@@ -789,12 +808,37 @@ class GPTServer:
                     idx_cond = self.model(idx_cond)
 
                     # Build message
-                    out_msg = self._build_msg(idx_cond.to("cpu"), sample_id)
+                    out_msg = self._build_msg(idx_cond, sample_id)
                     self.send_to_next(out_msg)
                     # Sleep for 1 ms - do not overwhelm receiver
                     # time.sleep(0.001)
 
         tot_time = time.time() - start_time
+        if PLOTS:
+            self.tok_time.append((total_iters, tot_time))
+            # Store plotted points as csv file
+            points_file_path = os.path.join(
+                script_dir,
+                "..",
+                "logs",
+                "tok-per-time",
+                f"tokens_time_samples_mdi_{MODEL_TYPE}_{self.n_nodes}samples.csv",
+            )
+            if not os.path.exists(os.path.dirname(points_file_path)):
+                os.mkdir(os.path.dirname(points_file_path))
+            with open(points_file_path, "w") as f:
+                times = [x[1] for x in self.tok_time]
+                n_samples = [x[0] for x in self.tok_time]
+                for i in range(len(times)):
+                    f.write(f"{times[i]},{n_samples[i]}\n")
+
+            plot_tokens_per_time(
+                self.tok_time,
+                out_path=os.path.join(
+                    script_dir, "..", "img", f"tokens_time_mdi_{MODEL_TYPE}.png"
+                ),
+            )
+
         # Send stop message to the next
         self.send_to_next(self.stop_msg)
         logger_wp.info("Generation completed")
@@ -805,7 +849,7 @@ class GPTServer:
                 f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
             )
 
-        return [self.tok_decode(smp[0].tolist()) for smp in idx]
+        return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
 
     def _node_loop(self):
         """
@@ -842,19 +886,16 @@ class GPTServer:
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
                 exp_ind = (samp_ind + 1) % self.n_nodes
 
-                ins = in_msg["data"]
+                ins = in_msg["data"].to(self.model_config.device)
                 if self.running:
                     print(f"> Generating {loopsigns[iter % 4]}", end="\r")
-                    ins = ins.to(self.model_config.device)
                     # Forward pass
                     outs = self.model(ins)
                     # Build msg
-                    out_msg = self._build_msg(outs.to("cpu"), samp_ind)
+                    out_msg = self._build_msg(outs, samp_ind)
                     # Send to next
                     self.send_to_next(out_msg)
                     iter += 1
-                    # Sleep for 1 ms - do not overwhelm receiver
-                    # time.sleep(0.001)
                 else:
                     print("> Generation completed!")
                     print(
@@ -907,7 +948,7 @@ class GPTServer:
                 self.model_params = deserialize_params(init_msg["params"])
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
-                self.init_model()
+                self.init_model(init_msg["n_layers"])
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 logger_wp.info("Received initialization information!")
@@ -961,12 +1002,14 @@ class GPTDistributed:
         "n_nodes": 0,
         "prev_node": {},  # From .json
         "next_node": {},  # From .json
+        "n_layers": 0,  # Number of transformer layers
     }
 
     def __init__(
         self,
         ckpt_path: str,
         nodes_info_path: Union[str, None] = None,
+        **setup,
     ):
         """
         Instantiate a GPTDistributed object to perform model-distributed
@@ -987,6 +1030,14 @@ class GPTDistributed:
                 "settings_distr",
                 "configuration.json",
             )
+
+        # Override global constants
+        if "verb" in setup:
+            global VERB
+            VERB = bool(setup["verb"])
+        if "plots" in setup:
+            global PLOTS
+            PLOTS = bool(setup["plots"])
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
@@ -1027,12 +1078,21 @@ class GPTDistributed:
 
         # Split model - NOTE: the function removes the elements from
         # self.complete_model, saving memory (no duplicate values)
-        self.model_chunks = split_parameters(
+        self.model_chunks, self.layers_info = split_parameters(
             model_params=self.complete_model, n_nodes=self.n_total_nodes
         )
         assert (
             len(self.complete_model) == 0
-        ), "Something went wrong when splitting model"
+        ), "Something went wrong when splitting model - leftover parameters!"
+
+        self.n_layers_tot = (
+            self.layers_info["N_LAYERS_START"]
+            + self.layers_info["N_LAYERS_FINISH"]
+            + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
+        )
+
+        global MODEL_TYPE
+        MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
 
         # Extract tokenizer metadata information and check it exists
         if (
@@ -1042,16 +1102,19 @@ class GPTDistributed:
             dataset_name = os.path.basename(
                 os.path.normpath(self.model_ckpt["config"]["DATASET"])
             )
-            self.tok_meta_path = os.path.join(
-                script_dir,
-                "..",
-                "data",
-                dataset_name,
-                "meta.pkl",
-            )
-            assert os.path.exists(
-                self.tok_meta_path
-            ), f"Unable to find tokenizer data at {self.tok_meta_path}"
+            dataset_dir = os.path.join(script_dir, "..", "data", dataset_name)
+            if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
+                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
+                if VERB:
+                    print(
+                        f"Using character-level tokenizer ({self.tok_meta_path})"
+                    )
+            elif os.path.exists(
+                os.path.join(dataset_dir, "encoder.json")
+            ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
+                self.tok_meta_path = dataset_dir
+                if VERB:
+                    print(f"Using BPE tokenizer found in {dataset_dir}")
         else:
             raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
 
@@ -1064,6 +1127,7 @@ class GPTDistributed:
         starter_config["model_config"] = self.model_config
         starter_config["n_nodes"] = self.n_total_nodes
         starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
+        starter_config["n_layers"] = self.layers_info["N_LAYERS_START"]
         if self.n_intermediate:
             starter_config["next_node"] = self.nodes_info["nodes"][
                 "intermediate"
@@ -1125,6 +1189,8 @@ class GPTDistributed:
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
 
+            curr_msg["n_layers"] = self.layers_info["N_LAYERS_INTERM"]
+
             # Update next and prev for next iteration
             prev = int_node
             if i == n_interm - 1:  # Last iter in loop
@@ -1160,6 +1226,8 @@ class GPTDistributed:
 
         curr_msg["prev_node"] = prev
         curr_msg["next_node"] = next
+
+        curr_msg["n_layers"] = self.layers_info["N_LAYERS_FINISH"]
 
         target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
         target_port = self.nodes_info["nodes"]["finisher"]["communication"][
@@ -1245,7 +1313,7 @@ class GPTDistributed:
             return 1
         return 0
 
-    def start(self, tokens_per_sample: int = 1000):
+    def start(self, tokens_per_sample: int = 1000) -> Tuple[List[str], float]:
         """
         Start the operation - webserver + model
 
@@ -1253,13 +1321,21 @@ class GPTDistributed:
         generated.
 
         This method calls back self.configure_nodes() and self.webserv.start()
+
+        Args:
+            tokens_per_sample: number of generated tokens per sample; the number
+                of samples is the same as the number of nodes
+
+        Returns:
+            List of produced samples
+            Total generation time in seconds
         """
         # TODO: add assertions (uninitialized values)
         if not self.configure_nodes():
             raise AssertionError("Unable to initialize required nodes!")
 
-        out = self.webserv.start(max_new_tokens=tokens_per_sample)
-        assert out is not None
+        # The code below assumes we will receive the correct info (not None)
+        out, time_gen = self.webserv.start(max_new_tokens=tokens_per_sample)
 
         print("-------------------------------------------------")
         print("Produced output:\n")
@@ -1271,6 +1347,8 @@ class GPTDistributed:
 
         # Once finished, send PUT to each node to terminate execution for them
         self.stop()
+
+        return out, time_gen
 
     def stop(self) -> int:
         """

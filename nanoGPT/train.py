@@ -4,6 +4,7 @@
 Aadapted/rewritten from karpathy/nanoGPT/train.py
 """
 
+import json
 import os
 import pickle
 import time
@@ -14,8 +15,8 @@ import torch
 
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
                         COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
-                        GRAD_CLIP, GRADIENT_ACCUMULATION_STEPS, LEARNING_RATE,
-                        N_EMBD, N_HEADS, N_LAYER, WEIGHT_DECAY)
+                        GRAD_CLIP, LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER,
+                        WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
@@ -25,10 +26,11 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = os.path.join(script_dir, "data", "shakespeare")  # Default value
+DATASET = "shakespeare"  # Default value
 
 
 def main() -> int:
+    global DATASET
     # various inits, derived attributes, I/O setup
     master_process = True
     seed_offset = 0
@@ -37,12 +39,6 @@ def main() -> int:
     # OVERRIDE globals with arguments
     args = parse_args()
 
-    if args.dataset is not None:
-        assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
-        data_dir = args.dataset
-    else:
-        data_dir = DATASET
-
     BATCH_SIZE = args.batch_size
     INIT_FROM = args.init
     MAX_ITERS = args.max_iters
@@ -50,12 +46,29 @@ def main() -> int:
     VERB = args.verb
     CKPT_INTERVAL = args.ckpt_interval
 
+    # --dataset: folder containing the dataset
+    if args.dataset is not None:
+        assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
+        data_dir = args.dataset
+        DATASET = os.path.basename(args.dataset)
+        out_dir = os.path.join(data_dir, "out")
+    else:
+        data_dir = os.path.join(script_dir, "data", DATASET)
+
+    # --ckpt: checkpoint file (either output or from which to resume)
+    # NOTE: can be in different dir than the dataset
     if args.ckpt is not None:
         out_dir = os.path.dirname(args.ckpt)
         ckpt_path = args.ckpt
+        if args.dataset is None:
+            out_dir = os.path.dirname(ckpt_path)
+            data_dir = os.path.dirname(out_dir)
+            DATASET = os.path.basename(data_dir)
     else:
         out_dir = os.path.join(data_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
+
+    GRADIENT_ACCUMULATION_STEPS = args.grad_acc_steps
 
     # Setting up paths
     if master_process:
@@ -67,6 +80,8 @@ def main() -> int:
         for k, v in globals().items()
         if not k.startswith("_") and isinstance(v, (int, float, bool, str))
     ]
+
+    # Store globals in the config of the checkpoint
     config = {k: globals()[k] for k in config_keys}  # useful for logging
     # -------------------------------------------------------------------------
 
@@ -99,7 +114,7 @@ def main() -> int:
         else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     )
 
-    # Data loader
+    # Data loader (the partition needs to be created with prepare_data.py)
     train_data = np.memmap(
         os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
     )
@@ -120,7 +135,17 @@ def main() -> int:
         with open(meta_path, "rb") as f:
             meta = pickle.load(f)
         meta_vocab_size = meta["vocab_size"]
-        print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+        print(f"Found vocab_size = {meta_vocab_size} (inside {meta_path})")
+
+    # Look for bpe tokenizer
+    vocab_path = os.path.join(data_dir, "encoder.json")
+    merges_path = os.path.join(data_dir, "merges.bpe")
+    if os.path.exists(vocab_path) and os.path.exists(merges_path):
+        with open(vocab_path, "r") as f:
+            tok_vocab = json.load(f)
+            f.close()
+        meta_vocab_size = len(tok_vocab)
+        print(f"Found vocab_size = {meta_vocab_size} (inside {vocab_path})")
 
     # Model init
     model_args = dict(
@@ -201,6 +226,11 @@ def main() -> int:
     # Should not be needed here - model is moved to device at initialization
     # model.to(device)
 
+    if VERB:
+        print("Model settings:")
+        for k, v in model_args.items():
+            print(f"> {k}: {v}")
+
     # Initialize a GradScaler. If enabled=False scaler is a no-op
     scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
 
@@ -225,6 +255,7 @@ def main() -> int:
     t0 = time.time()
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
+    count_loss_incr = 0
     while iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
@@ -235,11 +266,12 @@ def main() -> int:
 
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
-            losses = estimate_loss(model, train_data, val_data)
+            losses = estimate_loss(model, train_data, val_data, {"ctx": ctx})
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
             if losses["val"] < best_val_loss or ALWAYS_SAVE_CHECKPOINT:
+                # Only store ckpt if loss has decreased
                 best_val_loss = losses["val"]
                 if iter_num > 0:
                     checkpoint = {
@@ -252,23 +284,33 @@ def main() -> int:
                     }
                     # Prevent loss of old parameters - do not overwrite
                     if INIT_FROM != "scratch":
-                        ckpt_path_upd = f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt"
+                        ckpt_path_upd = os.path.join(
+                            out_dir,
+                            f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt",
+                        )
                         print(f"Saving checkpoint to {ckpt_path_upd}")
                         torch.save(checkpoint, ckpt_path_upd)
                     else:
                         print(f"Saving checkpoint to {ckpt_path}")
                         torch.save(checkpoint, ckpt_path)
+            elif ALWAYS_SAVE_CHECKPOINT:
+                count_loss_incr += 1
+                # If the validation loss has been increasing, stop
+                if count_loss_incr > 10:
+                    break
+
         if iter_num == 0 and EVAL_ONLY:
+            # Exit after 1 evaluation of the loss
             break
 
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         # and using the GradScaler if data type is float16
         for micro_step in range(GRADIENT_ACCUMULATION_STEPS):
+            # Missing: ddp update step
             with ctx:
                 logits, loss = model(X, Y)
-                loss = (
-                    loss / GRADIENT_ACCUMULATION_STEPS
-                )  # scale the loss to account for gradient accumulation
+                # scale the loss to account for gradient accumulation
+                loss = loss / GRADIENT_ACCUMULATION_STEPS
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y = get_batch(train_data, gptconf)
             # backward pass, with gradient scaling if training in fp16
@@ -306,6 +348,7 @@ def main() -> int:
         iter_num += 1
         local_iter_num += 1
 
+    print("Training stoped!")
     return 1
 
 

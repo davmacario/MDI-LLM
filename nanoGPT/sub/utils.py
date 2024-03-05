@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 
 import math
-from typing import Any, Dict, Mapping, Union
+import os
+from contextlib import nullcontext
+from typing import Any, Dict, List, Mapping, Tuple, Union
 
+import matplotlib.pyplot as plt
 import torch
 from numpy.typing import NDArray
 from torch import nn
 
 from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
-                     N_LAYERS_FINISH, N_LAYERS_INTERM, N_LAYERS_START, VERB,
-                     WARMUP_ITERS)
+                     N_LAYERS_NODES, VERB, WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
 
@@ -19,7 +21,9 @@ def estimate_loss(
     model: Union[GPT, nn.Module],
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
-):
+    *args,
+    **kwargs,
+) -> Dict[str, float]:
     """
     Evaluate the mean loss over a fixed number of iterations during training.
     This allows to remove possible noise and provide more meaningful
@@ -35,6 +39,8 @@ def estimate_loss(
             "train": mean loss over EVAL_ITERS iterations for training set
             "val": mean loss over EVAL_ITERS iterations for validation set
     """
+    ctx = kwargs.get("ctx", nullcontext())
+
     out = {}
     dss = {
         "train": train,
@@ -42,11 +48,12 @@ def estimate_loss(
     }
     # Set model to evaluation mode
     model.eval()
-    for split in ["train", "val"]:
+    for split in dss.keys():
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
             x, y = get_batch(dss[split], model.config)
-            _, loss = model(x, y)
+            with ctx:
+                _, loss = model(x, y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     # Re-set the model to training mode
@@ -116,7 +123,7 @@ def remove_prefix(text: str, prefix: str) -> str:
 
 def split_parameters(
     model_params: Dict[str, Any], n_nodes: int
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
     """
     Split the model parameters (contained in a state dict) among the different
     available nodes.
@@ -158,16 +165,32 @@ def split_parameters(
         if k.startswith(f"{base_name_transformer}.{layer_name}")
     ]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+    n_layers_model = len(layers_unique)
     if VERB:
         print(
-            f"Number of transformer layers found in the model: {len(layers_unique)}"
+            f"Number of transformer layers found in the model: {n_layers_model}"
         )
-    n_lay_req = (
-        N_LAYERS_START + (n_nodes - 2) * N_LAYERS_INTERM + N_LAYERS_FINISH
-    )
-    assert (
-        len(layers_unique) == n_lay_req
-    ), f"Required {n_lay_req} layers, found {len(layers_unique)}"
+
+    layers_info = {}
+    n_layers_start = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_START"]
+    layers_info["N_LAYERS_START"] = n_layers_start
+    if n_nodes > 2:
+        n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model][
+            "N_LAYERS_INTERM"
+        ]
+        layers_info["N_LAYERS_INTERM"] = n_layers_interm
+    else:
+        n_layers_interm = 0
+        layers_info["N_LAYERS_INTERM"] = n_layers_interm
+
+    n_layers_finish = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_FINISH"]
+    layers_info["N_LAYERS_FINISH"] = n_layers_finish
+
+    if VERB:
+        print(f"Number of layers - starter node: {n_layers_start}")
+        if n_nodes > 2:
+            print(f"Number of layers - intermediate node: {n_layers_interm}")
+        print(f"Number of layers - finisher node: {n_layers_finish}")
 
     out_chunks = {}
 
@@ -190,7 +213,7 @@ def split_parameters(
         ] = model_params.pop(f"{base_name_transformer}.{pos_emb}.bias")
 
     # Starter may have transformer layers
-    valid_layer_ind = list(range(0, N_LAYERS_START))
+    valid_layer_ind = list(range(0, n_layers_start))
     relevant_keys = [
         k
         for k in list(model_params.keys())
@@ -219,8 +242,8 @@ def split_parameters(
         #       transformer.layer.<layer_ind>.[...]
         # so we need to select the correct layer indices
         valid_layer_ind = [
-            N_LAYERS_START + n
-            for n in list(range((i - 1) * N_LAYERS_INTERM, i * N_LAYERS_INTERM))
+            n_layers_start + n
+            for n in list(range((i - 1) * n_layers_interm, i * n_layers_interm))
         ]
         relevant_keys = [
             k
@@ -249,11 +272,11 @@ def split_parameters(
 
     # Layers:
     valid_layer_ind = list(
-        range((n_nodes - 2) * N_LAYERS_FINISH, (n_nodes - 1) * N_LAYERS_FINISH)
+        range((n_nodes - 2) * n_layers_finish, (n_nodes - 1) * n_layers_finish)
     )
     valid_layer_ind = [
-        N_LAYERS_START + n_intermediate_nodes * N_LAYERS_INTERM + k
-        for k in range(N_LAYERS_FINISH)
+        n_layers_start + n_intermediate_nodes * n_layers_interm + k
+        for k in range(n_layers_finish)
     ]
     relevant_keys = [
         k
@@ -289,7 +312,7 @@ def split_parameters(
             f"finisher_model.lm_head.bias"
         ] = model_params.pop(f"{output_layer}.bias")
 
-    return out_chunks
+    return out_chunks, layers_info
 
 
 def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
@@ -320,3 +343,61 @@ def deserialize_params(params: Dict) -> Mapping[str, Any]:
             deserialized_params[key] = value
 
     return deserialized_params
+
+
+def count_model_layers(model_params: Dict[str, Any]) -> int:
+    base_name_transformer = "transformer"
+    layer_name = "layers"
+
+    # Count the number of detected transformer layers
+    layer_keys = [
+        k
+        for k in model_params.keys()
+        if k.startswith(f"{base_name_transformer}.{layer_name}")
+    ]
+    layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
+    return len(layers_unique)
+
+
+# ---------- PLOTS -------------------------------------------------------------
+file_dir = os.path.dirname(__file__)
+
+
+def plot_tokens_per_time(
+    tok_time: List[Union[Tuple, List[Tuple]]],
+    out_path: str = os.path.join(file_dir, "..", "img", "tokens_time.png"),
+    disp: bool = True,
+):
+    """
+    Plot a graph representing the number of generated tokens in time.
+
+    Args:
+        tok_time: list of couples, where the 1st element is the number of
+            samples and the 2nd element is the time at which it was generated.
+            It can also be a list of list of couples (multiple samples); in this
+            case, the plot will distinguish between the different samples
+        out_path: path of the produced output image
+        disp: if true, the image will also be displayed at runtime
+    """
+    assert len(tok_time) >= 1
+
+    fig = plt.figure(figsize=(12, 8))
+    if isinstance(tok_time[0], Tuple):
+        time = [x[1] for x in tok_time]
+        n_samples = [x[0] for x in tok_time]
+        plt.plot(time, n_samples)
+        plt.title("Number of generated samples vs. time - MDI")
+    elif isinstance(tok_time[0], List):
+        for i, sublist in enumerate(tok_time):
+            time = [x[1] for x in sublist]
+            n_samples = [x[0] for x in sublist]
+            plt.plot(time, n_samples, label=f"Sample {i + 1}")
+            plt.legend()
+        plt.title("Number of generated samples vs. time - standalone")
+    plt.xlabel("Time (s)")
+    plt.ylabel("N. samples")
+    plt.grid()
+    plt.tight_layout()
+    fig.savefig(out_path)
+    if disp:
+        plt.show()

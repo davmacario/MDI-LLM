@@ -25,7 +25,7 @@ Configuration file - GPT
 """
 
 # ---- Model configuration -----------------------
-BLOCK_SIZE = 128  # (context length in chars) - affects VRAM
+BLOCK_SIZE = 256  # (context length in chars) - affects VRAM
 BATCH_SIZE = 24  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
 N_EMBD = 384  # Number of token embeddings processed at each time instant
 N_HEADS = 6  # Number of attention heads (NOTE: head size = 384 / 6 = 64)
@@ -49,11 +49,11 @@ INIT_FROM = "resume"  # "scratch" or "resume" ("gpt2" not implemented)
 
 MAX_ITERS = N_ITER_TRAIN = 600000  # total number of training iterations
 # Loss evaluation
-CKPT_INTERVAL = 2000
+CKPT_INTERVAL = 2000  # Iters between each ckpt update
 EVAL_ITERS = 200
 LOG_INTERVAL = 10
 EVAL_ONLY = False  # if True, script exits right after the first eval
-ALWAYS_SAVE_CHECKPOINT = True  # T: always save a checkpoint after each eval
+ALWAYS_SAVE_CHECKPOINT = False  # T: always save a checkpoint after each eval
 
 # Optimizer settings (AdamW)
 WEIGHT_DECAY = 1e-1
@@ -73,9 +73,23 @@ TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 
 TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 
 # ---- MDI settings ------------------------------
-N_LAYERS_START = 1  # Number of transformer layers in the starter node
-N_LAYERS_INTERM = 3  # Number of transformer layers in each intermediate node
-N_LAYERS_FINISH = 3  # Number of transformer layers in the finisher node
+# Adaptive layer number - first key is the number of nodes, second is the node
+# type
+N_LAYERS_NODES = {
+    2: {
+        5: {"N_LAYERS_START": 2, "N_LAYERS_FINISH": 3},
+        7: {"N_LAYERS_START": 3, "N_LAYERS_FINISH": 4},
+        9: {"N_LAYERS_START": 4, "N_LAYERS_FINISH": 5},
+        12: {"N_LAYERS_START": 5, "N_LAYERS_FINISH": 7},
+    },
+    3: {
+        5: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 2, "N_LAYERS_FINISH": 2},
+        7: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 3, "N_LAYERS_FINISH": 3},
+        9: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 4, "N_LAYERS_FINISH": 4},
+        12: {"N_LAYERS_START": 2, "N_LAYERS_INTERM": 5, "N_LAYERS_FINISH": 5},
+    },
+}
+
 # CTX = (
 #     nullcontext()
 #     if DEVICE in {"cpu", "mps"}
@@ -97,3 +111,4 @@ BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 # ---- Runtime configuration ---------------------
 VERB = True
 DEBUG = True
+PLOTS = False
