@@ -68,6 +68,7 @@ def main():
     vocab_size = args.vocab_size
 
     # Dataset file is the only ".txt" file inside
+    in_file = None
     data_file = None
     for f in os.listdir(data_set_dir):
         if f.endswith(".txt"):
@@ -84,8 +85,10 @@ def main():
             with open(in_file, "w") as f:
                 f.write(requests.get(data_url).text)
 
+    assert in_file is not None
+
     data_lst = load_dataset(
-        in_file, tokenizer, vocab_size=vocab_size
+        in_file, tokenizer, **{"vocab_size": vocab_size}
     )  # data_lst is a list
     # Move to tensor here
     data = torch.tensor(data_lst, dtype=torch.long)
