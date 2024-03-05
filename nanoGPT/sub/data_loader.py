@@ -88,6 +88,9 @@ def get_batch(
     """
     Create batches (x - inputs and y - outputs) of contexts and targets.
 
+    The batches consist of config.batch_size random elements extracted from the
+    data set.
+
     Args:
         dataset: the data set to be loaded to a tensor (tensor/np array/...)
         model_conf: the GPT configuration object
@@ -97,14 +100,15 @@ def get_batch(
         x: context inputs (each input is a block of size given by config)
         y: associated targets
     """
-    # ix is used to randomize the order in the data set
+    # ix is used to randomize the order in the data set; it contains starting
+    # index of each batch (range of values is 0 to len(dataset) - ctx len)
     ix = torch.randint(
         len(dataset) - model_conf.block_size, (model_conf.batch_size,)
     )
     if type(dataset) == torch.Tensor:
         x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
         # The "target" of a sequence is the next generated token immediately after
-        # the considered block
+        # the considered block (y[i, j] is the target of sequence x[i, :j+1])
         y = torch.stack(
             [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
         )
