@@ -255,6 +255,7 @@ def main() -> int:
     t0 = time.time()
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
+    count_loss_incr = 0
     while iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
@@ -292,6 +293,11 @@ def main() -> int:
                     else:
                         print(f"Saving checkpoint to {ckpt_path}")
                         torch.save(checkpoint, ckpt_path)
+            elif ALWAYS_SAVE_CHECKPOINT:
+                count_loss_incr += 1
+                # If the validation loss has been increasing, stop
+                if count_loss_incr > 10:
+                    break
 
         if iter_num == 0 and EVAL_ONLY:
             # Exit after 1 evaluation of the loss
@@ -342,6 +348,7 @@ def main() -> int:
         iter_num += 1
         local_iter_num += 1
 
+    print("Training stoped!")
     return 1
 
 
