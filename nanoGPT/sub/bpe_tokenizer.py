@@ -136,6 +136,7 @@ class BPETokenizer:
 
     def tokenize(self, text: str, out_vocab_size: int = 500):
         """Train tokenizer from text"""
+        print("Training BPE tokenizer with vocabulary size: ", out_vocab_size)
         self.n_vocab = out_vocab_size
         # FIXME: need to handle case when there is no more tokens to merge
         tokens = []

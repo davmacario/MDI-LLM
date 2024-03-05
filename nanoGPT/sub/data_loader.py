@@ -15,6 +15,8 @@ from .model import GPTConfig
 def load_dataset(
     input_path: str,
     tokenizer: Union[CharacterTokenizer, BPETokenizer, tiktoken.Encoding],
+    *args,
+    **kwargs,
 ) -> List:
     """
     Load a data set from a text file and tokenize its content.
@@ -22,6 +24,9 @@ def load_dataset(
     Args:
         input_path: path of the text file
         tokenizer: tokenizer to be used (can be char-based or from tiktoken)
+
+        keyword args:
+            vocab_size: vocabulary size if using custom BPE tokenizer
 
     Returns:
         data: List containing the tokens
@@ -44,6 +49,8 @@ def load_dataset(
         # NOTE: the tokenizer gets updated automatically
         data = tokenizer.encode(text)
     elif isinstance(tokenizer, BPETokenizer):
+        vocab_size = kwargs.get("vocab_size", 500)
+        tokenizer.tokenize(text, out_vocab_size=vocab_size)
         data = tokenizer.encode(text)
     elif isinstance(tokenizer, tiktoken.Encoding):
         data = tokenizer.encode_ordinary(text)

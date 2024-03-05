@@ -36,6 +36,12 @@ parser.add_argument(
     default=os.path.join(CURR_DIR, "data", "shakespeare"),
     help="Path of the data set. It must be a directory containing a text file that will be used as the trainingdata for the tokenizer, and it will be split in training/test data sets",
 )
+parser.add_argument(
+    "--vocab-size",
+    type=int,
+    default=500,
+    help="Vocabulary size if using custom BPE tokenizer",
+)
 # ------------------------------------------------------------------------------
 
 
@@ -59,6 +65,8 @@ def main():
     else:
         raise FileNotFoundError(f"Invalid path: {args.data_path}")
 
+    vocab_size = args.vocab_size
+
     # Dataset file is the only ".txt" file inside
     data_file = None
     for f in os.listdir(data_set_dir):
@@ -76,7 +84,9 @@ def main():
             with open(in_file, "w") as f:
                 f.write(requests.get(data_url).text)
 
-    data_lst = load_dataset(in_file, tokenizer)  # data_lst is a list
+    data_lst = load_dataset(
+        in_file, tokenizer, vocab_size=vocab_size
+    )  # data_lst is a list
     # Move to tensor here
     data = torch.tensor(data_lst, dtype=torch.long)
     vocab_size = tokenizer.n_vocab
