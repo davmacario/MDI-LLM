@@ -23,7 +23,7 @@ def estimate_loss(
     val: Union[torch.Tensor, NDArray],
     *args,
     **kwargs,
-):
+) -> Dict[str, float]:
     """
     Evaluate the mean loss over a fixed number of iterations during training.
     This allows to remove possible noise and provide more meaningful
