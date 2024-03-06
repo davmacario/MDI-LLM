@@ -1228,6 +1228,8 @@ class GPTDistributed:
             if VERB:
                 print(f"Sending {req_type} request to {addr}")
             ret = req_func(addr, json=content)
+            if VERB:
+                print("Success")
             logger_wp.debug(
                 f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
             )
