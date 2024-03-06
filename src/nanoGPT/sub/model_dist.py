@@ -1254,7 +1254,7 @@ class GPTDistributed:
                     f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
                 )
             except requests.exceptions.Timeout:
-                logger_wp.warning(f"Request timed out!"
+                logger_wp.warning(f"Request timed out!")
             except:
                 logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
             n_ret += 1
