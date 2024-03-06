@@ -7,6 +7,9 @@ import sys
 import time
 
 import GPUtil
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import psutil
 
 
@@ -22,7 +25,7 @@ def start_program(cmd: str):
     return process
 
 
-def monitor_memory(process, out_file, interval=1):
+def monitor_memory(process, out_file, interval=1, img_path=None):
     """
     Store the measured memory usage on output file.
 
@@ -55,10 +58,31 @@ def monitor_memory(process, out_file, interval=1):
             out_file.write("\n")
 
         except psutil.NoSuchProcess:
+            out_file.close()
             break
 
         # Delay for the specified interval
         time.sleep(interval)
+
+    # Plot - if specified
+    if img_path is not None and out_file != sys.stdout:
+        # Read csv:
+        df_values = pd.read_csv(out_file.name)
+        rows, cols = df_values.shape
+        t_axis = np.arange(0, rows * interval, interval)
+
+        plt.figure(figsize=(12, 8))
+        plt.plot(t_axis, df_values["RAM_MB"], label="RAM")
+        for i in range(len(gpu_list)):
+            plt.plot(t_axis, df_values[f"GPU{i}_MB"], label=f"VRAM GPU {i}")
+        plt.grid()
+        plt.title("Memory usage")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Usage (MB)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(img_path)
+        plt.show()
 
 
 def main():
@@ -90,13 +114,17 @@ def main():
         default=1,
         help="time between each measurement, in seconds",
     )
+    parser.add_argument(
+        "--img",
+        type=str,
+        help="output image name - if not specified, no image will be produced",
+    )
 
     args = parser.parse_args()
 
     proc = start_program(args.cmd)
     monitor_memory(
-        proc,
-        out_file=args.output,
+        proc, out_file=args.output, interval=args.interval, img_path=args.img
     )
 
 
