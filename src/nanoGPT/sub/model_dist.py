@@ -1227,7 +1227,8 @@ class GPTDistributed:
         try:
             if VERB:
                 print(f"Sending {req_type} request to {addr}")
-            ret = req_func(addr, json=content)
+            # Specify connection and transmission timeout
+            ret = req_func(addr, json=content, timeout=(5, 100000))
             if VERB:
                 print("Success")
             logger_wp.debug(
