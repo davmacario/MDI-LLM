@@ -308,7 +308,7 @@ class GPTServer:
                 # remove any limit on the request body size; default is 100MB
                 "server.max_request_body_size": 0,
                 # increase server socket timeout to 60s; default is 10s
-                "server.socket_timeout": 60,
+                "server.socket_timeout": 100,
             }
         )
 
