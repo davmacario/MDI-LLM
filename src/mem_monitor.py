@@ -52,6 +52,7 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
             out_file.write(f"{memory_info.rss / (1024 ** 2):.2f}")
 
             # Get GPU memory usage
+            gpu_list = GPUtil.getGPUs()
             for gpu in gpu_list:
                 out_file.write(f",{gpu.memoryUsed}")
 
