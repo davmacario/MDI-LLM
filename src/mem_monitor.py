@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -39,14 +40,19 @@ def monitor_memory(process, out_file, interval=1):
             for i in range(len(gpu_list)):
                 out_file.write(f"GPU{i}_MB,")
             out_file.write("\n")
+            header = True
+
         try:
-            # Get memory usage of the process
-            memory_info = process.memory_info()
+            # Get overall process memory usage
+            process_info = psutil.Process(process.pid)
+            memory_info = process_info.memory_info()
             out_file.write(f"{memory_info.rss / (1024 ** 2):.2f},")
 
             # Get GPU memory usage
             for gpu in gpu_list:
                 out_file.write(f"{gpu.memoryUsed},")
+
+            out_file.write("\n")
 
         except psutil.NoSuchProcess:
             break
@@ -62,7 +68,6 @@ def main():
         metavar="CMD",
         type=str,
         help="command to be executed (whose memory usage will be monitored) - note: use double quotes",
-        required=True,
     )
     parser.add_argument(
         "-v",
