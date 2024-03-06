@@ -39,9 +39,9 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
     while process.poll() is None:
         if (not header) and out_file != sys.stdout:
             # Write header of csv
-            out_file.write("RAM_MB,")
+            out_file.write("RAM_MB")
             for i in range(len(gpu_list)):
-                out_file.write(f"GPU{i}_MB,")
+                out_file.write(f",GPU{i}_MB")
             out_file.write("\n")
             header = True
 
@@ -49,25 +49,27 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
             # Get overall process memory usage
             process_info = psutil.Process(process.pid)
             memory_info = process_info.memory_info()
-            out_file.write(f"{memory_info.rss / (1024 ** 2):.2f},")
+            out_file.write(f"{memory_info.rss / (1024 ** 2):.2f}")
 
             # Get GPU memory usage
             for gpu in gpu_list:
-                out_file.write(f"{gpu.memoryUsed},")
+                out_file.write(f",{gpu.memoryUsed}")
 
             out_file.write("\n")
 
         except psutil.NoSuchProcess:
-            out_file.close()
             break
 
         # Delay for the specified interval
         time.sleep(interval)
 
+    out_file.close()
+
     # Plot - if specified
     if img_path is not None and out_file != sys.stdout:
         # Read csv:
-        df_values = pd.read_csv(out_file.name)
+        with open(out_file.name) as f:
+            df_values = pd.read_csv(f)
         rows, cols = df_values.shape
         t_axis = np.arange(0, rows * interval, interval)
 
