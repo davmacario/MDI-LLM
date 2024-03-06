@@ -113,7 +113,7 @@ def main():
     parser.add_argument(
         "-i",
         "--interval",
-        type=int,
+        type=float,
         default=1,
         help="time between each measurement, in seconds",
     )
