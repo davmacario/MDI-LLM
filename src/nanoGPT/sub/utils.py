@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import gc
 import math
 import os
+import sys
 from contextlib import nullcontext
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
@@ -14,6 +16,38 @@ from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      N_LAYERS_NODES, VERB, WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
+
+
+def get_obj_size(obj):
+    """
+    Get actual size of python object in memory (in bytes)
+    """
+    marked = {id(obj)}
+    obj_q = [obj]
+    sz = 0
+
+    while obj_q:
+        sz += sum(map(sys.getsizeof, obj_q))
+
+        # Lookup all the object referred to by the object in obj_q.
+        # See: https://docs.python.org/3.7/library/gc.html#gc.get_referents
+        all_refr = ((id(o), o) for o in gc.get_referents(*obj_q))
+
+        # Filter object that are already marked.
+        # Using dict notation will prevent repeated objects.
+        new_refr = {
+            o_id: o
+            for o_id, o in all_refr
+            if o_id not in marked and not isinstance(o, type)
+        }
+
+        # The new obj_q will be the ones that were not marked,
+        # and we will update marked with their ids so we will
+        # not traverse them again.
+        obj_q = new_refr.values()
+        marked.update(new_refr.keys())
+
+    return sz
 
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
@@ -146,6 +180,7 @@ def split_parameters(
             "starter": dict with the starter state dict
             "intermediate": list containing the intermediate state dicts
             "finisher": dict with the finisher state dict
+        Layers information (n. layers per node)
     """
     assert n_nodes >= 2, "There must be at least 2 nodes in the network"
 
@@ -158,6 +193,8 @@ def split_parameters(
     output_layer = "lm_head"
     n_intermediate_nodes = n_nodes - 2
 
+    len_before = len(model_params)
+
     # Count the number of detected transformer layers and check consistency
     layer_keys = [
         k
@@ -167,17 +204,13 @@ def split_parameters(
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
     n_layers_model = len(layers_unique)
     if VERB:
-        print(
-            f"Number of transformer layers found in the model: {n_layers_model}"
-        )
+        print(f"Number of transformer layers found in the model: {n_layers_model}")
 
     layers_info = {}
     n_layers_start = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_START"]
     layers_info["N_LAYERS_START"] = n_layers_start
     if n_nodes > 2:
-        n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model][
-            "N_LAYERS_INTERM"
-        ]
+        n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_INTERM"]
         layers_info["N_LAYERS_INTERM"] = n_layers_interm
     else:
         n_layers_interm = 0
@@ -203,14 +236,14 @@ def split_parameters(
         f"{base_name_transformer}.{pos_emb}.weight"
     )
     if f"{base_name_transformer}.{tok_emb}.bias" in model_params.keys():
-        out_chunks["starter"][
-            f"starter_model.{tok_emb}.bias"
-        ] = model_params.pop(f"{base_name_transformer}.{tok_emb}.bias")
+        out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params.pop(
+            f"{base_name_transformer}.{tok_emb}.bias"
+        )
 
     if f"{base_name_transformer}.{pos_emb}.bias" in model_params.keys():
-        out_chunks["starter"][
-            f"starter_model.{pos_emb}.bias"
-        ] = model_params.pop(f"{base_name_transformer}.{pos_emb}.bias")
+        out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params.pop(
+            f"{base_name_transformer}.{pos_emb}.bias"
+        )
 
     # Starter may have transformer layers
     valid_layer_ind = list(range(0, n_layers_start))
@@ -308,9 +341,9 @@ def split_parameters(
         f"{output_layer}.weight"
     )
     if f"{output_layer}.bias" in model_params.keys():
-        out_chunks["finisher"][
-            f"finisher_model.lm_head.bias"
-        ] = model_params.pop(f"{output_layer}.bias")
+        out_chunks["finisher"][f"finisher_model.lm_head.bias"] = model_params.pop(
+            f"{output_layer}.bias"
+        )
 
     return out_chunks, layers_info
 
