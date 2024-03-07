@@ -7,15 +7,18 @@ Test contents of checkpoint
 import argparse
 import os
 import pickle
+import sys
 from contextlib import nullcontext
 
 import tiktoken
 import torch
 
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import COMPILE, DEVICE, DTYPE, INIT_FROM, TOP_K, VERB
+from sub.config import DEVICE
 from sub.model import GPT, GPTConfig
-from sub.model_dist import FinisherNode, split_parameters
+from sub.model_dist import FinisherNode
+from sub.utils import (deserialize_params, get_obj_size, serialize_params,
+                       split_parameters)
 
 script_dir = os.path.dirname(__file__)
 
@@ -40,9 +43,7 @@ if __name__ == "__main__":
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--ckpt", type=str, default=ckpt_path, help="Checkpoint path"
-    )
+    parser.add_argument("--ckpt", type=str, default=ckpt_path, help="Checkpoint path")
     parser.add_argument(
         "--split",
         default=False,
@@ -52,6 +53,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     checkpoint = torch.load(args.ckpt, map_location="cpu")
+    ckpt_sz = get_obj_size(checkpoint)
+    print("Checkpoint size (in RAM): ", ckpt_sz)
+    print("")
 
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
@@ -78,10 +82,8 @@ if __name__ == "__main__":
     # Count the number of detected transformer layers
     layer_keys = [k for k in mod_keys if k.startswith("transformer.layers")]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
-    if VERB and not args.split:
-        print(
-            f"Number of transformer layers found in the model: {len(layers_unique)}"
-        )
+    if not args.split:
+        print(f"Number of transformer layers found in the model: {len(layers_unique)}")
 
     # print(
     #     f"\nProblematic keys:\nlm_head.weight: {checkpoint['model']['lm_head.weight'].shape}\nlm_head.bias: {checkpoint['model']['lm_head.bias'].shape}\n"
@@ -92,16 +94,17 @@ if __name__ == "__main__":
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
     if args.split:
-        par_split = split_parameters(checkpoint["model"], 3)
-        print("Intermediate node keys:")
-        int_k = list(par_split["intermediate"][0].keys())
-        for k in int_k:
-            print(k)
-        print("Finisher node keys:")
-        fin_k = list(par_split["finisher"].keys())
-        for k in fin_k:
-            print(k)
+        print("")
+        print("Total model size: ", get_obj_size(serialize_params(checkpoint["model"])))
 
-        fn = FinisherNode(GPTConfig(**checkpoint["model_args"]))
+        print("-> Splitting model")
+        par_split, layers_info = split_parameters(checkpoint["model"], 3)
 
-        fn.load_weights(par_split["finisher"])
+        start_sz = get_obj_size(serialize_params(par_split["starter"]))
+        interm_sz = get_obj_size(serialize_params(par_split["intermediate"][0]))
+        finish_sz = get_obj_size(serialize_params(par_split["finisher"]))
+        print("Starter model size: ", start_sz)
+        print("Intermediate model size: ", interm_sz)
+        print("Finisher model size: ", finish_sz)
+        print("Sum: ", start_sz + interm_sz + finish_sz)
+        print("Model: ", get_obj_size(serialize_params(checkpoint["model"])))
