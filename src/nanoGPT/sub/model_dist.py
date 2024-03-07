@@ -1227,8 +1227,8 @@ class GPTDistributed:
         try:
             if VERB:
                 print(f"Sending {req_type} request to {addr}")
-            # Specify connection and transmission timeout
-            ret = req_func(addr, json=content, timeout=(13, 100))
+            # Specify timeout
+            ret = req_func(addr, json=content, timeout=1000)
             if VERB:
                 print("Success")
             logger_wp.debug(
@@ -1249,7 +1249,7 @@ class GPTDistributed:
                 )
             time.sleep(2)
             try:
-                ret = req_func(addr, json=content, timeout=(13, 10000))
+                ret = req_func(addr, json=content, timeout=10000)
                 logger_wp.debug(
                     f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
                 )
