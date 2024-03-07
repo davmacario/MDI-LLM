@@ -5,6 +5,7 @@ import logging
 import os
 import pickle
 import socket
+import sys
 import threading
 import time
 import warnings
@@ -1232,7 +1233,7 @@ class GPTDistributed:
                 addr,
                 headers={"Content-Type": "application/json"},
                 json=content,
-                timeout=10,
+                timeout=100,
             )
 
             if ret.status_code == 413:
