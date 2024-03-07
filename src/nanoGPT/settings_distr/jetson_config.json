@@ -1,7 +1,7 @@
 {
   "nodes": {
     "starter": {
-      "addr": "10.107.214.37",
+      "addr": "10.107.210.83",
       "communication": {
         "port": 8088
       },
@@ -14,7 +14,7 @@
       {
         "addr": "10.107.213.9",
         "communication": {
-          "starter_addr": "10.107.214.37",
+          "starter_addr": "10.107.210.83",
           "port": 8089
         },
         "inference": {
@@ -26,7 +26,7 @@
     "finisher": {
       "addr": "10.107.212.49",
       "communication": {
-        "starter_addr": "10.107.214.37",
+        "starter_addr": "10.107.210.83",
         "port": 8090
       },
       "inference": {
