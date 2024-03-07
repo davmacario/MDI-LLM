@@ -1228,14 +1228,18 @@ class GPTDistributed:
             if VERB:
                 print(f"Sending {req_type} request to {addr}")
             # Specify timeout
-            ret = req_func(addr, json=content, timeout=1000)
-            if VERB:
-                print("Success")
+            ret = req_func(
+                addr,
+                headers={"Content-Type": "application/json"},
+                json=content,
+                timeout=10,
+            )
+
+            if ret.status_code == 413:
+                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
             logger_wp.debug(
                 f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
             )
-            if ret.status_code == 413:
-                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
         except requests.exceptions.Timeout:
             if VERB:
                 print("Connection timed out!")
@@ -1251,7 +1255,12 @@ class GPTDistributed:
                 )
             time.sleep(2)
             try:
-                ret = req_func(addr, json=content, timeout=10000)
+                ret = req_func(
+                    addr,
+                    headers={"Content-Type": "application/json"},
+                    json=content,
+                    timeout=10000,
+                )
                 logger_wp.debug(
                     f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
                 )
