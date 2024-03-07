@@ -1237,6 +1237,8 @@ class GPTDistributed:
             if ret.status_code == 413:
                 raise ConnectionError(f"Max payload for {req_type} was exceeded!")
         except requests.exceptions.Timeout:
+            if VERB:
+                print("Connection timed out!")
             logger_wp.warning(f"Request timed out!")
             n_ret += 1
         except:
@@ -1254,6 +1256,8 @@ class GPTDistributed:
                     f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
                 )
             except requests.exceptions.Timeout:
+                if VERB:
+                    print("Connection timed out!")
                 logger_wp.warning(f"Request timed out!")
             except:
                 logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
