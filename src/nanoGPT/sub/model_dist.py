@@ -1228,7 +1228,7 @@ class GPTDistributed:
         n_ret = 0
         if VERB:
             print(f"Sending {req_type} request to {addr}")
-            print(f"Payload: {len(pickle.dumps(content))} Bytes")
+            print(f"Payload: {len(pickle.dumps(json.dumps(content)))} Bytes")
         try:
             # Specify timeout
             ret = req_func(
