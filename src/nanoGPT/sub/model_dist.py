@@ -22,8 +22,9 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import (deserialize_params, loading_bar, plot_tokens_per_time,
-                       serialize_params, split_parameters)
+from sub.utils import (deserialize_params, get_obj_size, loading_bar,
+                       plot_tokens_per_time, serialize_params,
+                       split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -1225,9 +1226,10 @@ class GPTDistributed:
             raise ValueError(f"Unsupported request type '{req_type}'")
         ret = None
         n_ret = 0
+        if VERB:
+            print(f"Sending {req_type} request to {addr}")
+            print(f"Payload: {get_obj_size(content)} Bytes")
         try:
-            if VERB:
-                print(f"Sending {req_type} request to {addr}")
             # Specify timeout
             ret = req_func(
                 addr,
