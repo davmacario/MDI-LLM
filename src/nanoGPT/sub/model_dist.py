@@ -905,7 +905,7 @@ class GPTServer:
         if self.node_type is None and self.model is None:
             if len(path) > 0 and path[0] == "init":
                 assert not self.running
-                init_msg = json.loads(cp.request.body.read())
+                init_msg = pickle.loads(cp.request.body.read())
                 self.node_type = init_msg["role"]
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
@@ -1202,7 +1202,7 @@ class GPTDistributed:
         return out
 
     def request_to_node(
-        self, req_type: str, addr: str, content: dict, max_n_requests: int = 100
+        self, req_type: str, addr: str, content: Any, max_n_requests: int = 100
     ) -> int:
         """
         Send an HTTP request containing a json-formatted string to a specified
@@ -1228,13 +1228,12 @@ class GPTDistributed:
         n_ret = 0
         if VERB:
             print(f"Sending {req_type} request to {addr}")
-            print(f"Payload: {len(pickle.dumps(json.dumps(content)))} Bytes")
+            print(f"Payload: {len(pickle.dumps(content))} Bytes")
         try:
             # Specify timeout
             ret = req_func(
                 addr,
-                headers={"Content-Type": "application/json"},
-                json=content,
+                data=pickle.dumps(content),
                 timeout=100,
             )
 
@@ -1260,8 +1259,7 @@ class GPTDistributed:
             try:
                 ret = req_func(
                     addr,
-                    headers={"Content-Type": "application/json"},
-                    json=content,
+                    data=pickle.dumps(content),
                     timeout=10000,
                 )
                 logger_wp.debug(
