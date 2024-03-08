@@ -68,6 +68,7 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
 
     # Plot - if specified
     if img_path is not None and out_file != sys.stdout:
+        os.makedirs(os.path.dirname(img_path), exist_ok=True)
         # Read csv:
         with open(out_file.name) as f:
             df_values = pd.read_csv(f)
