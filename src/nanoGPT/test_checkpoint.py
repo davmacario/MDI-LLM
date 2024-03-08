@@ -5,6 +5,7 @@ Test contents of checkpoint
 """
 
 import argparse
+import io
 import os
 import pickle
 import sys
@@ -95,7 +96,18 @@ if __name__ == "__main__":
 
     if args.split:
         print("")
-        print("Total model size: ", get_obj_size(serialize_params(checkpoint["model"])))
+        buf = io.BytesIO()
+        pickle.dump(checkpoint["model"], buf)
+        buf.seek(0)
+        print("Total model size (pickle): ", len(buf.read()))
+        print(
+            "Total model size (serialized): ",
+            get_obj_size(serialize_params(checkpoint["model"])),
+        )
+        buf = io.BytesIO()
+        torch.save(checkpoint["model"], buf)
+        buf.seek(0)
+        print("Total model size (torch load to buffer): ", len(buf.read()))
 
         print("-> Splitting model")
         par_split, layers_info = split_parameters(checkpoint["model"], 3)
