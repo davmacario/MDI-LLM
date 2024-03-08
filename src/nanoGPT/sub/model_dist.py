@@ -910,7 +910,7 @@ class GPTServer:
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
                 self.model_config = GPTConfig(**init_msg["model_config"])
-                self.model_params = deserialize_params(init_msg["params"])
+                self.model_params = init_msg["params"]
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
@@ -1135,7 +1135,7 @@ class GPTDistributed:
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
             curr_msg["model_config"] = self.model_config.asdict()
-            curr_msg["params"] = serialize_params(self.model_chunks["intermediate"][i])
+            curr_msg["params"] = self.model_chunks["intermediate"][i]
             curr_msg["n_nodes"] = self.n_total_nodes
 
             curr_msg["prev_node"] = prev
@@ -1173,7 +1173,7 @@ class GPTDistributed:
         curr_msg = self.init_msg.copy()
         curr_msg["role"] = "finisher"
         curr_msg["model_config"] = self.model_config.asdict()
-        curr_msg["params"] = serialize_params(self.model_chunks["finisher"])
+        curr_msg["params"] = self.model_chunks["finisher"]
         curr_msg["n_nodes"] = self.n_total_nodes
 
         curr_msg["prev_node"] = prev
