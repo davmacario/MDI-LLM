@@ -33,6 +33,7 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
         process: subprocess to monitor
         out_file: pointer to an open file where to store output (readings)
         interval: time between each measurement in seconds
+        img_path (optional): path of the output image plotting memory usage in time
     """
     header = False
     gpu_list = GPUtil.getGPUs()
