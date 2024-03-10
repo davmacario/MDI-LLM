@@ -118,9 +118,7 @@ def main() -> int:
     train_data = np.memmap(
         os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
     )
-    val_data = np.memmap(
-        os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r"
-    )
+    val_data = np.memmap(os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r")
 
     # Init these up here, can override if INIT_FROM='resume'
     iter_num = 0
@@ -271,6 +269,7 @@ def main() -> int:
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
             if losses["val"] < best_val_loss or ALWAYS_SAVE_CHECKPOINT:
+                count_loss_incr = 0
                 # Only store ckpt if loss has decreased
                 best_val_loss = losses["val"]
                 if iter_num > 0:
@@ -293,7 +292,7 @@ def main() -> int:
                     else:
                         print(f"Saving checkpoint to {ckpt_path}")
                         torch.save(checkpoint, ckpt_path)
-            elif ALWAYS_SAVE_CHECKPOINT:
+            elif losses["val"] >= best_val_loss:
                 count_loss_incr += 1
                 # If the validation loss has been increasing, stop
                 if count_loss_incr > 10:
@@ -334,13 +333,9 @@ def main() -> int:
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * GRADIENT_ACCUMULATION_STEPS
             if local_iter_num >= 5:  # let the training loop settle a bit
-                mfu = model.estimate_mfu(
-                    BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
-                )
+                mfu = model.estimate_mfu(BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt)
                 running_mfu = (
-                    mfu
-                    if running_mfu == -1.0
-                    else 0.9 * running_mfu + 0.1 * mfu
+                    mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
                 )
             print(
                 f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
