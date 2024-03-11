@@ -82,7 +82,7 @@ class CausalSelfAttention(nn.Module):
         ), f"Invalid combination of embedding length ({config.n_embd}) and number of attention heads per layer ({config.n_head})"
 
         # K, Q, V projections - all heads in batch (no need to compute separate Q, K, V)
-        # TODO: switch from Linear to Conv1D, as in Transformers
+        # TODO: switch from Linear to Conv1D, as in Transformers (edit from_pretrained)
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
