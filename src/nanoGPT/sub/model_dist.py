@@ -5,9 +5,11 @@ import logging
 import os
 import pickle
 import socket
+import sys
 import threading
 import time
 import warnings
+from collections import deque
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
@@ -21,8 +23,9 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import (deserialize_params, loading_bar, plot_tokens_per_time,
-                       serialize_params, split_parameters)
+from sub.utils import (deserialize_params, get_obj_size, loading_bar,
+                       plot_tokens_per_time, serialize_params,
+                       split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -78,13 +81,9 @@ class StarterNode(nn.Module):
         self.starter_model = nn.ModuleDict(
             dict(
                 token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
-                position_embedding=nn.Embedding(
-                    config.block_size, config.n_embd
-                ),
+                position_embedding=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                layers=nn.ModuleList(
-                    [Block(config) for _ in range(n_transf_layers)]
-                ),
+                layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
             )
         )
 
@@ -115,9 +114,7 @@ class StarterNode(nn.Module):
         tok_emb = self.starter_model.token_embedding(idx)
 
         # Obtain positional embeddings by encoding values (0, ..., t)
-        pos_emb = self.starter_model.position_embedding(
-            torch.arange(t, device=device)
-        )
+        pos_emb = self.starter_model.position_embedding(torch.arange(t, device=device))
 
         x = self.starter_model.drop(tok_emb + pos_emb)  # (B, T, C)
 
@@ -140,11 +137,7 @@ class IntermediateNode(nn.Module):
 
         # Follow naming convention
         self.intermediate_model = nn.ModuleDict(
-            dict(
-                layers=nn.ModuleList(
-                    [Block(config) for _ in range(n_transf_layers)]
-                )
-            )
+            dict(layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
         )
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
@@ -178,9 +171,7 @@ class FinisherNode(nn.Module):
 
         self.finisher_model = nn.ModuleDict(
             dict(
-                layers=nn.ModuleList(
-                    [Block(config) for _ in range(n_transf_layers)]
-                ),
+                layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size),
             )
@@ -232,7 +223,7 @@ class GPTServer:
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
 
     # Message queue
-    message_queue = []
+    message_queue = deque([])
 
     # Some model configs:
     top_k = TOP_K
@@ -320,7 +311,7 @@ class GPTServer:
                 # remove any limit on the request body size; default is 100MB
                 "server.max_request_body_size": 0,
                 # increase server socket timeout to 60s; default is 10s
-                "server.socket_timeout": 60,
+                "server.socket_timeout": 10000,
             }
         )
 
@@ -339,9 +330,7 @@ class GPTServer:
                 to perform inference
         """
         assert self.model_params is not None, "No model parameters were found!"
-        assert (
-            self.model_config is not None
-        ), "No model configuration was found!"
+        assert self.model_config is not None, "No model configuration was found!"
         assert self.model is None, "The model was already initialized!"
 
         if self.node_type == "starter":
@@ -400,8 +389,6 @@ class GPTServer:
 
         assert self.sock_to_prev is not None and self.sock_to_next is not None
 
-        self.message_queue = []  # Initialize empty queue
-
         # Differentiate between different types
         if self.node_type == "starter":
             assert max_new_tokens is not None
@@ -416,9 +403,7 @@ class GPTServer:
             logger_wp.info("Tokenizer loaded!")
             logger_wp.info("Starting queue thread")
 
-            self.queue_thread = threading.Thread(
-                target=self._fill_queue, daemon=True
-            )
+            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
             self.queue_thread.start()
 
             if VERB:
@@ -433,9 +418,7 @@ class GPTServer:
             if VERB:
                 print("[INFO] Starting queue thread")
             logger_wp.info("Starting queue thread")
-            self.queue_thread = threading.Thread(
-                target=self._fill_queue, daemon=True
-            )
+            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
             self.queue_thread.start()
 
             if VERB:
@@ -482,9 +465,7 @@ class GPTServer:
         assert self.sock_to_next is not None
 
         message_str = pickle.dumps(data)
-        tx_msg = (
-            bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
-        )
+        tx_msg = bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
         # NOTE: attempt at sending multiple messages in a "safe" way (no sendall)
         while tx_msg:
             tx_msg = tx_msg[self.sock_to_next.send(tx_msg) :]
@@ -584,9 +565,7 @@ class GPTServer:
             the tokenizer object
         """
         if VERB:
-            print(
-                f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}"
-            )
+            print(f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}")
         logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
 
         if self.tok_meta_path.endswith(".pkl"):
@@ -645,9 +624,7 @@ class GPTServer:
         tries = 0
         while not conn and tries < max_tries:
             try:
-                self.sock_to_next = socket.socket(
-                    socket.AF_INET, socket.SOCK_STREAM
-                )
+                self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 # Bind should work even after some fails
                 self.sock_to_next.bind(
                     (
@@ -703,18 +680,14 @@ class GPTServer:
             # Read payload (exact size - this is important)
             msg_payload = self.recv_from_prev(msg_len)
             data = pickle.loads(msg_payload)
-            logger_wp.debug(
-                f"Received full message {_n_recv_msg} of length {msg_len}"
-            )
+            logger_wp.debug(f"Received full message {_n_recv_msg} of length {msg_len}")
 
             # Look for stopping msg
             if "stop" in data and data["stop"]:
                 # Stopping sequence
                 if VERB:
                     print("Stopping message received! Generation complete!")
-                logger_wp.info(
-                    "Stopping message received! Generation complete!"
-                )
+                logger_wp.info("Stopping message received! Generation complete!")
                 self.running = False
             else:  # Not here if stopping message is received
                 self.message_queue.append(data)
@@ -740,9 +713,9 @@ class GPTServer:
         start = "\n"
         start_ids = self.tok_encode(start)
         idx = [
-            torch.tensor(
-                start_ids, dtype=torch.long, device=self.model_config.device
-            )[None, ...]
+            torch.tensor(start_ids, dtype=torch.long, device=self.model_config.device)[
+                None, ...
+            ]
             for _ in range(self.n_nodes)
         ]
 
@@ -771,10 +744,8 @@ class GPTServer:
                         count_wait += 1
                         # time.sleep(0.01)
                     if count_wait - old_count_w > 0:
-                        logger_wp.warn(
-                            f"Iter {k} - Had to wait for queue to fill up!"
-                        )
-                    in_msg = self.message_queue.pop(0)
+                        logger_wp.warn(f"Iter {k} - Had to wait for queue to fill up!")
+                    in_msg = self.message_queue.popleft()
                     sample_in = in_msg["sample_index"]
 
                     # Check correct order
@@ -785,23 +756,18 @@ class GPTServer:
                     out_logits = in_msg["data"].to(self.model_config.device)
                     logits = out_logits[:, -1, :] / self.temperature
                     if self.top_k is not None:
-                        v, _ = torch.topk(
-                            logits, min(self.top_k, logits.size(-1))
-                        )
+                        v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
                         logits[logits < v[:, [-1]]] = -float("Inf")
                     probs = F.softmax(logits, dim=1)
                     idx_next = torch.multinomial(probs, num_samples=1)
-                    idx[sample_id] = torch.cat(
-                        (idx[sample_id], idx_next), dim=1
-                    )
+                    idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
 
                 if k < (self.n_nodes * (max_new_tokens - 1)):
                     # Send to next iff not at the last token
                     # Crop to block size
                     idx_cond = (
                         idx[sample_id]
-                        if idx[sample_id].size(1)
-                        <= self.model_config.block_size
+                        if idx[sample_id].size(1) <= self.model_config.block_size
                         else idx[sample_id][:, -self.model_config.block_size :]
                     )
                     # Forward in local model
@@ -874,11 +840,9 @@ class GPTServer:
                     count_wait += 1
                     # time.sleep(0.01)
                 if count_wait - old_count_w > 0:
-                    logger_wp.warn(
-                        f"Iter {iter} - Had to wait for queue to fill up!"
-                    )
+                    logger_wp.warn(f"Iter {iter} - Had to wait for queue to fill up!")
                 # Extract message from queue
-                in_msg = self.message_queue.pop(0)
+                in_msg = self.message_queue.popleft()
                 # Unpack
                 samp_ind = in_msg["sample_index"]
                 assert (
@@ -940,21 +904,19 @@ class GPTServer:
         if self.node_type is None and self.model is None:
             if len(path) > 0 and path[0] == "init":
                 assert not self.running
-                init_msg = json.loads(cp.request.body.read())
+                init_msg = pickle.loads(cp.request.body.read())
                 self.node_type = init_msg["role"]
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
                 self.model_config = GPTConfig(**init_msg["model_config"])
-                self.model_params = deserialize_params(init_msg["params"])
+                self.model_params = init_msg["params"]
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 logger_wp.info("Received initialization information!")
-                self._running_thread = threading.Thread(
-                    target=self.start, daemon=True
-                )
+                self._running_thread = threading.Thread(target=self.start, daemon=True)
                 self._running_thread.start()
                 cp.response.status = 200
             else:
@@ -973,9 +935,7 @@ class GPTServer:
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
             if len(path) > 0 and path[0] == "stop":
-                self._end_thr = threading.Thread(
-                    target=self.shutdown, daemon=True
-                )
+                self._end_thr = threading.Thread(target=self.shutdown, daemon=True)
                 self._end_thr.start()
                 if VERB:
                     print("[INFO] Node stopped!")
@@ -1095,10 +1055,7 @@ class GPTDistributed:
         MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
 
         # Extract tokenizer metadata information and check it exists
-        if (
-            "config" in self.model_ckpt
-            and "DATASET" in self.model_ckpt["config"]
-        ):
+        if "config" in self.model_ckpt and "DATASET" in self.model_ckpt["config"]:
             dataset_name = os.path.basename(
                 os.path.normpath(self.model_ckpt["config"]["DATASET"])
             )
@@ -1106,9 +1063,7 @@ class GPTDistributed:
             if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
                 self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
                 if VERB:
-                    print(
-                        f"Using character-level tokenizer ({self.tok_meta_path})"
-                    )
+                    print(f"Using character-level tokenizer ({self.tok_meta_path})")
             elif os.path.exists(
                 os.path.join(dataset_dir, "encoder.json")
             ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
@@ -1129,9 +1084,7 @@ class GPTDistributed:
         starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
         starter_config["n_layers"] = self.layers_info["N_LAYERS_START"]
         if self.n_intermediate:
-            starter_config["next_node"] = self.nodes_info["nodes"][
-                "intermediate"
-            ][0]
+            starter_config["next_node"] = self.nodes_info["nodes"]["intermediate"][0]
         else:
             starter_config["next_node"] = starter_config["prev_node"]
 
@@ -1181,9 +1134,7 @@ class GPTDistributed:
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
             curr_msg["model_config"] = self.model_config.asdict()
-            curr_msg["params"] = serialize_params(
-                self.model_chunks["intermediate"][i]
-            )
+            curr_msg["params"] = self.model_chunks["intermediate"][i]
             curr_msg["n_nodes"] = self.n_total_nodes
 
             curr_msg["prev_node"] = prev
@@ -1221,7 +1172,7 @@ class GPTDistributed:
         curr_msg = self.init_msg.copy()
         curr_msg["role"] = "finisher"
         curr_msg["model_config"] = self.model_config.asdict()
-        curr_msg["params"] = serialize_params(self.model_chunks["finisher"])
+        curr_msg["params"] = self.model_chunks["finisher"]
         curr_msg["n_nodes"] = self.n_total_nodes
 
         curr_msg["prev_node"] = prev
@@ -1230,9 +1181,7 @@ class GPTDistributed:
         curr_msg["n_layers"] = self.layers_info["N_LAYERS_FINISH"]
 
         target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
-        target_port = self.nodes_info["nodes"]["finisher"]["communication"][
-            "port"
-        ]
+        target_port = self.nodes_info["nodes"]["finisher"]["communication"]["port"]
         addr = f"http://{target_addr}:{target_port}/init"
         if VERB:
             print(f"Initializing finisher node ({addr})")
@@ -1252,7 +1201,7 @@ class GPTDistributed:
         return out
 
     def request_to_node(
-        self, req_type: str, addr: str, content: dict, max_n_requests: int = 100
+        self, req_type: str, addr: str, content: Any, max_n_requests: int = 100
     ) -> int:
         """
         Send an HTTP request containing a json-formatted string to a specified
@@ -1276,37 +1225,51 @@ class GPTDistributed:
             raise ValueError(f"Unsupported request type '{req_type}'")
         ret = None
         n_ret = 0
+        if VERB:
+            print(f"Sending {req_type} request to {addr}")
+            print(f"Payload: {len(pickle.dumps(content))} Bytes")
         try:
-            ret = req_func(addr, json=content)
+            # Specify timeout
+            ret = req_func(
+                addr,
+                data=pickle.dumps(content),
+                timeout=100,
+            )
+
+            if ret.status_code == 413:
+                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
             logger_wp.debug(
                 f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
             )
-            if ret.status_code == 413:
-                raise ConnectionError(
-                    f"Max payload for {req_type} was exceeded!"
-                )
-        except:
-            logger_wp.warning(
-                f"Unable to submit {req_type} request sent to {addr}"
-            )
+        except requests.exceptions.Timeout:
+            if VERB:
+                print("Connection timed out!")
+            logger_wp.warning(f"Request timed out!")
             n_ret += 1
-        while (
-            ret is None or ret.status_code != 200
-        ) and n_ret < max_n_requests:
+        except:
+            logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
+            n_ret += 1
+        while (ret is None or ret.status_code != 200) and n_ret < max_n_requests:
             if VERB:
                 print(
                     f"Unable to reach node ({addr}) - retrying in 2s ({n_ret}/{max_n_requests})"
                 )
             time.sleep(2)
             try:
-                ret = req_func(addr, json=content)
+                ret = req_func(
+                    addr,
+                    data=pickle.dumps(content),
+                    timeout=10000,
+                )
                 logger_wp.debug(
                     f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
                 )
+            except requests.exceptions.Timeout:
+                if VERB:
+                    print("Connection timed out!")
+                logger_wp.warning(f"Request timed out!")
             except:
-                logger_wp.warning(
-                    f"Unable to submit {req_type} request sent to {addr}"
-                )
+                logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
             n_ret += 1
 
         if ret is not None and ret.status_code == 200:
@@ -1372,9 +1335,7 @@ class GPTDistributed:
             out *= self.request_to_node("PUT", addr, {})
 
         target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
-        target_port = self.nodes_info["nodes"]["finisher"]["communication"][
-            "port"
-        ]
+        target_port = self.nodes_info["nodes"]["finisher"]["communication"]["port"]
         addr = f"http://{target_addr}:{target_port}/stop"
         if VERB:
             print(f"Sending PUT request to {addr}")
