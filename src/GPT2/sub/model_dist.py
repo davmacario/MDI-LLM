@@ -80,10 +80,10 @@ class StarterNode(nn.Module):
 
         self.starter_model = nn.ModuleDict(
             dict(
-                token_embedding=nn.Embedding(config.vocab_size, config.n_embd),
-                position_embedding=nn.Embedding(config.block_size, config.n_embd),
+                wte=nn.Embedding(config.vocab_size, config.n_embd),
+                wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
+                h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
             )
         )
 
@@ -111,14 +111,14 @@ class StarterNode(nn.Module):
 
         # The logits returned are the ones in row idx of the table
         # This is arranged in a tensor of size Batch x Time x Channel(=N_EMBED)
-        tok_emb = self.starter_model.token_embedding(idx)
+        tok_emb = self.starter_model.wte(idx)
 
         # Obtain positional embeddings by encoding values (0, ..., t)
-        pos_emb = self.starter_model.position_embedding(torch.arange(t, device=device))
+        pos_emb = self.starter_model.wpe(torch.arange(t, device=device))
 
         x = self.starter_model.drop(tok_emb + pos_emb)  # (B, T, C)
 
-        for block in self.starter_model.layers:
+        for block in self.starter_model.h:
             x = block(x)
 
         return x
@@ -137,7 +137,7 @@ class IntermediateNode(nn.Module):
 
         # Follow naming convention
         self.intermediate_model = nn.ModuleDict(
-            dict(layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
+            dict(h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
         )
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
@@ -153,7 +153,7 @@ class IntermediateNode(nn.Module):
         if not self.params_init:
             raise ValueError("The model parameters have not been initialized!")
         x = idx
-        for block in self.intermediate_model.layers:
+        for block in self.intermediate_model.h:
             x = block(x)
         return x
 
@@ -171,7 +171,7 @@ class FinisherNode(nn.Module):
 
         self.finisher_model = nn.ModuleDict(
             dict(
-                layers=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
+                h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size),
             )
@@ -190,7 +190,7 @@ class FinisherNode(nn.Module):
         if not self.params_init:
             raise ValueError("The model parameters have not been initialized!")
         x = idx
-        for block in self.finisher_model.layers:
+        for block in self.finisher_model.h:
             x = block(x)
         x = self.finisher_model.ln_f(x)
         logits = self.finisher_model.lm_head(x)

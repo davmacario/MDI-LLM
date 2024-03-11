@@ -186,9 +186,9 @@ def split_parameters(
 
     # Set up some parameters - they are used to gather the relevant keys
     base_name_transformer = "transformer"
-    tok_emb = "token_embedding"
-    pos_emb = "position_embedding"
-    layer_name = "layers"
+    tok_emb = "wte"
+    pos_emb = "wpe"
+    layer_name = "h"
     transformer_last = f"{base_name_transformer}.ln_f"
     output_layer = "lm_head"
     n_intermediate_nodes = n_nodes - 2
