@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import warnings
+from collections import deque
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
@@ -222,7 +223,7 @@ class GPTServer:
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
 
     # Message queue
-    message_queue = []
+    message_queue = deque([])
 
     # Some model configs:
     top_k = TOP_K
@@ -387,8 +388,6 @@ class GPTServer:
         self.create_sockets()
 
         assert self.sock_to_prev is not None and self.sock_to_next is not None
-
-        self.message_queue = []  # Initialize empty queue
 
         # Differentiate between different types
         if self.node_type == "starter":
@@ -746,7 +745,7 @@ class GPTServer:
                         # time.sleep(0.01)
                     if count_wait - old_count_w > 0:
                         logger_wp.warn(f"Iter {k} - Had to wait for queue to fill up!")
-                    in_msg = self.message_queue.pop(0)
+                    in_msg = self.message_queue.popleft()
                     sample_in = in_msg["sample_index"]
 
                     # Check correct order
@@ -843,7 +842,7 @@ class GPTServer:
                 if count_wait - old_count_w > 0:
                     logger_wp.warn(f"Iter {iter} - Had to wait for queue to fill up!")
                 # Extract message from queue
-                in_msg = self.message_queue.pop(0)
+                in_msg = self.message_queue.popleft()
                 # Unpack
                 samp_ind = in_msg["sample_index"]
                 assert (
