@@ -1,0 +1,38 @@
+{
+  "nodes": {
+    "starter": {
+      "addr": "10.107.210.83",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port_in": 5088,
+        "port_out": 5089
+      }
+    },
+    "intermediate": [
+      {
+        "addr": "10.107.213.9",
+        "communication": {
+          "starter_addr": "10.107.210.83",
+          "port": 8089
+        },
+        "inference": {
+          "port_in": 5090,
+          "port_out": 5091
+        }
+      }
+    ],
+    "finisher": {
+      "addr": "10.107.212.49",
+      "communication": {
+        "starter_addr": "10.107.210.83",
+        "port": 8090
+      },
+      "inference": {
+        "port_in": 5092,
+        "port_out": 5093
+      }
+    }
+  }
+}
