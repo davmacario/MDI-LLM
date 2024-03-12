@@ -26,7 +26,7 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = "shakespeare"  # Default value
+DATASET = "shakespeare"  # NOTE: dataset *name*
 
 
 def main() -> int:
@@ -46,26 +46,28 @@ def main() -> int:
     VERB = args.verb
     CKPT_INTERVAL = args.ckpt_interval
 
-    # --dataset: folder containing the dataset
+    # --dataset: path of the dataset (folder where to find train.bin & test.bin)
     if args.dataset is not None:
         assert os.path.isdir(args.dataset) and os.path.exists(args.dataset)
-        data_dir = args.dataset
+        dataset_dir = args.dataset
         DATASET = os.path.basename(args.dataset)
-        out_dir = os.path.join(data_dir, "out")
+        out_dir = os.path.join(dataset_dir, "out")
     else:
-        data_dir = os.path.join(script_dir, "data", DATASET)
+        # Default dataset value
+        dataset_dir = os.path.join(script_dir, "data", DATASET)
 
     # --ckpt: checkpoint file (either output or from which to resume)
-    # NOTE: can be in different dir than the dataset
+    # NOTE: can be in different dir than the dataset's
     if args.ckpt is not None:
         out_dir = os.path.dirname(args.ckpt)
         ckpt_path = args.ckpt
         if args.dataset is None:
+            # Update dataset directory to the parent of out/ckpt[...].pt - default
             out_dir = os.path.dirname(ckpt_path)
-            data_dir = os.path.dirname(out_dir)
-            DATASET = os.path.basename(data_dir)
+            dataset_dir = os.path.dirname(out_dir)
+            DATASET = os.path.basename(dataset_dir)
     else:
-        out_dir = os.path.join(data_dir, "out")
+        out_dir = os.path.join(DATASET, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
     GRADIENT_ACCUMULATION_STEPS = args.grad_acc_steps
@@ -147,14 +149,13 @@ def main() -> int:
 
     # Model init
     model_args = dict(
-        batch_size=BATCH_SIZE,
+        block_size=BLOCK_SIZE,
+        vocab_size=None,
         n_layer=N_LAYER,
         n_head=N_HEADS,
         n_embd=N_EMBD,
-        block_size=BLOCK_SIZE,
-        bias=BIAS,
-        vocab_size=None,
         dropout=DROPOUT,
+        bias=BIAS,
     )
 
     if INIT_FROM == "scratch":
@@ -191,7 +192,6 @@ def main() -> int:
             "block_size",
             "bias",
             "vocab_size",
-            "batch_size",
         ]:
             model_args[k] = checkpoint_model_args[k]
         # Create the model
@@ -209,6 +209,22 @@ def main() -> int:
         model.load_state_dict(state_dict)
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
+    elif INIT_FROM.startswith("gpt2"):
+        print(f"Initializing from OpenAI GPT-2 weights: {INIT_FROM}")
+        # Initialize from OpenAI GPT-2 weights (Huggingface)
+        override_args = dict(dropout=DROPOUT)
+        model = GPT.from_pretrained(INIT_FROM, override_args)
+        # Read params to be stored in ckpt
+        for k in [
+            "n_layer",
+            "n_head",
+            "n_embd",
+            "block_size",
+            "bias",
+            "vocab_size",
+        ]:
+            model_args[k] = getattr(model.config, k)
+        gptconf = model.config
     else:
         raise ValueError(f"Invalid initialization: {INIT_FROM}")
 
@@ -221,9 +237,9 @@ def main() -> int:
         model.crop_block_size(BLOCK_SIZE)
         model.config.block_size = BLOCK_SIZE
 
-    # Should not be needed here - model is moved to device at initialization
-    # model.to(device)
-
+    # Move model to device
+    model.to(DEVICE)
+    # Print model settings
     if VERB:
         print("Model settings:")
         for k, v in model_args.items():
@@ -249,7 +265,7 @@ def main() -> int:
 
     # ------- Training loop ---------------------------
 
-    X, Y = get_batch(train_data, gptconf)  # fetch the very first batch
+    X, Y = get_batch(train_data, BATCH_SIZE, DEVICE, gptconf)
     t0 = time.time()
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
