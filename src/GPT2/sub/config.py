@@ -25,10 +25,10 @@ Configuration file - GPT
 """
 
 # ---- Model configuration -----------------------
-BLOCK_SIZE = 256  # (context length in chars) - affects VRAM
+BLOCK_SIZE = 1024  # (context length in chars) - affects VRAM
 BATCH_SIZE = 24  # affects VRAM (if gr. acc. st > 1, it's the micro-batch size)
-N_EMBD = 384  # Number of token embeddings processed at each time instant
-N_HEADS = 6  # Number of attention heads (NOTE: head size = 384 / 6 = 64)
+N_EMBD = 768  # Number of token embeddings processed at each time instant
+N_HEADS = 12  # Number of attention heads (NOTE: head size = 384 / 6 = 64)
 N_LAYER = 12  # Number of transformer blocks (TRAINING ONLY)
 DROPOUT = 0.2  # Dropout probability
 BIAS = True  # do we use bias inside LayerNorm and Linear layers?
@@ -69,8 +69,12 @@ LR_DECAY_ITERS: int = 600000
 MIN_LR: float = 6e-5  # ~= .1*lr
 
 # ---- Generation settings ----------------------
-TOP_K = 200  # retain only the top_k most likely tokens, clamp others to have 0 probability
-TEMPERATURE = 0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+TOP_K = (
+    200  # retain only the top_k most likely tokens, clamp others to have 0 probability
+)
+TEMPERATURE = (
+    0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+)
 
 # ---- MDI settings ------------------------------
 # Adaptive layer number - first key is the number of nodes, second is the node
