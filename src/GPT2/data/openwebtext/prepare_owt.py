@@ -27,7 +27,7 @@ parser.add_argument(
     "--out-dir",
     type=str,
     default=curr_dir,
-    help="Output directory where to place the data set splits.",
+    help="Output directory where to place the data set splits. Default: script directory",
 )
 
 if __name__ == "__main__":
