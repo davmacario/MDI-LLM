@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from .config import (BATCH_SIZE, BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD,
-                     N_HEADS, N_LAYER, PLOTS, VERB)
+from .config import (BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD, N_HEADS,
+                     N_LAYER, PLOTS, VERB)
 
 ACT2FN = {"GELU": nn.GELU(), "ReLU": nn.ReLU()}
 
@@ -41,7 +41,6 @@ class LayerNorm(nn.Module):
 class GPTConfig:
     """Wrapper for GPT configuration parameters"""
 
-    batch_size: int = BATCH_SIZE  # NOTE: value can be overwritten by parser
     block_size: int = BLOCK_SIZE  # Context length
     vocab_size: Union[int, None] = 50304  # from GPT-2: 50257 (round to multiple of 64)
     n_layer: int = N_LAYER  # Number of transformer blocks
@@ -50,12 +49,9 @@ class GPTConfig:
     dropout: float = DROPOUT
     bias: bool = BIAS  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     activation_function: str = "GELU"  # Or ReLU
-    #
-    device: str = DEVICE  # FIXME: not stored in checkpoint, maybe remove
 
     def asdict(self):
         return {
-            "batch_size": self.batch_size,
             "block_size": self.block_size,
             "vocab_size": self.vocab_size,
             "n_layer": self.n_layer,
@@ -63,7 +59,6 @@ class GPTConfig:
             "n_embd": self.n_embd,
             "dropout": self.dropout,
             "bias": self.bias,
-            "device": self.device,
         }
 
 
@@ -257,9 +252,6 @@ class GPT(nn.Module):
 
         # Initialization
         self.apply(self._init_weights)
-
-        # Move model to device FIXME y here?
-        self = self.to(self.config.device)
 
         # NOTE: from original implementation:
         # apply special scaled init to the residual projections, per GPT-2 paper
