@@ -67,7 +67,7 @@ def main() -> int:
             dataset_dir = os.path.dirname(out_dir)
             DATASET = os.path.basename(dataset_dir)
     else:
-        out_dir = os.path.join(DATASET, "out")
+        out_dir = os.path.join(dataset_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
 
     GRADIENT_ACCUMULATION_STEPS = args.grad_acc_steps
@@ -118,9 +118,11 @@ def main() -> int:
 
     # Data loader (the partition needs to be created with prepare_data.py)
     train_data = np.memmap(
-        os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
+        os.path.join(dataset_dir, "train.bin"), dtype=np.uint16, mode="r"
     )
-    val_data = np.memmap(os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r")
+    val_data = np.memmap(
+        os.path.join(dataset_dir, "val.bin"), dtype=np.uint16, mode="r"
+    )
 
     # Init these up here, can override if INIT_FROM='resume'
     iter_num = 0
@@ -129,7 +131,7 @@ def main() -> int:
     # ----------------------------------------------------
 
     # Iff char-based tokenizer was used, look for metadata
-    meta_path = os.path.join(data_dir, "meta.pkl")
+    meta_path = os.path.join(dataset_dir, "meta.pkl")
     meta_vocab_size = None
     if os.path.exists(meta_path):
         with open(meta_path, "rb") as f:
@@ -138,8 +140,8 @@ def main() -> int:
         print(f"Found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
     # Look for bpe tokenizer
-    vocab_path = os.path.join(data_dir, "encoder.json")
-    merges_path = os.path.join(data_dir, "merges.bpe")
+    vocab_path = os.path.join(dataset_dir, "encoder.json")
+    merges_path = os.path.join(dataset_dir, "merges.bpe")
     if os.path.exists(vocab_path) and os.path.exists(merges_path):
         with open(vocab_path, "r") as f:
             tok_vocab = json.load(f)
@@ -237,8 +239,8 @@ def main() -> int:
         model.crop_block_size(BLOCK_SIZE)
         model.config.block_size = BLOCK_SIZE
 
-    # Move model to device
-    model.to(DEVICE)
+    # Move model to device (HERE! Not in __init__)
+    model = model.to(DEVICE)
     # Print model settings
     if VERB:
         print("Model settings:")
@@ -280,7 +282,9 @@ def main() -> int:
 
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
-            losses = estimate_loss(model, train_data, val_data, {"ctx": ctx})
+            losses = estimate_loss(
+                model, train_data, val_data, BATCH_SIZE, DEVICE, **{"ctx": ctx}
+            )
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
@@ -327,7 +331,7 @@ def main() -> int:
                 # scale the loss to account for gradient accumulation
                 loss = loss / GRADIENT_ACCUMULATION_STEPS
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            X, Y = get_batch(train_data, gptconf)
+            X, Y = get_batch(train_data, BATCH_SIZE, DEVICE, gptconf)
             # backward pass, with gradient scaling if training in fp16
             scaler.scale(loss).backward()
         # clip the gradient
