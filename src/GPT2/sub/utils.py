@@ -55,6 +55,8 @@ def estimate_loss(
     model: Union[GPT, nn.Module],
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
+    batch_size: int,
+    device: str,
     *args,
     **kwargs,
 ) -> Dict[str, float]:
@@ -85,7 +87,7 @@ def estimate_loss(
     for split in dss.keys():
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
-            x, y = get_batch(dss[split], model.config)
+            x, y = get_batch(dss[split], batch_size, device, model.config)
             with ctx:
                 _, loss = model(x, y)
             losses[k] = loss.item()
