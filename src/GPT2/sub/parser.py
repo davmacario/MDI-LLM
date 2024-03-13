@@ -25,10 +25,8 @@ def parse_args(train: bool = True, mdi: bool = False):
         action="store_true",
         help="Enable debug mode (enable profiler)",
     )
-    parser.add_argument(
-        "--ckpt", default=None, help="Specify checkpoint file name"
-    )
     if train:
+        parser.add_argument("--ckpt", default=None, help="Specify checkpoint file name")
         parser.add_argument(
             "--batch-size", type=int, default=BATCH_SIZE, help="Batch size"
         )
@@ -63,6 +61,11 @@ def parse_args(train: bool = True, mdi: bool = False):
             help="Gradient accumulation steps - used to simulate larger batch size at training",
         )
     else:
+        parser.add_argument(
+            "--ckpt",
+            default=None,
+            help="Specify checkpoint file name to initialize the model from; if one of 'gpt2', 'gpt2-medium', 'gpt2-large' or 'gpt2-xl', attempts to load one of these pretrained models from Huggingface",
+        )
         # Output file for storing times
         parser.add_argument(
             "--time-run",
