@@ -36,9 +36,7 @@ def load_dataset(
 
     fformats = (".txt", ".tex", ".md")
     if not input_path.lower().endswith(fformats):
-        raise ValueError(
-            f"File format not supported!\nSupported formats: {fformats}"
-        )
+        raise ValueError(f"File format not supported!\nSupported formats: {fformats}")
 
     with open(input_path, "r", encoding="utf-8") as f:
         text = f.read()
@@ -83,6 +81,8 @@ def split_dataset(
 
 def get_batch(
     dataset,
+    batch_size: int,
+    device: "str",
     model_conf: GPTConfig,
 ):
     """
@@ -102,16 +102,12 @@ def get_batch(
     """
     # ix is used to randomize the order in the data set; it contains starting
     # index of each batch (range of values is 0 to len(dataset) - ctx len)
-    ix = torch.randint(
-        len(dataset) - model_conf.block_size, (model_conf.batch_size,)
-    )
+    ix = torch.randint(len(dataset) - model_conf.block_size, (batch_size,))
     if type(dataset) == torch.Tensor:
         x = torch.stack([dataset[i : i + model_conf.block_size] for i in ix])
         # The "target" of a sequence is the next generated token immediately after
         # the considered block (y[i, j] is the target of sequence x[i, :j+1])
-        y = torch.stack(
-            [dataset[i + 1 : i + model_conf.block_size + 1] for i in ix]
-        )
+        y = torch.stack([dataset[i + 1 : i + model_conf.block_size + 1] for i in ix])
     elif type(dataset) in {np.memmap or np.ndarray}:
         x = torch.stack(
             [
@@ -124,9 +120,7 @@ def get_batch(
         y = torch.stack(
             [
                 torch.from_numpy(
-                    (dataset[i + 1 : i + 1 + model_conf.block_size]).astype(
-                        np.int64
-                    )
+                    (dataset[i + 1 : i + 1 + model_conf.block_size]).astype(np.int64)
                 )
                 for i in ix
             ]
@@ -134,10 +128,10 @@ def get_batch(
     else:
         raise TypeError(f"Unsuppoerted data type {type(dataset)}")
 
-    if "cuda" in model_conf.device:
+    if "cuda" in device:
         x, y = x.pin_memory().to("cuda", non_blocking=True), y.pin_memory().to(
-            model_conf.device, non_blocking=True
+            device, non_blocking=True
         )
     else:
-        x, y = x.to(model_conf.device), y.to(model_conf.device)
+        x, y = x.to(device), y.to(device)
     return x, y

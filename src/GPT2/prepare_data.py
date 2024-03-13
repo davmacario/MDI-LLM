@@ -25,16 +25,17 @@ CURR_DIR = os.path.dirname(__file__)
 # PARSER -----------------------------------------------------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument(
+    "data",
+    metavar="DATA",
+    type=str,
+    help="Path of the data set. It must be a directory containing a text file that will be used as the trainingdata for the tokenizer, and it will be split in training/test data sets",
+)
+parser.add_argument(
+    "-t",
     "--tokenizer",
     type=str,
     default="character",
     help="Select the tokenizer type. Supported ones are 'character' (default), 'bpe', 'gpt2'",
-)
-parser.add_argument(
-    "--data-path",
-    type=str,
-    default=os.path.join(CURR_DIR, "data", "shakespeare"),
-    help="Path of the data set. It must be a directory containing a text file that will be used as the trainingdata for the tokenizer, and it will be split in training/test data sets",
 )
 parser.add_argument(
     "--vocab-size",
@@ -60,10 +61,10 @@ def main():
             f"Unsupported tokenizer type: {tokenizer_type}\nSupported ones are: 'character', 'bpe', 'gpt2'"
         )
 
-    if os.path.exists(args.data_path) and os.path.isdir(args.data_path):
-        data_set_dir = args.data_path
+    if os.path.exists(args.data) and os.path.isdir(args.data):
+        data_set_dir = args.data
     else:
-        raise FileNotFoundError(f"Invalid path: {args.data_path}")
+        raise FileNotFoundError(f"Invalid path: {args.data}")
 
     vocab_size = args.vocab_size
 
@@ -106,7 +107,7 @@ def main():
     val_ids.tofile(os.path.join(data_set_dir, "val.bin"))
 
     # Store tokenizer metadata if of type CharacterTokenizer (alphabet and
-    # encodings change with data set)
+    # encodings change with data set) or BPETokenizer
     if isinstance(tokenizer, CharacterTokenizer):
         if VERB:
             print("Dumping character-based tokenizer metadata")
@@ -119,9 +120,7 @@ def main():
             pickle.dump(meta, f)
     elif isinstance(tokenizer, BPETokenizer):
         if VERB:
-            print(
-                f"Storing trained BPE tokenizer data inside '{data_set_dir}' folder"
-            )
+            print(f"Storing trained BPE tokenizer data inside '{data_set_dir}' folder")
         tokenizer.store_tokenizer_info(data_set_dir, overwrite=True)
 
 
