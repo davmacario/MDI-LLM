@@ -46,9 +46,15 @@ def main():
     max_new_tokens = args.n_tokens  # number of tokens generated in each sample
     seed = 1337
 
+    using_huggingface = False
+
     if args.ckpt is not None:
-        assert os.path.exists(args.ckpt)
-        ckpt_path = args.ckpt
+        if args.ckpt in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
+            print(f"Fetching model {args.ckpt} from Huggingface")
+            using_huggingface = True
+        else:
+            assert os.path.exists(args.ckpt)
+            ckpt_path = args.ckpt
     else:
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
@@ -80,38 +86,40 @@ def main():
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
     }[DTYPE]
-    ctx = (
+    ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
-        if device_type in {"cpu", "mps"}
-        else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+        if device_type == "mps"
+        else torch.autocast(device_type=device_type, dtype=ptdtype)
     )
 
     # model
-    # init from a model saved in a specific directory
-    checkpoint = torch.load(ckpt_path, map_location=DEVICE)
-    gptconf = GPTConfig(**checkpoint["model_args"])
+    if not using_huggingface:
+        # init from a model saved in a specific directory
+        checkpoint = torch.load(ckpt_path, map_location=DEVICE)
+        gptconf = GPTConfig(**checkpoint["model_args"])
 
-    # Note: remove first 4 chars ("ckpt"), not the underscore (there may not be)
-    model_type = os.path.basename(ckpt_path).split(".")[0][4:]
-    if "ctx" not in model_type:
-        model_type += f"_{gptconf.block_size}ctx"
+        # Note: remove first 4 chars ("ckpt"), not the underscore (there may not be)
+        model_type = os.path.basename(ckpt_path).split(".")[0][4:]
+        if "ctx" not in model_type:
+            model_type += f"_{gptconf.block_size}ctx"
 
-    model = GPT(gptconf)
-    state_dict = checkpoint["model"]
-    n_model_layers = count_model_layers(state_dict)
-    if VERB:
-        print(f"Using model with {n_model_layers} layers")
-    unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-    # elif INIT_FROM.startswith("gpt2"):
-    #     # init from a given GPT-2 model
-    #     model = GPT.from_pretrained(INIT_FROM, dict(dropout=0.0))
+        model = GPT(gptconf)
+        state_dict = checkpoint["model"]
+        n_model_layers = count_model_layers(state_dict)
+        if VERB:
+            print(f"Using model with {n_model_layers} layers")
+        unwanted_prefix = "_orig_mod."  # NOTE: this shouldn't happen anymore
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
+        model.load_state_dict(state_dict)
+    else:
+        model = GPT.from_pretrained(args.ckpt, dict(dropout=0.0))
+        gptconf = model.config
+        model_type = args.ckpt
+        n_model_layers = gptconf.n_layer
 
     model.to(DEVICE)
-    model.eval()
     # if COMPILE:
     #     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
 
@@ -122,7 +130,7 @@ def main():
     vocab_path = None
     merges_path = None
     if (
-        INIT_FROM != "gpt2"
+        not using_huggingface
         and "config" in checkpoint
         and "DATASET" in checkpoint["config"]
     ):
@@ -132,12 +140,8 @@ def main():
         # Char
         meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
         # BPE
-        vocab_path = os.path.join(
-            script_dir, "data", dataset_name, "encoder.json"
-        )
-        merges_path = os.path.join(
-            script_dir, "data", dataset_name, "merges.bpe"
-        )
+        vocab_path = os.path.join(script_dir, "data", dataset_name, "encoder.json")
+        merges_path = os.path.join(script_dir, "data", dataset_name, "merges.bpe")
         if os.path.exists(meta_path):
             # Use char token
             load_char = True
@@ -158,9 +162,7 @@ def main():
         decode = tok.decode
     elif load_bpe and vocab_path is not None:
         if VERB:
-            print(
-                f"Loading BPE tokenizer from:\n\t{vocab_path}\n\t{merges_path}..."
-            )
+            print(f"Loading BPE tokenizer from:\n\t{vocab_path}\n\t{merges_path}...")
         tok = BPETokenizer(vocab_path, merges_path)
         encode = tok.encode
         decode = tok.decode
@@ -179,30 +181,33 @@ def main():
     start_ids = encode(start)
     x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
+    # Set evaluation mode
+    model.eval()
+
     # Run generation
     tok_time_all = []
-    with torch.no_grad():
-        # with ctx:
-        if VERB:
-            print("Beginning generation")
-        t_start = time.time()
-        for k in range(num_samples):
-            t_start_sample = time.time()
-            y, tok_time = model.generate(
-                x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
-            )
-            if PLOTS:
-                tok_time_all.append(
-                    [
-                        (
-                            x[0] + k * max_new_tokens,
-                            x[1] + t_start_sample - t_start,
-                        )
-                        for x in tok_time
-                    ]
+    with torch.inference_mode():
+        with ctx:
+            if VERB:
+                print("Beginning generation")
+            t_start = time.time()
+            for k in range(num_samples):
+                t_start_sample = time.time()
+                y, tok_time = model.generate(
+                    x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
                 )
-            print(decode(y[0].tolist()))
-            print("---------------")
+                if PLOTS:
+                    tok_time_all.append(
+                        [
+                            (
+                                x[0] + k * max_new_tokens,
+                                x[1] + t_start_sample - t_start,
+                            )
+                            for x in tok_time
+                        ]
+                    )
+                print(decode(y[0].tolist()))
+                print("---------------")
 
     tot_gen_time = time.time() - t_start
     if VERB:
