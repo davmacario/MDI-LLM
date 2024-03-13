@@ -4,6 +4,7 @@
 Aadapted/rewritten from karpathy/nanoGPT/train.py
 """
 
+import gc
 import json
 import os
 import pickle
@@ -257,7 +258,16 @@ def main() -> int:
     if INIT_FROM == "resume":
         optimizer.load_state_dict(checkpoint["optimizer"])
 
-    checkpoint = None  # free up memory
+    try:
+        # Free up memory
+        del state_dict
+        del checkpoint
+        gc.collect()
+    except:
+        pass
+    finally:
+        state_dict = None
+        checkpoint = None
 
     # compile the model
     if COMPILE:
