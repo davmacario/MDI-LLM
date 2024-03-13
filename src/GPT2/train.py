@@ -260,15 +260,15 @@ def main() -> int:
 
         try:
             # Free up memory
-            torch.cuda.empty_cache()
             del state_dict
             del checkpoint
-            gc.collect()
         except:
             pass
         finally:
             state_dict = None
             checkpoint = None
+            torch.cuda.empty_cache()
+            gc.collect()
 
     # compile the model
     if COMPILE:
