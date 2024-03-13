@@ -96,11 +96,6 @@ N_LAYERS_NODES = {
     },
 }
 
-# CTX = (
-#     nullcontext()
-#     if DEVICE in {"cpu", "mps"}
-#     else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-# )
 HEADERLENGTH = 16  # Header length in chars
 MSGLENGTH = 16 * 2048  # Message length in characters
 
@@ -111,6 +106,7 @@ DTYPE = (
     else "float16"
 )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 COMPILE = False  # use PyTorch 2.0 to compile the model to be faster
+
 # DDP settings
 BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 
