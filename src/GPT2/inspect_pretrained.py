@@ -41,6 +41,7 @@ if __name__ == "__main__":
 
         sd = model.state_dict()
         with open(my_keys_file, "w") as f:
+            print(f"Writing keys of GPT model to {my_keys_file}")
             for k in sd:
                 f.write(f"{k}\n")
         # Not excluding any keys (no matches with ".attn.bias")
@@ -50,6 +51,7 @@ if __name__ == "__main__":
         model_hf = GPT2LMHeadModel.from_pretrained(args.model)
         sd_hf = model_hf.state_dict()
         with open(hf_keys_file, "w") as f:
+            print(f"Writing keys of Huggingface GPT model to {hf_keys_file}")
             for k in sd_hf:
                 f.write(f"{k}\n")
         # No matches for "masked_bias", but each layer contains ".attn.bias"
