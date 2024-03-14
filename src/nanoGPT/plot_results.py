@@ -42,6 +42,9 @@ if __name__ == "__main__":
     else:
         samples_info = ""
 
+    # Create output img folder, if not present
+    os.makedirs(os.path.join(script_dir, "img"), exist_ok=True)
+
     # Look for the files in the 'logs/tok-per-time' folder
     tok_t_folder = os.path.join(script_dir, "logs", "tok-per-time")
     assert os.path.exists(tok_t_folder), f"Error: folder not found {tok_t_folder}"
