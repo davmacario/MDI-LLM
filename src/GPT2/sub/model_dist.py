@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import gc
 import json
 import logging
 import os
@@ -969,17 +970,18 @@ class GPTDistributed:
         self,
         ckpt_path: str,
         nodes_info_path: Union[str, None] = None,
-        **setup,
+        model_was_split: bool = False,
+        **kwargs,
     ):
         """
-        Instantiate a GPTDistributed object to perform model-distributed
-        inference.
+        Instantiate a GPTDistributed object to perform model-distributed inference.
 
         Args:
-            config: GPTConfig object with the relevant model parameters
             ckpt_path: path of the full model (pretrained)
-            nodes_info_path: path of the configuration JSON - if not provided,
-                a default one is used
+            nodes_info_path: path of the configuration JSON - if not provided, a default
+                one is used
+            model_was_split: true if the model chunks have already been generated (the
+                starter node does not need to split the model himself)
         """
         if nodes_info_path is not None:
             settings_path = nodes_info_path
@@ -992,12 +994,12 @@ class GPTDistributed:
             )
 
         # Override global constants
-        if "verb" in setup:
+        if "verb" in kwargs:
             global VERB
-            VERB = bool(setup["verb"])
-        if "plots" in setup:
+            VERB = bool(kwargs["verb"])
+        if "plots" in kwargs:
             global PLOTS
-            PLOTS = bool(setup["plots"])
+            PLOTS = bool(kwargs["plots"])
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
@@ -1018,6 +1020,12 @@ class GPTDistributed:
         try:
             self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
         except:
+            # Erase variable to effectively free memory
+            try:
+                del self.model_ckpt
+                gc.collect()
+            except NameError:
+                pass  # model_ckpt not defined (good)
             # It may be that the model does not fit all in the VRAM
             if VERB:
                 print("Loading full model on RAM - not enough VRAM")
@@ -1027,32 +1035,41 @@ class GPTDistributed:
         # Extract state dict
         self.complete_model = self.model_ckpt["model"]  # State dict
 
-        # Remove problematic keys
-        # NOTE: this shouldn't happen anymore (it was a problem in nanoGPT)
-        unwanted_prefix = "_orig_mod."
-        for k, _ in list(self.complete_model.items()):
-            if k.startswith(unwanted_prefix):
-                self.complete_model[
-                    k[len(unwanted_prefix) :]
-                ] = self.complete_model.pop(k)
+        if not model_was_split:
+            # Remove problematic keys
+            # NOTE: this shouldn't happen anymore (it was a problem in nanoGPT)
+            unwanted_prefix = "_orig_mod."
+            for k in list(self.complete_model):
+                if k.startswith(unwanted_prefix):
+                    self.complete_model[
+                        k[len(unwanted_prefix) :]
+                    ] = self.complete_model.pop(k)
 
-        # Split model - NOTE: the function removes the elements from
-        # self.complete_model, saving memory (no duplicate values)
-        self.model_chunks, self.layers_info = split_parameters(
-            model_params=self.complete_model, n_nodes=self.n_total_nodes
-        )
-        assert (
-            len(self.complete_model) == 0
-        ), "Something went wrong when splitting model - leftover parameters!"
+            # Split model - NOTE: the function removes the elements from
+            # self.complete_model, saving memory (no duplicate values)
+            self.model_chunks, self.layers_info = split_parameters(
+                model_params=self.complete_model, n_nodes=self.n_total_nodes
+            )
+            assert (
+                len(self.complete_model) == 0
+            ), "Something went wrong when splitting model - leftover parameters!"
+            del self.complete_model
+            gc.collect()
 
-        self.n_layers_tot = (
-            self.layers_info["N_LAYERS_START"]
-            + self.layers_info["N_LAYERS_FINISH"]
-            + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
-        )
+            self.n_layers_tot = (
+                self.layers_info["N_LAYERS_START"]
+                + self.layers_info["N_LAYERS_FINISH"]
+                + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
+            )
 
-        global MODEL_TYPE
-        MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
+            global MODEL_TYPE
+            MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
+        else:
+            # TODO: define ckpt structure for model chunks - need to keep metadata of the
+            # full model!
+            # TODO: import model that has already been divided [need to define well the ckpt]
+            # Optional: if chunks are on the starter node, send them to the devices
+            pass
 
         # Extract tokenizer metadata information and check it exists
         if "config" in self.model_ckpt and "DATASET" in self.model_ckpt["config"]:
