@@ -61,8 +61,10 @@ if __name__ == "__main__":
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
     print("")
-    # print("Printing info about `checkpoint['config']`")
-    # print("> Elements: ", checkpoint["config"])
+    print("Printing info about `checkpoint['config']`")
+    print("> Elements: ")
+    for k, v in checkpoint["config"].items():
+        print(f"\t{k}: {v}")
     # print("")
     # print("Printing info about `checkpoint['model_args']`")
     # print("> Elements: ", checkpoint["model_args"])
@@ -94,21 +96,21 @@ if __name__ == "__main__":
     # Print first element (first key)
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
+    buf = io.BytesIO()
+    torch.save(checkpoint["model"], buf)
+    buf.seek(0)
+    print(f"Total model size (torch load to buffer): {len(buf.read())} B")
+
     if args.split:
         print("")
-        buf = io.BytesIO()
-        pickle.dump(checkpoint["model"], buf)
-        buf.seek(0)
-        print("Total model size (pickle): ", len(buf.read()))
-        print(
-            "Total model size (serialized): ",
-            get_obj_size(serialize_params(checkpoint["model"])),
-        )
-        buf = io.BytesIO()
-        torch.save(checkpoint["model"], buf)
-        buf.seek(0)
-        print("Total model size (torch load to buffer): ", len(buf.read()))
-
+        # buf = io.BytesIO()
+        # pickle.dump(checkpoint["model"], buf)
+        # buf.seek(0)
+        # print("Total model size (pickle): ", len(buf.read()))
+        # print(
+        #     "Total model size (serialized): ",
+        #     get_obj_size(serialize_params(checkpoint["model"])),
+        # )
         print("-> Splitting model")
         par_split, layers_info = split_parameters(checkpoint["model"], 3)
 
