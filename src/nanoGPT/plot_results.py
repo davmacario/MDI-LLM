@@ -2,20 +2,17 @@
 
 import argparse
 import os
-import sys
 
 import matplotlib.pyplot as plt
 import pandas as pd
-
-from sub.utils import remove_prefix
-
-script_dir = os.path.dirname(__file__)
-line_styles = ["-", "--", "-.", ":"]
 
 """
 Example usage:
     python3 plot_results.py 12layers -n 3samples
 """
+
+script_dir = os.path.dirname(__file__)
+line_styles = ["-", "--", "-.", ":"]
 
 parser = argparse.ArgumentParser(
     description="""Display number of generated tokens vs. 
