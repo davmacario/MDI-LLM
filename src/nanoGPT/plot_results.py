@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import sys
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
 from sub.utils import remove_prefix
@@ -14,49 +14,62 @@ line_styles = ["-", "--", "-.", ":"]
 
 """
 Example usage:
-    python3 plot_results.py 12layers 3samples
+    python3 plot_results.py 12layers -n 3samples
 """
 
+parser = argparse.ArgumentParser(
+    description="""Display number of generated tokens vs. 
+                time, comparing different settings, i.e., number of
+                nodes, for the same model used"""
+)
+parser.add_argument(
+    "MODEL",
+    type=str,
+    help="The model whose results should be plotted, e.g., '9layers', '12layers_128ctx'",
+)
+parser.add_argument(
+    "-n",
+    "--n-samples",
+    type=int,
+    default=None,
+    help="If specified, only display results that generate this number of samples",
+)
+
 if __name__ == "__main__":
-    # Parse arg: model type
-    assert len(sys.argv) > 1, "Missing argument: model type"
-    model_type = str(sys.argv[1])
+    args = parser.parse_args()
+    model_type = args.MODEL
 
     # Second optional arg: specify samples
-    try:
-        samples_info = str(sys.argv[2])
-    except:
+    if args.n_samples is not None:
+        samples_info = f"{args.n_samples}samples"
+    else:
         samples_info = ""
 
     # Look for the files in the 'logs/tok-per-time' folder
     tok_t_folder = os.path.join(script_dir, "logs", "tok-per-time")
-    assert os.path.exists(
-        tok_t_folder
-    ), f"Error: folder not found {tok_t_folder}"
+    assert os.path.exists(tok_t_folder), f"Error: folder not found {tok_t_folder}"
 
     fig = plt.figure(figsize=(12, 6))
-    ind_style_mdi = 0
-    ind_style_standalone = 0
     for fname in os.listdir(tok_t_folder):
-        # Ugly :/
         if model_type in fname and samples_info in fname:
-            if "mdi" in fname:
-                full_model_spec = remove_prefix(
-                    os.path.splitext(fname)[0], "tokens_time_samples_mdi_"
-                )
-                label = f"MDI {full_model_spec}"
-                style = "b" + line_styles[ind_style_mdi]
-                ind_style_mdi = (ind_style_mdi + 1) % len(line_styles)
+            # Line style
+            if "2samples" in fname:
+                line_style = line_styles[1]
+                n_samples = "2 samples"
+            elif "3samples" in fname:
+                line_style = line_styles[0]
+                n_samples = "3 samples"
             else:
-                full_model_spec = remove_prefix(
-                    os.path.splitext(fname)[0],
-                    "tokens_time_samples_standalone_",
-                )
-                label = f"Standalone {full_model_spec}"
-                style = "r" + line_styles[ind_style_standalone]
-                ind_style_standalone = (ind_style_standalone + 1) % len(
-                    line_styles
-                )
+                line_style = line_styles[2]
+                n_samples = ""
+
+            # Line color
+            if "mdi" in fname:
+                label = f"MDI {model_type} {n_samples}"
+                style = "b" + line_style
+            else:
+                label = f"Standalone {model_type} {n_samples}"
+                style = "r" + line_style
 
             points = pd.read_csv(
                 os.path.join(tok_t_folder, fname),
@@ -72,8 +85,6 @@ if __name__ == "__main__":
     plt.title("Comparison - standalone generation vs. MDI")
     plt.tight_layout()
     plt.savefig(
-        os.path.join(
-            script_dir, "img", f"tokens_time_comparison_{model_type}.png"
-        )
+        os.path.join(script_dir, "img", f"tokens_time_comparison_{model_type}.png")
     )
     plt.show()
