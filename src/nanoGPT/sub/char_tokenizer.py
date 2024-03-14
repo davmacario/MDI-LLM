@@ -10,15 +10,12 @@ class CharacterTokenizer:
     Each character is encoded with a specific token.
     """
 
-    def __init__(
-        self, stoi: Union[Dict, None] = None, itos: Union[Dict, None] = None
-    ):
+    def __init__(self, stoi: Union[Dict, None] = None, itos: Union[Dict, None] = None):
         """
         Instantiate a character tokenizer.
 
-        If no itos-stoi mappings are provided, the tokenizer is left
-        uninitialized, but it can be initialized by running 'self.tokenize' on a
-        piece of text.
+        If no itos-stoi mappings are provided, the tokenizer is left uninitialized and
+        it can be trained by running 'self.tokenize' on a piece of text.
 
         Args:
             stoi: mapping string (char) -> int, default None
