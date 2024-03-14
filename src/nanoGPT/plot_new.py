@@ -53,7 +53,6 @@ if __name__ == "__main__":
     fig = plt.figure(figsize=(12, 6))
     for fname in os.listdir(tok_t_folder):
         if model_type in fname and samples_info in fname:
-            # TODO: Red: single, Blue: 3, Green: 2
             # Line style
             if "mdi" in fname:
                 if "2samples" in fname:
@@ -74,7 +73,6 @@ if __name__ == "__main__":
                 sep=",",
                 names=["time", "tokens"],
             )
-            # TODO: query n. tokens <= 2000
             points_plot = points.query("tokens <= 2000")
             plt.plot(points_plot["tokens"], points_plot["time"], style, label=label)
 
