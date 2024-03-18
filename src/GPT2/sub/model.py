@@ -91,14 +91,21 @@ class CausalSelfAttention(nn.Module):
         # NOTE: flash attention unavailable on Jetson TX2 - only if Torch >= 2.0 (I'm on 1.12)
         self.flash = False
         if not self.flash:
-            if VERB:
-                print("Using slow attention - flash attention not available")
+            # if VERB:
+            #     print("Using slow attention - flash attention not available")
             self.register_buffer(
                 "bias",
-                torch.tril(torch.ones(config.block_size, config.block_size)).view(
-                    1, 1, config.block_size, config.block_size
-                ),
+                torch.tril(
+                    torch.ones((config.block_size, config.block_size), dtype=torch.bool)
+                ).view(1, 1, config.block_size, config.block_size),
             )
+        # self.register_buffer(
+        #     "bias",
+        #     torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+        #         1, 1, max_positions, max_positions
+        #     ),
+        #     persistent=False,
+        # )
 
     def forward(self, x):
         """
@@ -423,7 +430,7 @@ class GPT(nn.Module):
             "mlp.c_fc.weight",
             "mlp.c_proj.weight",
         ]
-        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+        # Openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
         assert len(sd_keys_hf) == len(
             sd_keys
