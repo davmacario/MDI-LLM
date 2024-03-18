@@ -34,7 +34,7 @@ def parse_args(train: bool = True, mdi: bool = False):
             "--init",
             type=str,
             default=INIT_FROM,
-            help="Can be: 'scratch', 'resume' - it decides whether a new model is trained or an existing one is used as starting point",
+            help="Can be: 'scratch', 'resume' or 'gpt2' (and variants: 'gpt2-medium', 'gpt2-large', 'gpt2-xl') - it decides whether a new model is trained or an existing one is used as starting point",
         )
         parser.add_argument(
             "--max-iters",

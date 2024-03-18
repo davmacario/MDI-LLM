@@ -13,6 +13,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
                         COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
@@ -244,10 +245,6 @@ def main() -> int:
         model.crop_block_size(BLOCK_SIZE)
         model.config.block_size = BLOCK_SIZE
 
-    # Distributed
-    if ddp:
-        model = torch.nn.DataParallel(model)
-
     # Move model to device (HERE! Not in __init__)
     model = model.to(DEVICE)
     # Print model settings
@@ -277,6 +274,10 @@ def main() -> int:
             checkpoint = None
             torch.cuda.empty_cache()
             gc.collect()
+
+    # Distributed
+    if ddp:
+        model = torch.nn.DataParallel(model)
 
     # compile the model
     if COMPILE:
