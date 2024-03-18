@@ -277,7 +277,7 @@ def main() -> int:
 
     # Distributed
     if ddp:
-        model = torch.nn.DataParallel(model)
+        model = DDP(model)
 
     # compile the model
     if COMPILE:
@@ -346,6 +346,14 @@ def main() -> int:
         # and using the GradScaler if data type is float16
         for micro_step in range(GRADIENT_ACCUMULATION_STEPS):
             # Missing: ddp update step
+            if ddp:
+                # in DDP training we only need to sync gradients at the last micro step.
+                # the official way to do this is with model.no_sync() context manager, but
+                # I really dislike that this bloats the code and forces us to repeat code
+                # looking at the source of that context manager, it just toggles this variable
+                model.require_backward_grad_sync = (
+                    micro_step == GRADIENT_ACCUMULATION_STEPS - 1
+                )
             with ctx:
                 logits, loss = model(X, Y)
                 # scale the loss to account for gradient accumulation
