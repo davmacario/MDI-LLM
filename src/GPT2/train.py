@@ -400,7 +400,14 @@ def main() -> int:
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * GRADIENT_ACCUMULATION_STEPS
             if local_iter_num >= 5:  # let the training loop settle a bit
-                mfu = model.estimate_mfu(BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt)
+                if isinstance(model, DDP):
+                    mfu = model.module.estimate_mfu(
+                        BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
+                    )
+                else:
+                    mfu = model.estimate_mfu(
+                        BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
+                    )
                 running_mfu = (
                     mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
                 )
