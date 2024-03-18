@@ -90,9 +90,24 @@ def main() -> int:
 
     # Data parallelism settings
     # ddp = ("cuda" in DEVICE) and (torch.cuda.device_count() > 1)
+    # NOTE: to use this, run as
+    #               $ torchrun [...] train.py [...]
     ddp = int(os.environ.get("RANK", -1)) != -1  # DDP iff rank > -1
     if ddp:
         torch.distributed.init_process_group(backend="nccl")
+        ddp_rank = int(os.environ["RANK"])
+        ddp_local_rank = int(os.environ["LOCAL_RANK"])
+        ddp_world_size = int(os.environ["WORLD_SIZE"])
+        device = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(device)
+        master_process = (
+            ddp_rank == 0
+        )  # this process will do logging, checkpointing etc.
+        seed_offset = ddp_rank  # each process gets a different seed
+        # world_size number of processes will be training simultaneously, so we can scale
+        # down the desired gradient accumulation iterations per process proportionally
+        assert GRADIENT_ACCUMULATION_STEPS % ddp_world_size == 0
+        GRADIENT_ACCUMULATION_STEPS //= ddp_world_size
 
     # -------------------------------------------------------------------------
 
