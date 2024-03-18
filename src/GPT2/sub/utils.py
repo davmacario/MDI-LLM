@@ -52,7 +52,7 @@ def get_obj_size(obj):
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
 def estimate_loss(
-    model: Union[GPT, nn.Module],
+    model: Union[GPT, nn.Module, nn.parallel.DistributedDataParallel],
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
     batch_size: int,
@@ -77,6 +77,11 @@ def estimate_loss(
     """
     ctx = kwargs.get("ctx", nullcontext())
 
+    if isinstance(model, nn.parallel.DistributedDataParallel):
+        model_conf = model.module.config
+    else:
+        model_conf = model.config
+
     out = {}
     dss = {
         "train": train,
@@ -87,7 +92,7 @@ def estimate_loss(
     for split in dss.keys():
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
-            x, y = get_batch(dss[split], batch_size, device, model.config)
+            x, y = get_batch(dss[split], batch_size, device, model_conf)
             with ctx:
                 _, loss = model(x, y)
             losses[k] = loss.item()
