@@ -33,6 +33,7 @@ DATASET = "shakespeare"  # NOTE: dataset *name*
 
 def main() -> int:
     global DATASET
+    global DEVICE
     # various inits, derived attributes, I/O setup
     master_process = True
     seed_offset = 0
@@ -98,8 +99,8 @@ def main() -> int:
         ddp_rank = int(os.environ["RANK"])
         ddp_local_rank = int(os.environ["LOCAL_RANK"])
         ddp_world_size = int(os.environ["WORLD_SIZE"])
-        device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(device)
+        DEVICE = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(DEVICE)
         master_process = (
             ddp_rank == 0
         )  # this process will do logging, checkpointing etc.
