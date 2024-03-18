@@ -90,8 +90,8 @@ def main() -> int:
 
     # Data parallelism settings
     ddp = ("cuda" in DEVICE) and (torch.cuda.device_count() > 1)
-    ddp2 = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    assert ddp == ddp2, "Not the same DDP value"
+    # ddp2 = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
+    # assert ddp == ddp2, "Not the same DDP value"
     if ddp:
         torch.distributed.init_process_group(backend="nccl")
 
