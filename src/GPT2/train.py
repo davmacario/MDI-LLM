@@ -294,15 +294,15 @@ def main() -> int:
             torch.cuda.empty_cache()
             gc.collect()
 
-    # Distributed
-    if ddp:
-        model = DDP(model)
-
     # compile the model
     if COMPILE:
         print("compiling the model... (takes a ~minute)")
         unoptimized_model = model
         model = torch.compile(model)  # requires PyTorch 2.0
+
+    # Distributed
+    if ddp:
+        model = DDP(model, device_ids=[ddp_local_rank])
 
     # ------- Training loop ---------------------------
 
@@ -311,6 +311,7 @@ def main() -> int:
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
     count_loss_incr = 0
+    raw_model = model.module if ddp else model
     while iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
@@ -333,7 +334,7 @@ def main() -> int:
                 best_val_loss = losses["val"]
                 if iter_num > 0:
                     checkpoint = {
-                        "model": model.state_dict(),
+                        "model": raw_model.state_dict(),
                         "optimizer": optimizer.state_dict(),
                         "model_args": model_args,
                         "iter_num": iter_num,
@@ -400,14 +401,9 @@ def main() -> int:
             # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * GRADIENT_ACCUMULATION_STEPS
             if local_iter_num >= 5:  # let the training loop settle a bit
-                if isinstance(model, DDP):
-                    mfu = model.module.estimate_mfu(
-                        BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
-                    )
-                else:
-                    mfu = model.estimate_mfu(
-                        BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
-                    )
+                mfu = raw_model.estimate_mfu(
+                    BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS, dt
+                )
                 running_mfu = (
                     mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
                 )
