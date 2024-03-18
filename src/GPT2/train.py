@@ -89,9 +89,8 @@ def main() -> int:
     config = {k: globals()[k] for k in config_keys}  # useful for logging
 
     # Data parallelism settings
-    ddp = ("cuda" in DEVICE) and (torch.cuda.device_count() > 1)
-    # ddp2 = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    # assert ddp == ddp2, "Not the same DDP value"
+    # ddp = ("cuda" in DEVICE) and (torch.cuda.device_count() > 1)
+    ddp = int(os.environ.get("RANK", -1)) != -1  # DDP iff rank > -1
     if ddp:
         torch.distributed.init_process_group(backend="nccl")
 
