@@ -86,6 +86,10 @@ def main() -> int:
 
     # Store globals in the config of the checkpoint
     config = {k: globals()[k] for k in config_keys}  # useful for logging
+
+    # Data parallelism settings
+    ddp = ("cuda" in DEVICE) and (torch.cuda.device_count() > 1)
+
     # -------------------------------------------------------------------------
 
     tokens_per_iter = (
@@ -239,6 +243,10 @@ def main() -> int:
             )
         model.crop_block_size(BLOCK_SIZE)
         model.config.block_size = BLOCK_SIZE
+
+    # Distributed
+    if ddp:
+        model = torch.nn.DataParallel(model)
 
     # Move model to device (HERE! Not in __init__)
     model = model.to(DEVICE)
