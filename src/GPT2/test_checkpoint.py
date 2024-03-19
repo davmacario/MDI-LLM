@@ -54,10 +54,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     checkpoint = torch.load(args.ckpt, map_location="cpu")
-    ckpt_sz = get_obj_size(checkpoint)
-    print("Checkpoint size (in RAM): ", ckpt_sz)
-    print("")
-
     print("Checkpoint breakdown:\n", checkpoint.keys())
     # KEYS: ['model', 'optimizer', 'model_args', 'iter_num', 'best_val_loss', 'config']
     print("")
@@ -87,14 +83,6 @@ if __name__ == "__main__":
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
     if not args.split:
         print(f"Number of transformer layers found in the model: {len(layers_unique)}")
-
-    # print(
-    #     f"\nProblematic keys:\nlm_head.weight: {checkpoint['model']['lm_head.weight'].shape}\nlm_head.bias: {checkpoint['model']['lm_head.bias'].shape}\n"
-    # )
-    # print("> Beginnings of keys: ", begin_once)
-
-    # Print first element (first key)
-    # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
     buf = io.BytesIO()
     torch.save(checkpoint["model"], buf)
