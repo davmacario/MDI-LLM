@@ -4,6 +4,7 @@ import gc
 import math
 import os
 import sys
+import warnings
 from contextlib import nullcontext
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
@@ -12,7 +13,7 @@ import torch
 from numpy.typing import NDArray
 from torch import nn
 
-from .config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
+from .config import (DEVICE, EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      N_LAYERS_NODES, VERB, WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT
@@ -52,7 +53,7 @@ def get_obj_size(obj):
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
 def estimate_loss(
-    model: Union[GPT, nn.Module, nn.parallel.DistributedDataParallel],
+    model: Union[GPT, nn.Module],
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
     batch_size: int,
@@ -77,11 +78,6 @@ def estimate_loss(
     """
     ctx = kwargs.get("ctx", nullcontext())
 
-    if isinstance(model, nn.parallel.DistributedDataParallel):
-        model_conf = model.module.config
-    else:
-        model_conf = model.config
-
     out = {}
     dss = {
         "train": train,
@@ -92,7 +88,7 @@ def estimate_loss(
     for split in dss.keys():
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
-            x, y = get_batch(dss[split], batch_size, device, model_conf)
+            x, y = get_batch(dss[split], batch_size, device, model.config)
             with ctx:
                 _, loss = model(x, y)
             losses[k] = loss.item()
@@ -387,7 +383,7 @@ def deserialize_params(params: Dict) -> Mapping[str, Any]:
 
 def count_model_layers(model_params: Dict[str, Any]) -> int:
     base_name_transformer = "transformer"
-    layer_name = "layers"
+    layer_name = "h"
 
     # Count the number of detected transformer layers
     layer_keys = [
@@ -397,6 +393,99 @@ def count_model_layers(model_params: Dict[str, Any]) -> int:
     ]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
     return len(layers_unique)
+
+
+def load_from_pt(model_path: str):
+    """
+    Load model weights from disk.
+
+    Args:
+        model_path: path to the checkpoint
+
+    Returns:
+        model state dictionary
+    """
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Unable to find model checkpoint at {model_path}")
+
+    try:
+        checkpoint = torch.load(model_path, map_location=DEVICE)
+    except:
+        if DEVICE != "cpu":
+            warnings.warn(
+                f"Unable to fit model ckpt in {DEVICE} memory! Retrying with cpu"
+            )
+            checkpoint = torch.load(model_path, map_location="cpu")
+        else:
+            raise MemoryError("Not enough system memory to load ckpt!")
+
+    return checkpoint["model"]
+
+
+def load_from_hf(model_type: str) -> Dict[str, Any]:
+    """
+    Load model weights from Huggingface.
+
+    NOTE: removed possibility to override dropout - as nanoGPT/model.py > from_pretrained
+
+    Args:
+        model_type: one of ("gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl")
+
+    Returns:
+        model state dictionary, imported from gpt2
+    """
+    assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
+
+    config_args = {
+        "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+        "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
+        "gpt2-large": dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
+        "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
+    }[model_type]
+
+    config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
+    config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
+    config_args["bias"] = True  # always True for GPT model checkpoints
+
+    # TODO: remove creation of GPT object (too much memory) - pay attention to .attn.bias
+    # attn.bias is just the triangular masking matrix used to compute attention
+    # Should not be a problem to use default one (?) - since we are not using flash attn
+    config = GPTConfig(**config_args)
+    model = GPT(config)
+    sd = model.state_dict()
+    sd_keys = [k for k in sd.keys() if not k.endswith(".attn.bias")]
+
+    model_hf = transformers.GPT2LMHeadModel.from_pretrained(model_type)
+    sd_hf = model_hf.state_dict()
+
+    sd_keys_hf = [
+        k
+        for k in sd_hf.keys()
+        if not (k.endswith(".attn.masked_bias") or k.endswith(".attn.bias"))
+    ]
+
+    transposed = [
+        "attn.c_attn.weight",
+        "attn.c_proj.weight",
+        "mlp.c_fc.weight",
+        "mlp.c_proj.weight",
+    ]
+    assert len(sd_keys_hf) == len(
+        sd_keys
+    ), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+    for k in sd_keys_hf:
+        if any(k.endswith(w) for w in transposed):
+            # Special treatment for Conv1D parameters
+            assert sd_hf[k].shape[::-1] == sd[k].shape
+            with torch.no_grad():
+                sd[k].copy_(sd_hf[k].t())
+        else:
+            # Vanilla copy over the other parameters
+            assert sd_hf[k].shape == sd[k].shape
+            with torch.no_grad():
+                sd[k].copy_(sd_hf[k])
+
+    return sd
 
 
 # ---------- PLOTS -------------------------------------------------------------
