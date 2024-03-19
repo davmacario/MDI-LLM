@@ -83,7 +83,7 @@ if __name__ == "__main__":
     begin_once = list(set(keys_begin))
 
     # Count the number of detected transformer layers
-    layer_keys = [k for k in mod_keys if k.startswith("transformer.layers")]
+    layer_keys = [k for k in mod_keys if k.startswith("transformer.h")]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
     if not args.split:
         print(f"Number of transformer layers found in the model: {len(layers_unique)}")
