@@ -429,7 +429,7 @@ def main() -> int:
         iter_num += 1
         local_iter_num += 1
 
-    print("Training stoped!")
+    print("Training stopped!")
     if ddp:
         torch.distributed.destroy_process_group()
     return 1
