@@ -112,7 +112,21 @@ def main():
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
+        try:
+            model.load_state_dict(state_dict)  # May need to use strict=False
+        except RuntimeError:
+            # Catch error thrown by 'load_state_dict'
+            # This needs to be done because I removed the .attn.bias (triangular mask)
+            # from the state dictionary (since it is a constant), as done by the
+            # pretrained models
+            # This allows me to download the models and store them locally/chunk them up
+            # with reduced memory overhead (no need to create duplicate of GPT2 classes)
+            missing_k, unexp_k = model.load_state_dict(state_dict, strict=False)
+            # For what said above, we just allow for some keys to be unexpected (bias)
+            # but if keys are missing there is a problem
+            if len(missing_k) > 0:
+                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+
     else:
         model = GPT.from_pretrained(args.ckpt, dict(dropout=0.0))
         gptconf = model.config

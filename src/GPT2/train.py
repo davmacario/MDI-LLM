@@ -29,11 +29,13 @@ from sub.utils import estimate_loss, get_lr
 script_dir = os.path.dirname(__file__)
 
 DATASET = "shakespeare"  # NOTE: dataset *name*
+ddp = False
 
 
 def main() -> int:
     global DATASET
     global DEVICE
+    global ddp
     # various inits, derived attributes, I/O setup
     master_process = True
     seed_offset = 0
@@ -233,7 +235,21 @@ def main() -> int:
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
         # ---
-        model.load_state_dict(state_dict)
+        try:
+            model.load_state_dict(state_dict)  # May need to use strict=False
+        except RuntimeError:
+            # Catch error thrown by 'load_state_dict'
+            # This needs to be done because I removed the .attn.bias (triangular mask)
+            # from the state dictionary (since it is a constant), as done by the
+            # pretrained models
+            # This allows me to download the models and store them locally/chunk them up
+            # with reduced memory overhead (no need to create duplicate of GPT2 classes)
+            missing_k, unexp_k = model.load_state_dict(state_dict, strict=False)
+            # For what said above, we just allow for some keys to be unexpected (bias)
+            # but if keys are missing there is a problem
+            if len(missing_k) > 0:
+                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
     elif INIT_FROM.startswith("gpt2"):
@@ -323,7 +339,7 @@ def main() -> int:
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
             losses = estimate_loss(
-                model, train_data, val_data, BATCH_SIZE, DEVICE, **{"ctx": ctx}
+                raw_model, train_data, val_data, BATCH_SIZE, DEVICE, **{"ctx": ctx}
             )
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
@@ -414,6 +430,8 @@ def main() -> int:
         local_iter_num += 1
 
     print("Training stoped!")
+    if ddp:
+        torch.distributed.destroy_process_group()
     return 1
 
 
@@ -421,4 +439,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        if ddp:
+            torch.distributed.destroy_process_group()
         print("Training stopped!")
