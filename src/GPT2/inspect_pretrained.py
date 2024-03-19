@@ -3,6 +3,7 @@
 import argparse
 import os
 import time
+import warnings
 
 import torch
 from transformers import GPT2LMHeadModel
@@ -32,10 +33,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if os.path.exists(args.model):
-        checkpoint = torch.load(args.model, map_location=device)
+        try:
+            checkpoint = torch.load(args.model, map_location=device)
+        except:
+            if device is not "cpu":
+                warnings.warn(f"Unable to fit model in {device}! Trying again with cpu")
+            else:
+                raise MemoryError("Not enough system memory!")
+        finally:
+            checkpoint = torch.load(args.model, map_location="cpu")
+
         print(f"Checkpoint elements: ")
         for k in checkpoint:
             print(f"\t{k}")
+        print("")
+
+        print("Info about checkpoint['config']")
+        for k, v in checkpoint["config"].items():
+            print(f"\t{k}: {v}")
         print("")
 
         print("Info about checkpoint['model']:")
