@@ -90,7 +90,12 @@ class StarterNode(nn.Module):
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load weights"""
-        self.load_state_dict(params)
+        try:
+            self.load_state_dict(params)
+        except RuntimeError:
+            missing_k, _ = self.load_state_dict(params, strict=False)
+            if len(missing_k) > 0:
+                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -143,7 +148,12 @@ class IntermediateNode(nn.Module):
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load weights"""
-        self.load_state_dict(params)
+        try:
+            self.load_state_dict(params)
+        except RuntimeError:
+            missing_k, _ = self.load_state_dict(params, strict=False)
+            if len(missing_k) > 0:
+                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -180,7 +190,12 @@ class FinisherNode(nn.Module):
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load weights"""
-        self.load_state_dict(params)
+        try:
+            self.load_state_dict(params)
+        except RuntimeError:
+            missing_k, _ = self.load_state_dict(params, strict=False)
+            if len(missing_k) > 0:
+                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -1035,6 +1050,7 @@ class GPTDistributed:
         # Extract state dict
         self.complete_model = self.model_ckpt["model"]  # State dict
 
+        # TODO: implement possibility to load chunks from disk
         if not model_was_split:
             # Remove problematic keys
             # NOTE: this shouldn't happen anymore (it was a problem in nanoGPT)
@@ -1050,6 +1066,8 @@ class GPTDistributed:
             self.model_chunks, self.layers_info = split_parameters(
                 model_params=self.complete_model, n_nodes=self.n_total_nodes
             )
+            # FIXME: this assert may fail since we removed attn.bias from new ckpts
+            # Or it may not... attn.bias is passed over and not used
             assert (
                 len(self.complete_model) == 0
             ), "Something went wrong when splitting model - leftover parameters!"
