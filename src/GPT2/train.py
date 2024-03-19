@@ -358,7 +358,7 @@ def main() -> int:
                         "config": config,
                     }
                     # Prevent loss of old parameters - do not overwrite
-                    if INIT_FROM != "scratch":
+                    if INIT_FROM == "resume":
                         ckpt_path_upd = os.path.join(
                             out_dir,
                             f"{os.path.splitext(os.path.basename(ckpt_path))[0]}_upd.pt",
