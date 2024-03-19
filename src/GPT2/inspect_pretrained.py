@@ -36,7 +36,7 @@ if __name__ == "__main__":
         try:
             checkpoint = torch.load(args.model, map_location=device)
         except:
-            if device is not "cpu":
+            if device != "cpu":
                 warnings.warn(f"Unable to fit model in {device}! Trying again with cpu")
             else:
                 raise MemoryError("Not enough system memory!")
