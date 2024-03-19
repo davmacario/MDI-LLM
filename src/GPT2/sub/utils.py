@@ -16,7 +16,7 @@ from torch import nn
 from .config import (DEVICE, EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      N_LAYERS_NODES, VERB, WARMUP_ITERS)
 from .data_loader import get_batch
-from .model import GPT
+from .model import GPT, GPTConfig
 
 
 def get_obj_size(obj):
@@ -395,7 +395,7 @@ def count_model_layers(model_params: Dict[str, Any]) -> int:
     return len(layers_unique)
 
 
-def load_from_pt(model_path: str):
+def load_from_pt(model_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Load model weights from disk.
 
@@ -404,6 +404,7 @@ def load_from_pt(model_path: str):
 
     Returns:
         model state dictionary
+        model config (args of GPTConfig) as dictionary
     """
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Unable to find model checkpoint at {model_path}")
@@ -419,10 +420,10 @@ def load_from_pt(model_path: str):
         else:
             raise MemoryError("Not enough system memory to load ckpt!")
 
-    return checkpoint["model"]
+    return checkpoint["model"], checkpoint["config"]
 
 
-def load_from_hf(model_type: str) -> Dict[str, Any]:
+def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Load model weights from Huggingface.
 
@@ -433,6 +434,7 @@ def load_from_hf(model_type: str) -> Dict[str, Any]:
 
     Returns:
         model state dictionary, imported from gpt2
+        model config (arguments of GPTConfig) as dictionary
     """
     assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
 
@@ -485,7 +487,7 @@ def load_from_hf(model_type: str) -> Dict[str, Any]:
             with torch.no_grad():
                 sd[k].copy_(sd_hf[k])
 
-    return sd
+    return sd, config
 
 
 # ---------- PLOTS -------------------------------------------------------------
