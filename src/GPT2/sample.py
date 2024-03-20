@@ -134,6 +134,7 @@ def main():
         n_model_layers = gptconf.n_layer
         checkpoint = None
 
+    model.eval()
     model.to(DEVICE)
     # if COMPILE:
     #     model = torch.compile(model)  # requires PyTorch 2.0 (optional)
@@ -202,9 +203,6 @@ def main():
             start = f.read()
     start_ids = encode(start)
     x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
-
-    # Set evaluation mode
-    model.eval()
 
     # Run generation
     tok_time_all = []
