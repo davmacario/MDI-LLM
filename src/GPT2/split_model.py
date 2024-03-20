@@ -64,7 +64,7 @@ if __name__ == "__main__":
     if os.path.exists(input_model):
         print(f"Loading model from {input_model}")
         model_type = remove_prefix(
-            os.path.splitext(os.path.basename(input_model))[0][:4], "_"
+            os.path.splitext(os.path.basename(input_model))[0][4:], "_"
         )
         # Assuming input model in dataset/out/
         up_1_level = os.path.dirname(input_model)
