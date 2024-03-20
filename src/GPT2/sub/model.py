@@ -89,24 +89,20 @@ class CausalSelfAttention(nn.Module):
         self.dropout = config.dropout
 
         # NOTE: flash attention unavailable on Jetson TX2 - only if Torch >= 2.0 (I'm on 1.12)
+        # Force slow attention for the sake of testing
+        # self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         self.flash = False
         if not self.flash:
-            # if VERB:
-            #     print("Using slow attention - flash attention not available")
+            if VERB:
+                print("Using slow attention - flash attention not available")
+            # From HF, not Karpathy
             self.register_buffer(
                 "bias",
                 torch.tril(
                     torch.ones((config.block_size, config.block_size), dtype=torch.bool)
                 ).view(1, 1, config.block_size, config.block_size),
-                # persistent=False,  # Prevent from saving the buffer to .pt (not in state_dict)
+                persistent=False,  # Prevent saving buffer to .pt (not in state_dict)
             )
-        # self.register_buffer(
-        #     "bias",
-        #     torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
-        #         1, 1, max_positions, max_positions
-        #     ),
-        #     persistent=False,
-        # )
 
     def forward(self, x):
         """
@@ -138,7 +134,15 @@ class CausalSelfAttention(nn.Module):
 
         # Causal self-attention - output size: (B, nh, T, T)
         if self.flash:
-            raise ValueError()
+            # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=True,
+            )
         else:
             hs = q.shape[-1]  # Normalization factor (head size - len of Q, K, V)
             # (B, nh, T, hs) @ (B, nh, hs, T):
