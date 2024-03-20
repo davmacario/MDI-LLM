@@ -377,7 +377,7 @@ class GPTServer:
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
-        self.model = self.model.to(DEVICE)
+        self.model = self.model.to(self.device)
         self.model.load_weights(self.model_params)
         if set_eval:
             # Set to evaluation mode (no backpropagation)
@@ -893,7 +893,7 @@ class GPTServer:
                 ), f"Expected sample index {exp_ind}, received {samp_ind}"
                 exp_ind = (samp_ind + 1) % self.n_nodes
 
-                ins = in_msg["data"].to(self.model_config.device)
+                ins = in_msg["data"].to(self.device)
                 if self.running:
                     print(f"> Generating {loopsigns[iter % 4]}", end="\r")
                     # Forward pass
@@ -954,6 +954,7 @@ class GPTServer:
                 self.model_config = GPTConfig(**init_msg["model_config"])
                 self.model_params = init_msg["params"]
                 self.n_nodes = init_msg["n_nodes"]
+                self.device = init_msg["device"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
                 if VERB:
