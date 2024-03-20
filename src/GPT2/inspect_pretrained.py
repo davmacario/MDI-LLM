@@ -38,10 +38,9 @@ if __name__ == "__main__":
         except:
             if device != "cpu":
                 warnings.warn(f"Unable to fit model in {device}! Trying again with cpu")
+                checkpoint = torch.load(args.model, map_location="cpu")
             else:
                 raise MemoryError("Not enough system memory!")
-        finally:
-            checkpoint = torch.load(args.model, map_location="cpu")
 
         print(f"Checkpoint elements: ")
         for k in checkpoint:
@@ -50,6 +49,11 @@ if __name__ == "__main__":
 
         print("Info about checkpoint['config']")
         for k, v in checkpoint["config"].items():
+            print(f"\t{k}: {v}")
+        print("")
+
+        print("Info about `checkpoint['model_args']`")
+        for k, v in checkpoint["model_args"].items():
             print(f"\t{k}: {v}")
         print("")
 
