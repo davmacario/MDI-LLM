@@ -19,7 +19,7 @@ from sub import BPETokenizer, CharacterTokenizer
 from sub.config import DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
-from sub.utils import count_model_layers, plot_tokens_per_time
+from sub.utils import count_model_layers, find_eot, plot_tokens_per_time
 
 script_dir = os.path.dirname(__file__)
 
@@ -228,7 +228,8 @@ def main():
                             for x in tok_time
                         ]
                     )
-                print(decode(y[0].tolist()))
+                decoded_text = decode(y[0].tolist())
+                print(decoded_text[: find_eot(decoded_text)])
                 print("---------------")
 
     tot_gen_time = time.time() - t_start

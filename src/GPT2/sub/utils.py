@@ -158,6 +158,20 @@ def remove_prefix(text: str, prefix: str) -> str:
     return text
 
 
+def find_eot(text: str) -> int:
+    """
+    Return the index of the first character of '<|endoftext|>', if found in text.
+    Else, return len(text)
+    """
+    tbf = "<|endoftext|>"
+
+    for i in range(0, len(text) - len(tbf)):
+        if text[i:].startswith(tbf):
+            return i
+
+    return len(text)
+
+
 def split_parameters(
     model_params: Dict[str, Any], n_nodes: int
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
