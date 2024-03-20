@@ -5,6 +5,8 @@ import gc
 import os
 import warnings
 
+import torch
+
 from sub.utils import (load_from_hf, load_from_pt, remove_prefix,
                        split_parameters)
 
@@ -61,10 +63,16 @@ if __name__ == "__main__":
     input_model = args.model
     if os.path.exists(input_model):
         print(f"Loading model from {input_model}")
-        model_type = remove_prefix(os.path.splitext(os.path.basename(input_model))[0][:4], "_")
+        model_type = remove_prefix(
+            os.path.splitext(os.path.basename(input_model))[0][:4], "_"
+        )
         # Assuming input model in dataset/out/
         up_1_level = os.path.dirname(input_model)
-        dataset_path = os.path.dirname(up_1_level) if os.path.basename(up_1_level) == "out" else up_1_level
+        dataset_path = (
+            os.path.dirname(up_1_level)
+            if os.path.basename(up_1_level) == "out"
+            else up_1_level
+        )
         config = {
             "DATASET": os.path.basename(dataset_path),
             "DATASET_PATH": dataset_path,
@@ -88,18 +96,18 @@ if __name__ == "__main__":
     # Print result of chunk partition
     n_interm = n_nodes - 2
     print("Using the following split:")
-    print(f"Starter: {layer_info["N_LAYERS_START"]} layers")
-    print(f"{n_interm} Intermediate(s): {layer_info["N_LAYERS_INTERM"]} layers")
-    print(f"Finisher: {layer_info["N_LAYERS_FINISH"]} layers")
+    print(f"Starter: {layer_info['N_LAYERS_START']} layers")
+    print(f"{n_interm} Intermediate(s): {layer_info['N_LAYERS_INTERM']} layers")
+    print(f"Finisher: {layer_info['N_LAYERS_FINISH']} layers")
 
     # Store each chunk as dict:
     # - model: actual model chunk (params)
     # - model_args: model parameters (to be passed to GPTConfig after)
     # - config: globals of training - maybe not needed...
-    # - dist_config: layer_info
+    # - dist_config: layer_info - n. of layers for each node
 
     os.makedirs(args.out_dir, exist_ok=True)
-    
+
     # Starter
     starter_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_starter.pt")
     ckpt = {
@@ -108,12 +116,27 @@ if __name__ == "__main__":
         "dist_config": layer_info,
         "config": config,
     }
+    torch.save(ckpt, starter_fname)
 
     # Intermediate nodes
     for i in range(n_interm):
         curr_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_intermediate{i}.pt")
+        ckpt = {
+            "model": chunks["intermediate"][i],
+            "model_args": model_args,
+            "dist_config": layer_info,
+            "config": config,
+        }
+        torch.save(ckpt, curr_fname)
 
     # Finisher
-    finisher_name = os.path.join(args.out_dir, f"ckpt_{model_type}_finisher.pt")
+    finisher_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_finisher.pt")
+    ckpt = {
+        "model": chunks["finisher"],
+        "model_args": model_args,
+        "dist_config": layer_info,
+        "config": config,
+    }
+    torch.save(ckpt, finisher_fname)
 
     print("Files have been written to disk!")
