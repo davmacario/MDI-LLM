@@ -203,7 +203,7 @@ def split_parameters(
     assert n_nodes >= 2, "There must be at least 2 nodes in the network"
 
     # Set up some parameters - they are used to gather the relevant keys
-    base_name_transformer = "transformer"
+    base_name_transformer = "transformer"  # Name of the ModuleDict in GPT
     tok_emb = "wte"
     pos_emb = "wpe"
     layer_name = "h"
@@ -279,7 +279,7 @@ def split_parameters(
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
-                new_k = f"starter_model.layers.{loc_ind}{end}"
+                new_k = f"starter_model.{layer_name}.{loc_ind}{end}"
                 out_chunks["starter"][new_k] = model_params.pop(k)
 
     # 2. Select params for every Intermediate
@@ -312,7 +312,7 @@ def split_parameters(
             for k in relevant_keys:
                 if k.startswith(prefix):
                     end = remove_prefix(k, prefix)
-                    new_k = f"intermediate_model.layers.{local_layer_ind}{end}"
+                    new_k = f"intermediate_model.{layer_name}.{local_layer_ind}{end}"
                     curr_params[new_k] = model_params.pop(k)
             local_layer_ind += 1
 
@@ -343,7 +343,7 @@ def split_parameters(
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
-                new_k = f"finisher_model.layers.{local_layer_ind}{end}"
+                new_k = f"finisher_model.{layer_name}.{local_layer_ind}{end}"
                 out_chunks["finisher"][new_k] = model_params.pop(k)
         local_layer_ind += 1
 
