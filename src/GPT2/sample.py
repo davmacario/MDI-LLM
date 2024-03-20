@@ -132,6 +132,7 @@ def main():
         gptconf = model.config
         model_type = args.ckpt
         n_model_layers = gptconf.n_layer
+        checkpoint = None
 
     model.to(DEVICE)
     # if COMPILE:
@@ -143,25 +144,32 @@ def main():
     meta_path = None
     vocab_path = None
     merges_path = None
-    if (
-        not using_huggingface
-        and "config" in checkpoint
-        and "DATASET" in checkpoint["config"]
-    ):
-        dataset_name = os.path.basename(
-            os.path.normpath(checkpoint["config"]["DATASET"])
-        )
-        # Char
-        meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
-        # BPE
-        vocab_path = os.path.join(script_dir, "data", dataset_name, "encoder.json")
-        merges_path = os.path.join(script_dir, "data", dataset_name, "merges.bpe")
-        if os.path.exists(meta_path):
-            # Use char token
-            load_char = True
-        elif os.path.exists(vocab_path) and os.path.exists(merges_path):
-            # Use BPE token
-            load_bpe = True
+    if checkpoint is not None:
+        if (
+            not using_huggingface
+            and "config" in checkpoint
+            and "DATASET" in checkpoint["config"]
+        ):
+            dataset_name = os.path.basename(
+                os.path.normpath(checkpoint["config"]["DATASET"])
+            )
+            # Char
+            meta_path = os.path.join(script_dir, "data", dataset_name, "meta.pkl")
+            # BPE
+            vocab_path = os.path.join(script_dir, "data", dataset_name, "encoder.json")
+            merges_path = os.path.join(script_dir, "data", dataset_name, "merges.bpe")
+            if os.path.exists(meta_path):
+                # Use char token
+                load_char = True
+            elif os.path.exists(vocab_path) and os.path.exists(merges_path):
+                # Use BPE token
+                load_bpe = True
+        elif (
+            not using_huggingface
+            and "config" in checkpoint
+            and "DATASET_PATH" in checkpoint["config"]
+        ):
+            pass
 
     # Free up memory
     checkpoint = None
