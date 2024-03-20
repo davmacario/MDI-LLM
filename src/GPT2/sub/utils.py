@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import torch
 from numpy.typing import NDArray
 from torch import nn
+from transformers import GPT2LMHeadModel
 
 from .config import (DEVICE, EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      N_LAYERS_NODES, VERB, WARMUP_ITERS)
@@ -471,7 +472,7 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     sd = model.state_dict()
     sd_keys = [k for k in sd.keys() if not k.endswith(".attn.bias")]
 
-    model_hf = transformers.GPT2LMHeadModel.from_pretrained(model_type)
+    model_hf = GPT2LMHeadModel.from_pretrained(model_type)
     sd_hf = model_hf.state_dict()
 
     sd_keys_hf = [

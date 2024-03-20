@@ -4,14 +4,7 @@ import argparse
 import gc
 import os
 import warnings
-from typing import Any, Dict
 
-import torch
-import transformers
-
-from sub.config import N_HEADS  # TODO
-from sub.config import BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD, N_LAYER
-from sub.model import GPT, GPTConfig
 from sub.utils import (load_from_hf, load_from_pt, remove_prefix,
                        split_parameters)
 
@@ -33,12 +26,14 @@ parser = argparse.ArgumentParser(description=script_docstring)
 parser.add_argument(
     "model",
     type=str,
-    help="Model to be split. It can either be the path of a model stored locally (.pt) or a gpt2 flavor",
+    help="""Model to be split. It can either be the path of a model stored locally
+    (.pt) or a gpt2 flavor""",
 )
 parser.add_argument(
     "n_chunks",
     type=int,
-    help="Number of chunks to be produced. How the model is split depends on the configuration (config.py)",
+    help="""Number of chunks to be produced. How the model is split depends on the
+    configuration (config.py)""",
 )
 # Optional:
 parser.add_argument(
@@ -46,19 +41,15 @@ parser.add_argument(
     "--out-dir",
     type=str,
     default=os.path.join(script_dir, "out", "split_models"),
-    help="Directory where to place the '.pt' files containing the chunks obtained by splitting the model; note that any older model present in the same folder will be overwritten",
+    help="""Directory where to place the '.pt' files containing the chunks obtained by 
+    splitting the model; note that any older model present in the same folder will be
+    overwritten""",
 )
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
 
-    # TODO:
-    # - Open correct model
-    # - If .pt: can use the usual function to split model
-    # - Else: go through code, my guess is that we should first load the GPT model
-    #   'from_pretrained', then extract the state_dict(), on which we can call the usual
-    #   function to split the parameters
     # NOTE: need to be careful about the memory consumption - would it be possible to
     # load the model without initializing the class???
     valid_gpt2_flavors = {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
@@ -105,7 +96,7 @@ if __name__ == "__main__":
     # - model: actual model chunk (params)
     # - model_args: model parameters (to be passed to GPTConfig after)
     # - config: globals of training - maybe not needed...
-    # TODO: - dist_config: layer_info
+    # - dist_config: layer_info
 
     os.makedirs(args.out_dir, exist_ok=True)
     
@@ -124,3 +115,5 @@ if __name__ == "__main__":
 
     # Finisher
     finisher_name = os.path.join(args.out_dir, f"ckpt_{model_type}_finisher.pt")
+
+    print("Files have been written to disk!")
