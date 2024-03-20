@@ -61,6 +61,10 @@ if __name__ == "__main__":
     print("> Elements: ")
     for k, v in checkpoint["config"].items():
         print(f"\t{k}: {v}")
+    print("Printing info about `checkpoint['model_args']`")
+    print("> Elements: ")
+    for k, v in checkpoint["model_args"].items():
+        print(f"\t{k}: {v}")
     # print("")
     # print("Printing info about `checkpoint['model_args']`")
     # print("> Elements: ", checkpoint["model_args"])
