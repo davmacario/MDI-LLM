@@ -29,12 +29,15 @@ from sub.utils import estimate_loss, get_lr
 script_dir = os.path.dirname(__file__)
 
 DATASET = "shakespeare"  # NOTE: dataset *name*
+DATASET_PATH = os.path.join(script_dir, "data", DATASET)
 ddp = False
 
 
 def main() -> int:
+    # NOTE: imported because the global variables are then stored to the ckpt
     global DATASET
     global DEVICE
+    global DATASET_PATH
     global ddp
     # various inits, derived attributes, I/O setup
     master_process = True
@@ -74,6 +77,8 @@ def main() -> int:
     else:
         out_dir = os.path.join(dataset_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
+
+    DATASET_PATH = dataset_dir
 
     GRADIENT_ACCUMULATION_STEPS = args.grad_acc_steps
 
