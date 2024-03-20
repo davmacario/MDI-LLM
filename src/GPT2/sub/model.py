@@ -98,6 +98,7 @@ class CausalSelfAttention(nn.Module):
                 torch.tril(
                     torch.ones((config.block_size, config.block_size), dtype=torch.bool)
                 ).view(1, 1, config.block_size, config.block_size),
+                # persistent=False,  # Prevent from saving the buffer to .pt (not in state_dict)
             )
         # self.register_buffer(
         #     "bias",
