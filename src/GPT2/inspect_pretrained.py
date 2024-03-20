@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import io
 import os
 import time
 import warnings
@@ -72,6 +73,11 @@ if __name__ == "__main__":
         layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
         print(f"Number of transformer layers found in the model: {len(layers_unique)}")
 
+        buf = io.BytesIO()
+        torch.save(checkpoint["model"], buf)
+        buf.seek(0)
+        print(f"total model size (torch load to buffer): {len(buf.read())} b")
+
     elif args.model in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
         print(f"Loading pretrained model: {args.model}")
         config_args = {
@@ -88,6 +94,12 @@ if __name__ == "__main__":
         model = GPT(config)
 
         sd = model.state_dict()
+
+        buf = io.BytesIO()
+        torch.save(sd, buf)
+        buf.seek(0)
+        print(f"Total model size (torch load to buffer): {len(buf.read())} B")
+
         with open(my_keys_file, "w") as f:
             print(f"Writing keys of GPT model to {my_keys_file}")
             for k in sd:
@@ -101,6 +113,12 @@ if __name__ == "__main__":
         # Init. HF model
         model_hf = GPT2LMHeadModel.from_pretrained(args.model)
         sd_hf = model_hf.state_dict()
+
+        buf = io.BytesIO()
+        torch.save(sd_hf, buf)
+        buf.seek(0)
+        print(f"Total HF model size (torch load to buffer): {len(buf.read())} B")
+
         with open(hf_keys_file, "w") as f:
             print(f"Writing keys of Huggingface GPT model to {hf_keys_file}")
             for k in sd_hf:
