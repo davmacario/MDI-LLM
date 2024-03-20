@@ -1090,23 +1090,31 @@ class GPTDistributed:
             pass
 
         # Extract tokenizer metadata information and check it exists
-        if "config" in self.model_ckpt and "DATASET" in self.model_ckpt["config"]:
+        if "config" in self.model_ckpt and "DATASET_PATH" in self.model_ckpt["config"]:
+            dataset_dir = os.path.normpath(self.model_ckpt["config"]["DATASET_PATH"])
+            dataset_name = os.path.basename(dataset_dir)
+        elif "config" in self.model_ckpt and "DATASET" in self.model_ckpt["config"]:
             dataset_name = os.path.basename(
                 os.path.normpath(self.model_ckpt["config"]["DATASET"])
             )
             dataset_dir = os.path.join(script_dir, "..", "data", dataset_name)
-            if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
-                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
-                if VERB:
-                    print(f"Using character-level tokenizer ({self.tok_meta_path})")
-            elif os.path.exists(
-                os.path.join(dataset_dir, "encoder.json")
-            ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
-                self.tok_meta_path = dataset_dir
-                if VERB:
-                    print(f"Using BPE tokenizer found in {dataset_dir}")
         else:
             raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
+            # TODO: use tiktoken
+
+        if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
+            self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
+            if VERB:
+                print(f"Using character-level tokenizer ({self.tok_meta_path})")
+        elif os.path.exists(
+            os.path.join(dataset_dir, "encoder.json")
+        ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
+            self.tok_meta_path = dataset_dir
+            if VERB:
+                print(f"Using BPE tokenizer found in {dataset_dir}")
+        else:
+            raise ValueError("No tokenizer found")
+        # TODO: use tiktoken
 
         self.model_config = GPTConfig(**self.model_ckpt["model_args"])
 
