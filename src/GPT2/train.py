@@ -253,7 +253,11 @@ def main() -> int:
             # For what said above, we just allow for some keys to be unexpected (bias)
             # but if keys are missing there is a problem
             if len(missing_k) > 0:
-                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+                raise RuntimeError(
+                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
+                )
+            if not all([k.endswith(".attn.bias") for k in unexp_k]):
+                raise RuntimeError(f"Unrecognized extra keys:\n\t{unexp_k}")
 
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
