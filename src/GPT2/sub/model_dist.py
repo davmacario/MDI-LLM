@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
 import requests
+import tiktoken
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -24,9 +25,7 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.server_config import MAX_TRIES
-from sub.utils import (deserialize_params, get_obj_size, loading_bar,
-                       plot_tokens_per_time, serialize_params,
-                       split_parameters)
+from sub.utils import loading_bar, plot_tokens_per_time, split_parameters
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -93,9 +92,13 @@ class StarterNode(nn.Module):
         try:
             self.load_state_dict(params)
         except RuntimeError:
-            missing_k, _ = self.load_state_dict(params, strict=False)
+            missing_k, unwanted_k = self.load_state_dict(params, strict=False)
             if len(missing_k) > 0:
-                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+                raise RuntimeError(
+                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
+                )
+            if not all([k.endswith(".attn.bias") for k in unwanted_k]):
+                raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -151,9 +154,13 @@ class IntermediateNode(nn.Module):
         try:
             self.load_state_dict(params)
         except RuntimeError:
-            missing_k, _ = self.load_state_dict(params, strict=False)
+            missing_k, unwanted_k = self.load_state_dict(params, strict=False)
             if len(missing_k) > 0:
-                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+                raise RuntimeError(
+                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
+                )
+            if not all([k.endswith(".attn.bias") for k in unwanted_k]):
+                raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -184,7 +191,7 @@ class FinisherNode(nn.Module):
             dict(
                 h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
-                lm_head=nn.Linear(config.n_embd, config.vocab_size),
+                lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),  # !
             )
         )
 
@@ -193,9 +200,18 @@ class FinisherNode(nn.Module):
         try:
             self.load_state_dict(params)
         except RuntimeError:
-            missing_k, _ = self.load_state_dict(params, strict=False)
+            missing_k, unwanted_k = self.load_state_dict(params, strict=False)
             if len(missing_k) > 0:
-                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+                raise RuntimeError(
+                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
+                )
+            if not all(
+                [
+                    k.endswith(".attn.bias") or k.endswith(".lm_head.bias")
+                    for k in unwanted_k
+                ]
+            ):
+                raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
         self.params_init = True
         if VERB:
             print(f"Weights loaded!")
@@ -237,6 +253,8 @@ class GPTServer:
     sock_to_prev_prop: Tuple = ()  # NOTE: used now
     sock_to_next: Union[socket.socket, None] = None
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
+
+    device = DEVICE
 
     # Message queue
     message_queue = deque([])
@@ -302,6 +320,7 @@ class GPTServer:
             self.model_params = dict(starter_config["params"])
             self.model_config = starter_config["model_config"]
             self.tok_meta_path = str(starter_config["tok_metadata_path"])
+            self.device = starter_config["device"]
 
             self.init_model(starter_config["n_layers"], set_eval=True)
 
@@ -358,7 +377,7 @@ class GPTServer:
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
-        self.model = self.model.to(self.model_config.device)
+        self.model = self.model.to(DEVICE)
         self.model.load_weights(self.model_params)
         if set_eval:
             # Set to evaluation mode (no backpropagation)
@@ -410,7 +429,12 @@ class GPTServer:
             assert max_new_tokens is not None
 
             self._load_tokenizer()
-            self.tok_encode = self.tok.encode
+            if isinstance(self.tok, tiktoken.Encoding):
+                self.tok_encode = lambda s: self.tok.encode(
+                    s, allowed_special={"<|endoftext|>"}
+                )
+            else:
+                self.tok_encode = self.tok.encode
             self.tok_decode = self.tok.decode
 
             if VERB:
@@ -570,7 +594,9 @@ class GPTServer:
 
     # ----- Private -----------------------------------------------------------
 
-    def _load_tokenizer(self) -> CharacterTokenizer:
+    def _load_tokenizer(
+        self,
+    ) -> Union[CharacterTokenizer, BPETokenizer, tiktoken.Encoding]:
         """
         Load the tokenizer information from the path specified in class
         attribute `self.tok_meta_path`.
@@ -580,9 +606,14 @@ class GPTServer:
         Returns:
             the tokenizer object
         """
-        if VERB:
-            print(f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}")
-        logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
+        if self.tok_meta_path is not None:
+            logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
+            if VERB:
+                print(f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}")
+        else:
+            logger_wp.info("Loading GPT-2 tokenizer")
+            if VERB:
+                print("[INFO]: loading GPT-2 tokenizer")
 
         if self.tok_meta_path.endswith(".pkl"):
             with open(self.tok_meta_path, "rb") as f:
@@ -593,9 +624,7 @@ class GPTServer:
             merges_path = os.path.join(self.tok_meta_path, "merges.bpe")
             self.tok = BPETokenizer(vocab_path, merges_path)
         else:
-            raise FileNotFoundError(
-                f"Unable to find tokenizer information at {self.tok_meta_path}"
-            )
+            self.tok = tiktoken.get_encoding("gpt2")  # Class: tiktoken.Encoding
 
         return self.tok
 
@@ -729,9 +758,7 @@ class GPTServer:
         start = "\n"
         start_ids = self.tok_encode(start)
         idx = [
-            torch.tensor(start_ids, dtype=torch.long, device=self.model_config.device)[
-                None, ...
-            ]
+            torch.tensor(start_ids, dtype=torch.long, device=self.device)[None, ...]
             for _ in range(self.n_nodes)
         ]
 
@@ -769,7 +796,7 @@ class GPTServer:
                         sample_in == sample_id
                     ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
 
-                    out_logits = in_msg["data"].to(self.model_config.device)
+                    out_logits = in_msg["data"].to(self.device)
                     logits = out_logits[:, -1, :] / self.temperature
                     if self.top_k is not None:
                         v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
@@ -979,6 +1006,7 @@ class GPTDistributed:
         "prev_node": {},  # From .json
         "next_node": {},  # From .json
         "n_layers": 0,  # Number of transformer layers
+        "device": "cpu",
     }
 
     def __init__(
@@ -1047,11 +1075,12 @@ class GPTDistributed:
             logger_wp.warn("Loading full model on RAM - not enough VRAM")
             self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
 
-        # Extract state dict
-        self.complete_model = self.model_ckpt["model"]  # State dict
-
         # TODO: implement possibility to load chunks from disk
         if not model_was_split:
+            # Extract state dict (complete model)
+            self.complete_model = self.model_ckpt["model"]  # State dict
+            self.starter_has_entire_mod = True
+
             # Remove problematic keys
             # NOTE: this shouldn't happen anymore (it was a problem in nanoGPT)
             unwanted_prefix = "_orig_mod."
@@ -1073,23 +1102,32 @@ class GPTDistributed:
             ), "Something went wrong when splitting model - leftover parameters!"
             del self.complete_model
             gc.collect()
-
-            self.n_layers_tot = (
-                self.layers_info["N_LAYERS_START"]
-                + self.layers_info["N_LAYERS_FINISH"]
-                + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
-            )
-
-            global MODEL_TYPE
-            MODEL_TYPE = f"{self.n_layers_tot}layers_{self.model_ckpt['model_args']['block_size']}ctx"
         else:
-            # TODO: define ckpt structure for model chunks - need to keep metadata of the
-            # full model!
             # TODO: import model that has already been divided [need to define well the ckpt]
-            # Optional: if chunks are on the starter node, send them to the devices
-            pass
+            # CKPT chunk components:
+            # - model: actual model chunk (params)
+            # - model_args: model parameters (to be passed to GPTConfig after)
+            # - config: globals of training - maybe not needed...
+            # - dist_config: layer_info - n. of layers for each node
+            self.complete_model = None
+            self.starter_has_entire_mod = False
+            self.model_chunks = {"starter": self.model_ckpt["model"]}
+            self.layers_info = self.model_ckpt["dist_config"]
+
+        self.n_layers_tot = (
+            self.layers_info["N_LAYERS_START"]
+            + self.layers_info["N_LAYERS_FINISH"]
+            + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
+        )
+
+        global MODEL_TYPE
+        embd = self.model_ckpt["model_args"]["n_embd"]
+        ctx = self.model_ckpt["model_args"]["block_size"]
+        MODEL_TYPE = f"{self.n_layers_tot}layers_{ctx}ctx_{embd}embd"
 
         # Extract tokenizer metadata information and check it exists
+        dataset_dir = None
+        dataset_name = None
         if "config" in self.model_ckpt and "DATASET_PATH" in self.model_ckpt["config"]:
             dataset_dir = os.path.normpath(self.model_ckpt["config"]["DATASET_PATH"])
             dataset_name = os.path.basename(dataset_dir)
@@ -1098,23 +1136,26 @@ class GPTDistributed:
                 os.path.normpath(self.model_ckpt["config"]["DATASET"])
             )
             dataset_dir = os.path.join(script_dir, "..", "data", dataset_name)
-        else:
-            raise FileNotFoundError("Unable to retrieve tokenizer metadata!")
-            # TODO: use tiktoken
 
-        if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
-            self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
-            if VERB:
-                print(f"Using character-level tokenizer ({self.tok_meta_path})")
-        elif os.path.exists(
-            os.path.join(dataset_dir, "encoder.json")
-        ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
-            self.tok_meta_path = dataset_dir
-            if VERB:
-                print(f"Using BPE tokenizer found in {dataset_dir}")
+        if dataset_name is not None and dataset_dir is not None:
+            if os.path.exists(os.path.join(dataset_dir, "meta.pkl")):
+                self.tok_meta_path = os.path.join(dataset_dir, "meta.pkl")
+                if VERB:
+                    print(f"Using character-level tokenizer ({self.tok_meta_path})")
+            elif os.path.exists(
+                os.path.join(dataset_dir, "encoder.json")
+            ) and os.path.exists(os.path.join(dataset_dir, "merges.bpe")):
+                self.tok_meta_path = dataset_dir
+                if VERB:
+                    print(f"Using BPE tokenizer found in {dataset_dir}")
+            else:
+                self.tok_meta_path = None
+                if VERB:
+                    print("No tokenizer information found, assuming GPT-2 encodings...")
         else:
-            raise ValueError("No tokenizer found")
-        # TODO: use tiktoken
+            self.tok_meta_path = None
+            if VERB:
+                print("No tokenizer information found, assuming GPT-2 encodings...")
 
         self.model_config = GPTConfig(**self.model_ckpt["model_args"])
 
@@ -1132,6 +1173,9 @@ class GPTDistributed:
             starter_config["next_node"] = starter_config["prev_node"]
 
         starter_config["tok_metadata_path"] = self.tok_meta_path
+        starter_config["device"] = (
+            DEVICE if "device" not in self.own_config else self.own_config["device"]
+        )
 
         self.webserv = GPTServer(
             node_type="starter",
@@ -1184,6 +1228,9 @@ class GPTDistributed:
             curr_msg["next_node"] = next
 
             curr_msg["n_layers"] = self.layers_info["N_LAYERS_INTERM"]
+            curr_msg["device"] = (
+                DEVICE if "device" not in int_node else int_node["device"]
+            )
 
             # Update next and prev for next iteration
             prev = int_node
@@ -1223,8 +1270,11 @@ class GPTDistributed:
 
         curr_msg["n_layers"] = self.layers_info["N_LAYERS_FINISH"]
 
-        target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
-        target_port = self.nodes_info["nodes"]["finisher"]["communication"]["port"]
+        fin_node = self.nodes_info["nodes"]["finisher"]
+        curr_msg["device"] = DEVICE if "device" not in fin_node else fin_node["device"]
+
+        target_addr = fin_node["addr"]
+        target_port = fin_node["communication"]["port"]
         addr = f"http://{target_addr}:{target_port}/init"
         if VERB:
             print(f"Initializing finisher node ({addr})")
