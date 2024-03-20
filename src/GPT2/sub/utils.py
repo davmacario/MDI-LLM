@@ -420,7 +420,7 @@ def load_from_pt(model_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         else:
             raise MemoryError("Not enough system memory to load ckpt!")
 
-    return checkpoint["model"], checkpoint["config"]
+    return checkpoint["model"], checkpoint["model_args"]
 
 
 def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -487,7 +487,7 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             with torch.no_grad():
                 sd[k].copy_(sd_hf[k])
 
-    return sd, config
+    return sd, config_args
 
 
 # ---------- PLOTS -------------------------------------------------------------
