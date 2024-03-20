@@ -125,7 +125,16 @@ def main():
             # For what said above, we just allow for some keys to be unexpected (bias)
             # but if keys are missing there is a problem
             if len(missing_k) > 0:
-                raise RuntimeError(f"The model is missing {len(missing_k)} keys")
+                raise RuntimeError(
+                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
+                )
+            if not all(
+                [
+                    k.endswith(".attn.bias") or k.endswith(".lm_head.bias")
+                    for k in unexp_k
+                ]
+            ):
+                raise RuntimeError(f"Unrecognized extra keys:\n\t{unexp_k}")
 
     else:
         model = GPT.from_pretrained(args.ckpt, dict(dropout=0.0))
@@ -190,7 +199,7 @@ def main():
         encode = tok.encode
         decode = tok.decode
     else:
-        # Assume gpt-2 encodings by default FIXME
+        # Assume gpt-2 encodings by default
         print("No meta.pkl found, assuming GPT-2 encodings...")
         enc = tiktoken.get_encoding("gpt2")
         encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
