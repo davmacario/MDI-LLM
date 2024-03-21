@@ -44,9 +44,7 @@ if __name__ == "__main__":
     if args.debug:
         log_file = os.path.join(script_dir, "logs", "logs_starter.log")
         log_wp = logging.getLogger("model_dist")
-        formatter = logging.Formatter(
-            "[%(asctime)s] → %(levelname)s: %(message)s"
-        )
+        formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
         if not os.path.exists(os.path.dirname(log_file)):
             os.mkdir(os.path.dirname(log_file))
         fhdlr = logging.FileHandler(log_file, mode="w")
@@ -64,13 +62,11 @@ if __name__ == "__main__":
         assert os.path.exists(os.path.dirname(out_stats_file))
 
     # Init. distributed model, config file from parser
-    gpt_distr = GPTDistributed(
-        ckpt_path, nodes_info_path=args.nodes_config, **setup
-    )
+    gpt_distr = GPTDistributed(ckpt_path, nodes_info_path=args.nodes_config, **setup)
 
     # Operation
     try:
-        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=1000)
+        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=500)
     except KeyboardInterrupt:
         cp.engine.stop()
         print("Starter node was stopped successfully!")
