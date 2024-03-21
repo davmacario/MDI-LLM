@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     # Operation
     try:
-        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=500)
+        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=300)
     except KeyboardInterrupt:
         cp.engine.stop()
         print("Starter node was stopped successfully!")
