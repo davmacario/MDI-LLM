@@ -205,12 +205,7 @@ class FinisherNode(nn.Module):
                 raise RuntimeError(
                     f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
                 )
-            if not all(
-                [
-                    k.endswith(".attn.bias") or k.endswith(".lm_head.bias")
-                    for k in unwanted_k
-                ]
-            ):
+            if not all([k.endswith(".attn.bias") for k in unwanted_k]):
                 raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
         self.params_init = True
         if VERB:
