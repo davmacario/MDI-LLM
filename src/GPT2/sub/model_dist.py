@@ -788,7 +788,6 @@ class GPTServer:
                     old_count_w = count_wait
                     while len(self.message_queue) <= 0:
                         count_wait += 1
-                        # time.sleep(0.01)
                     if count_wait - old_count_w > 0:
                         logger_wp.warn(f"Iter {k} - Had to wait for queue to fill up!")
                     in_msg = self.message_queue.popleft()
@@ -809,8 +808,8 @@ class GPTServer:
                     idx_next = torch.multinomial(probs, num_samples=1)
                     idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
 
+                # Send to next iff not at the last token
                 if k < (self.n_nodes * (max_new_tokens - 1)):
-                    # Send to next iff not at the last token
                     # Crop to block size
                     idx_cond = (
                         idx[sample_id]
@@ -823,8 +822,6 @@ class GPTServer:
                     # Build message
                     out_msg = self._build_msg(idx_cond, sample_id)
                     self.send_to_next(out_msg)
-                    # Sleep for 1 ms - do not overwhelm receiver
-                    # time.sleep(0.001)
 
         tot_time = time.time() - start_time
         if PLOTS:
