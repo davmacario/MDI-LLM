@@ -31,7 +31,12 @@ if __name__ == "__main__":
         data_dir = os.path.join(script_dir, "data", "shakespeare")
 
     if args.ckpt is not None:
-        assert os.path.exists(args.ckpt)
+        assert os.path.exists(args.ckpt) or args.ckpt in {
+            "gpt2",
+            "gpt2-medium",
+            "gpt2-large",
+            "gpt2-xl",
+        }
         ckpt_path = args.ckpt
         out_dir = os.path.dirname(args.ckpt)
     else:
