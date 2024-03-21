@@ -380,7 +380,7 @@ def main() -> int:
             elif losses["val"] >= best_val_loss:
                 count_loss_incr += 1
                 # If the validation loss has been increasing, stop
-                if count_loss_incr > 10:
+                if args.patience is not None and count_loss_incr > args.patience:
                     break
 
         if iter_num == 0 and EVAL_ONLY:

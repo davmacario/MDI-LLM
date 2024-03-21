@@ -60,6 +60,12 @@ def parse_args(train: bool = True, mdi: bool = False):
             default=GRADIENT_ACCUMULATION_STEPS,
             help="Gradient accumulation steps - used to simulate larger batch size at training",
         )
+        parser.add_argument(
+            "--patience",
+            type=int,
+            default=None,
+            help="If specified, set the maximum number of checkpoint intervals with non-decreasing loss before interrupting training",
+        )
     else:
         parser.add_argument(
             "--ckpt",
