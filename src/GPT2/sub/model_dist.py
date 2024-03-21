@@ -6,10 +6,8 @@ import logging
 import os
 import pickle
 import socket
-import sys
 import threading
 import time
-import warnings
 from collections import deque
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
@@ -24,8 +22,8 @@ from sub.bpe_tokenizer import BPETokenizer
 from sub.char_tokenizer import CharacterTokenizer
 from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
 from sub.model import Block, GPTConfig, LayerNorm
-from sub.server_config import MAX_TRIES
-from sub.utils import loading_bar, plot_tokens_per_time, split_parameters
+from sub.utils import (load_from_hf, loading_bar, plot_tokens_per_time,
+                       split_parameters)
 
 """
 Distributed implementation of nanoGPT - using the same blocks defined in the
@@ -1022,7 +1020,7 @@ class GPTDistributed:
         Instantiate a GPTDistributed object to perform model-distributed inference.
 
         Args:
-            ckpt_path: path of the full model (pretrained)
+            ckpt_path: path of the full model (pretrained) or GPT2 flavor from HF
             nodes_info_path: path of the configuration JSON - if not provided, a default
                 one is used
             model_was_split: true if the model chunks have already been generated (the
@@ -1062,22 +1060,29 @@ class GPTDistributed:
         # Get the model parameters and split them based on n. of nodes
         self.n_intermediate = len(self.nodes_info["nodes"]["intermediate"])
         self.n_total_nodes = 2 + self.n_intermediate
-        try:
-            self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
-        except:
-            # Erase variable to effectively free memory
-            try:
-                del self.model_ckpt
-                gc.collect()
-            except NameError:
-                pass  # model_ckpt not defined (good)
-            # It may be that the model does not fit all in the VRAM
-            if VERB:
-                print("Loading full model on RAM - not enough VRAM")
-            logger_wp.warn("Loading full model on RAM - not enough VRAM")
-            self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
 
-        # TODO: implement possibility to load chunks from disk
+        if os.path.exists(ckpt_path):
+            # Either load full model, or load chunk
+            try:
+                self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
+            except:
+                # Erase variable to effectively free memory
+                try:
+                    del self.model_ckpt
+                except AttributeError:
+                    pass  # model_ckpt not defined (good)
+                gc.collect()
+                # It may be that the model does not fit all in the VRAM
+                if VERB:
+                    print("Loading full model on RAM - not enough VRAM")
+                logger_wp.warn("Loading full model on RAM - not enough VRAM")
+                self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
+        elif ckpt_path in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
+            # HF pretrained
+            assert not model_was_split
+            model_sd, model_args = load_from_hf(ckpt_path)
+            self.model_ckpt = {"model": model_sd, "model_args": model_args}
+
         if not model_was_split:
             # Extract state dict (complete model)
             self.complete_model = self.model_ckpt["model"]  # State dict
@@ -1105,7 +1110,6 @@ class GPTDistributed:
             del self.complete_model
             gc.collect()
         else:
-            # TODO: import model that has already been divided [need to define well the ckpt]
             # CKPT chunk components:
             # - model: actual model chunk (params)
             # - model_args: model parameters (to be passed to GPTConfig after)
@@ -1127,7 +1131,7 @@ class GPTDistributed:
         ctx = self.model_ckpt["model_args"]["block_size"]
         MODEL_TYPE = f"{self.n_layers_tot}layers_{ctx}ctx_{embd}embd"
 
-        # Extract tokenizer metadata information and check it exists
+        # Extract tokenizer metadata information (if any) and locate it
         dataset_dir = None
         dataset_name = None
         if "config" in self.model_ckpt and "DATASET_PATH" in self.model_ckpt["config"]:
