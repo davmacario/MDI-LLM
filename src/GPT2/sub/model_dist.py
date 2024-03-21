@@ -729,8 +729,6 @@ class GPTServer:
             msg_payload = self.recv_from_prev(msg_len)
             data = pickle.loads(msg_payload)
             logger_wp.debug(f"Received full message {_n_recv_msg} of length {msg_len}")
-            if VERB:
-                print(f"Received full message {_n_recv_msg} of length {msg_len}")
 
             # Look for stopping msg
             if "stop" in data and data["stop"]:
