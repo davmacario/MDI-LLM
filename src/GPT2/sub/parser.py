@@ -82,7 +82,7 @@ def parse_args(train: bool = True, mdi: bool = False):
         parser.add_argument(
             "--n-tokens",
             type=int,
-            default=1000,
+            default=500,
             help="Maximum number of tokens per sample to be generated",
         )
         parser.add_argument(

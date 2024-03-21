@@ -22,7 +22,7 @@ torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 if __name__ == "__main__":
     # Parse command line arguments
     # Example usage:
-    #   python3 nanoGPT/starter.py --dataset=./nanoGPT/data/shakespeare --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
+    #   python3 nanoGPT/starter.py --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
     args = parse_args(train=False, mdi=True)
 
     if args.dataset is not None:
@@ -55,6 +55,8 @@ if __name__ == "__main__":
     VERB = args.verb
     PLOTS = args.plots
 
+    tok_per_sample = args.n_tokens
+
     setup = {"verb": VERB, "plots": PLOTS}
 
     out_stats_file = args.time_run
@@ -66,7 +68,7 @@ if __name__ == "__main__":
 
     # Operation
     try:
-        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=300)
+        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=tok_per_sample)
     except KeyboardInterrupt:
         cp.engine.stop()
         print("Starter node was stopped successfully!")
