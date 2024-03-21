@@ -184,7 +184,7 @@ def split_parameters(
 
     The parameters are divided as such:
         - Starter: token embedding, positional embedding,
-            N_LAYERS_STARTxTransformer Layers
+            N_LAYERS_STARTxTransformer Layers + final linear layer
         - Intermediate: N_LAYERS_INTERMxTransformer Layer
         - Finisher: N_LAYERS_FINISHxTransformer Layer, LayerNorm
 
@@ -282,6 +282,14 @@ def split_parameters(
                 new_k = f"starter_model.{layer_name}.{loc_ind}{end}"
                 out_chunks["starter"][new_k] = model_params.pop(k)
 
+    out_chunks["starter"][f"starter_model.lm_head.weight"] = model_params.pop(
+        f"{output_layer}.weight"
+    )
+    if f"{output_layer}.bias" in model_params.keys():
+        out_chunks["starter"][f"starter_model.lm_head.bias"] = model_params.pop(
+            f"{output_layer}.bias"
+        )
+
     # 2. Select params for every Intermediate
     out_chunks["intermediate"] = []
     for i in range(1, n_nodes - 1):
@@ -353,14 +361,6 @@ def split_parameters(
     if f"{transformer_last}.bias" in model_params.keys():
         out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params.pop(
             f"{transformer_last}.bias"
-        )
-
-    out_chunks["finisher"][f"finisher_model.lm_head.weight"] = model_params.pop(
-        f"{output_layer}.weight"
-    )
-    if f"{output_layer}.bias" in model_params.keys():
-        out_chunks["finisher"][f"finisher_model.lm_head.bias"] = model_params.pop(
-            f"{output_layer}.bias"
         )
 
     return out_chunks, layers_info

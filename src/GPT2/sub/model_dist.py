@@ -80,10 +80,13 @@ class StarterNode(nn.Module):
 
         self.starter_model = nn.ModuleDict(
             dict(
+                # Initial layers
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
                 h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
+                # Final layer:
+                lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),
             )
         )
 
@@ -97,6 +100,7 @@ class StarterNode(nn.Module):
                 raise RuntimeError(
                     f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
                 )
+            # Only allow '[].attn.bias' as extra keys - triangular mask
             if not all([k.endswith(".attn.bias") for k in unwanted_k]):
                 raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
         self.params_init = True
@@ -131,6 +135,12 @@ class StarterNode(nn.Module):
             x = block(x)
 
         return x
+
+    def forward_last(self, idx: torch.Tensor) -> torch.Tensor:
+        """
+        Last forward pass - starter node.
+        """
+        return self.starter_model.lm_head(idx)
 
 
 class IntermediateNode(nn.Module):
@@ -191,7 +201,6 @@ class FinisherNode(nn.Module):
             dict(
                 h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
-                lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),  # !
             )
         )
 
@@ -220,9 +229,8 @@ class FinisherNode(nn.Module):
         for block in self.finisher_model.h:
             x = block(x)
         x = self.finisher_model.ln_f(x)
-        logits = self.finisher_model.lm_head(x)
 
-        return logits
+        return x
 
 
 # -----------------------------------------------------------------------------
@@ -793,7 +801,8 @@ class GPTServer:
                         sample_in == sample_id
                     ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
 
-                    out_logits = in_msg["data"].to(self.device)
+                    idx_from_fin = in_msg["data"].to(self.device)
+                    out_logits = self.model.forward_last(idx_from_fin)
                     logits = out_logits[:, -1, :] / self.temperature
                     if self.top_k is not None:
                         v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
