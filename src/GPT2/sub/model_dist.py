@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from collections import deque
+from contextlib import nullcontext
 from typing import Any, Dict, List, Mapping, Tuple, Union
 
 import cherrypy as cp
@@ -20,7 +21,8 @@ from torch.nn import functional as F
 
 from sub.bpe_tokenizer import BPETokenizer
 from sub.char_tokenizer import CharacterTokenizer
-from sub.config import DEVICE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K, VERB
+from sub.config import (DEVICE, DTYPE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K,
+                        VERB)
 from sub.model import Block, GPTConfig, LayerNorm
 from sub.utils import (load_from_hf, loading_bar, plot_tokens_per_time,
                        split_parameters)
@@ -63,6 +65,7 @@ logger_wp = logging.getLogger("model_dist")
 logger_wp.setLevel(logging.ERROR)
 
 MODEL_TYPE = ""
+ctx = nullcontext()
 
 
 class StarterNode(nn.Module):
@@ -768,58 +771,60 @@ class GPTServer:
         if PLOTS:
             self.tok_time.append((0, 0))
         with torch.no_grad():
-            # with CTX:  # FIXME
-            total_iters = max_new_tokens * self.n_nodes
-            for k in range(total_iters):
-                logger_wp.info(f"Iter {k}")
-                print(
-                    f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
-                    end="\r",
-                )
-                if PLOTS:
-                    self.tok_time.append((k, time.time() - start_time))
-                sample_id = k % self.n_nodes  # Which of the n_nodes samples
-
-                if k >= self.n_nodes:
-                    # We are not in the first iteration (k starts from 0)
-                    # can start processing messages from finisher
-                    old_count_w = count_wait
-                    while len(self.message_queue) <= 0:
-                        count_wait += 1
-                    if count_wait - old_count_w > 0:
-                        logger_wp.warn(f"Iter {k} - Had to wait for queue to fill up!")
-                    in_msg = self.message_queue.popleft()
-                    sample_in = in_msg["sample_index"]
-
-                    # Check correct order
-                    assert (
-                        sample_in == sample_id
-                    ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
-
-                    idx_from_fin = in_msg["data"].to(self.device)
-                    out_logits = self.model.forward_last(idx_from_fin)
-                    logits = out_logits[:, -1, :] / self.temperature
-                    if self.top_k is not None:
-                        v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
-                        logits[logits < v[:, [-1]]] = -float("Inf")
-                    probs = F.softmax(logits, dim=1)
-                    idx_next = torch.multinomial(probs, num_samples=1)
-                    idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
-
-                # Send to next iff not at the last token
-                if k < (self.n_nodes * (max_new_tokens - 1)):
-                    # Crop to block size
-                    idx_cond = (
-                        idx[sample_id]
-                        if idx[sample_id].size(1) <= self.model_config.block_size
-                        else idx[sample_id][:, -self.model_config.block_size :]
+            with ctx:
+                total_iters = max_new_tokens * self.n_nodes
+                for k in range(total_iters):
+                    logger_wp.info(f"Iter {k}")
+                    print(
+                        f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
+                        end="\r",
                     )
-                    # Forward in local model
-                    idx_cond = self.model(idx_cond)
+                    if PLOTS:
+                        self.tok_time.append((k, time.time() - start_time))
+                    sample_id = k % self.n_nodes  # Which of the n_nodes samples
 
-                    # Build message
-                    out_msg = self._build_msg(idx_cond, sample_id)
-                    self.send_to_next(out_msg)
+                    if k >= self.n_nodes:
+                        # We are not in the first iteration (k starts from 0)
+                        # can start processing messages from finisher
+                        old_count_w = count_wait
+                        while len(self.message_queue) <= 0:
+                            count_wait += 1
+                        if count_wait - old_count_w > 0:
+                            logger_wp.warn(
+                                f"Iter {k} - Had to wait for queue to fill up!"
+                            )
+                        in_msg = self.message_queue.popleft()
+                        sample_in = in_msg["sample_index"]
+
+                        # Check correct order
+                        assert (
+                            sample_in == sample_id
+                        ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
+
+                        idx_from_fin = in_msg["data"].to(self.device)
+                        out_logits = self.model.forward_last(idx_from_fin)
+                        logits = out_logits[:, -1, :] / self.temperature
+                        if self.top_k is not None:
+                            v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
+                            logits[logits < v[:, [-1]]] = -float("Inf")
+                        probs = F.softmax(logits, dim=1)
+                        idx_next = torch.multinomial(probs, num_samples=1)
+                        idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
+
+                    # Send to next iff not at the last token
+                    if k < (self.n_nodes * (max_new_tokens - 1)):
+                        # Crop to block size
+                        idx_cond = (
+                            idx[sample_id]
+                            if idx[sample_id].size(1) <= self.model_config.block_size
+                            else idx[sample_id][:, -self.model_config.block_size :]
+                        )
+                        # Forward in local model
+                        idx_cond = self.model(idx_cond)
+
+                        # Build message
+                        out_msg = self._build_msg(idx_cond, sample_id)
+                        self.send_to_next(out_msg)
 
         tot_time = time.time() - start_time
         if PLOTS:
@@ -875,39 +880,39 @@ class GPTServer:
         exp_ind = 0  # Expected sample index from previous
         count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
-            while self.running:
-                logger_wp.info(f"Iter {iter}")
-                old_count_w = count_wait
-                while len(self.message_queue) <= 0:  # Wait for messages
-                    count_wait += 1
-                    # time.sleep(0.01)
-                if count_wait - old_count_w > 0:
-                    logger_wp.warn(f"Iter {iter} - Had to wait for queue to fill up!")
-                # Extract message from queue
-                in_msg = self.message_queue.popleft()
-                # Unpack
-                samp_ind = in_msg["sample_index"]
-                assert (
-                    exp_ind == samp_ind
-                ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                exp_ind = (samp_ind + 1) % self.n_nodes
+            with ctx:
+                while self.running:
+                    logger_wp.info(f"Iter {iter}")
+                    old_count_w = count_wait
+                    while len(self.message_queue) <= 0:  # Wait for messages
+                        count_wait += 1
+                    if count_wait - old_count_w > 0:
+                        logger_wp.warn(
+                            f"Iter {iter} - Had to wait for queue to fill up!"
+                        )
+                    # Extract message from queue
+                    in_msg = self.message_queue.popleft()
+                    # Unpack
+                    samp_ind = in_msg["sample_index"]
+                    assert (
+                        exp_ind == samp_ind
+                    ), f"Expected sample index {exp_ind}, received {samp_ind}"
+                    exp_ind = (samp_ind + 1) % self.n_nodes
 
-                ins = in_msg["data"].to(self.device)
-                if self.running:
-                    print(f"> Generating {loopsigns[iter % 4]}", end="\r")
-                    # Forward pass
-                    outs = self.model(ins)
-                    # Build msg
-                    out_msg = self._build_msg(outs, samp_ind)
-                    # Send to next
-                    self.send_to_next(out_msg)
-                    iter += 1
-                else:
-                    print("> Generation completed!")
-                    print(
-                        f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
-                    )
-                    self.send_to_next(self.stop_msg)
+                    ins = in_msg["data"].to(self.device)
+                    if self.running:
+                        print(f"> Generating {loopsigns[iter % 4]}", end="\r")
+                        # Forward pass
+                        outs = self.model(ins)
+                        # Build msg
+                        out_msg = self._build_msg(outs, samp_ind)
+                        # Send to next
+                        self.send_to_next(out_msg)
+                        iter += 1
+                    else:
+                        print("> Generation completed!")
+                        print(f"Total times waited: {count_wait}")
+                        self.send_to_next(self.stop_msg)
 
     def _build_msg(self, data, sample_index) -> Dict:
         """
@@ -1039,10 +1044,34 @@ class GPTDistributed:
         # Override global constants
         if "verb" in kwargs:
             global VERB
+            print("Overriding 'verb'")
             VERB = bool(kwargs["verb"])
         if "plots" in kwargs:
             global PLOTS
+            print("Overriding 'plots'")
             PLOTS = bool(kwargs["plots"])
+        if "device" in kwargs:
+            global DEVICE
+            print("Overriding 'device'")
+            DEVICE = str(kwargs["device"])
+
+        if "cuda" in DEVICE:
+            device_type = "cuda"
+        elif "mps" in DEVICE:
+            device_type = "mps"
+        else:
+            device_type = "cpu"
+        ptdtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[DTYPE]
+        global ctx
+        ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
+            nullcontext()
+            if device_type == "mps"
+            else torch.autocast(device_type=device_type, dtype=ptdtype)
+        )
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
