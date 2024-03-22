@@ -302,11 +302,11 @@ class GPTServer:
         # Override global constants
         if "verb" in kwargs:
             global VERB
-            print("Overriding 'verb'")
+            print("Overriding 'verb': True")
             VERB = bool(kwargs["verb"])
         if "plots" in kwargs:
             global PLOTS
-            print("Overriding 'plots'")
+            print("Overriding 'plots': True")
             PLOTS = bool(kwargs["plots"])
 
         self.own_addr = node_config["addr"]
