@@ -23,7 +23,7 @@ csv_header_stats = ",".join(
     ["timestamp", "n_samples", "n_layers", "context_size", "gen_time"]
 )
 
-parser = argparse.ArgumentParser("Starter node - MDI")
+parser = argparse.ArgumentParser(description="Starter node - MDI")
 parser.add_argument(
     "-m",
     "--model",
