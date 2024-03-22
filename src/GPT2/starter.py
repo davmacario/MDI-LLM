@@ -24,14 +24,27 @@ csv_header_stats = ",".join(
 )
 
 parser = argparse.ArgumentParser(description="Starter node - MDI")
-parser.add_argument(
+group = parser.add_mutually_exclusive_group(required=True)
+group.add_argument(
     "-m",
     "--model",
     type=str,
     default=None,
     help="""Path/name of the pretrained model. If it is a GPT-2 flavor ('gpt2',
-    'gpt2-medium', 'gpt2-large', 'gpt2-xl') it will be downloaded from Huggingface""",
+    'gpt2-medium', 'gpt2-large', 'gpt2-xl') it will be downloaded from Huggingface.
+    Can be overrode if specifying a chunk (see '-c'/'--chunk')""",
 )
+group.add_argument(
+    "-c",
+    "--chunk",
+    type=str,
+    default=None,
+    help="""Path of the chunk of model assigned
+    to the starter node. This argument overrides '--model' and will require the other
+    nodes to be provided the path of their own chunks as well.""",
+)
+
+
 parser.add_argument(
     "--debug", default=False, action="store_true", help="Enable debug mode (profiler)"
 )
@@ -63,18 +76,27 @@ if __name__ == "__main__":
     # Parse command line arguments
     args = parser.parse_args()
 
+    # NOTE: model and chunk are mutually exclusive (via argparse)!
     if args.model is not None:
         if os.path.exists(args.model):
             ckpt_path = args.model
             out_dir = os.path.dirname(args.model)
+            model_is_split = False
         elif args.model in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
             ckpt_path = args.model
             out_dir = os.path.dirname(args.model)
+            model_is_split = False
         else:
             raise ValueError(f"Unknown pretrained model: {args.model}")
+    elif args.chunk is not None:
+        if os.path.exists(args.model):
+            ckpt_path = args.chunk
+            out_dir = os.path.dirname(args.chunk)
+            model_is_split = True
+        else:
+            raise FileNotFoundError(f"Unable to find chunk at {args.chunk}")
     else:
-        out_dir = os.path.join(data_dir, "out")
-        ckpt_path = os.path.join(out_dir, "ckpt.pt")
+        raise ValueError
 
     settings_path = os.path.join(script_dir, "settings_distr")
     network_conf_path = os.path.join(settings_path, "configuration.json")
@@ -99,7 +121,12 @@ if __name__ == "__main__":
         assert os.path.exists(os.path.dirname(out_stats_file))
 
     # Init. distributed model, config file from parser
-    gpt_distr = GPTDistributed(ckpt_path, nodes_info_path=args.nodes_config, **setup)
+    gpt_distr = GPTDistributed(
+        ckpt_path,
+        nodes_info_path=args.nodes_config,
+        model_was_split=model_is_split,
+        **setup,
+    )
 
     # Operation
     try:
