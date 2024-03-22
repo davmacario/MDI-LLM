@@ -258,8 +258,6 @@ class GPTServer:
     sock_to_next: Union[socket.socket, None] = None
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
 
-    device = DEVICE
-
     # Message queue
     message_queue = deque([])
 
@@ -274,9 +272,8 @@ class GPTServer:
         self,
         node_config: Dict,
         node_type: Union[None, str] = None,
-        starter_config: Union[
-            Dict, None
-        ] = None,  # FIXME: add specs for the right parameters
+        starter_config: Union[Dict, None] = None,
+        chunk_path: Union[None, str] = None,
     ):
         """
         Initialize GPTServer object.
@@ -299,6 +296,8 @@ class GPTServer:
                 tok_metadata_path: path of the tokenizer metadata (for
                 CharacterTokenizer)
         """
+        self.device = DEVICE
+
         self.own_addr = node_config["addr"]
         self.own_comm_port = node_config["communication"]["port"]
 
@@ -332,6 +331,7 @@ class GPTServer:
             # Configuration of "secondary" (intermediate or finisher) node
             self.starter_addr = node_config["communication"]["starter_addr"]
             self._running_thread = threading.Thread()  # Placeholder
+            self.chunk_path = chunk_path
             # NOTE: the model will be initialized once config info is received (POST)
 
         self.webserv_config = {
@@ -552,9 +552,6 @@ class GPTServer:
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
-        # self.sock_to_prev_prop[0].setsockopt(
-        #     socket.SOL_SOCKET, socket.SO_RCVBUF, MSGLENGTH
-        # )
         logger_wp.info("Created socket to previous node")
 
         if VERB:
@@ -956,7 +953,17 @@ class GPTServer:
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
                 self.model_config = GPTConfig(**init_msg["model_config"])
-                self.model_params = init_msg["params"]
+                if "params" in init_msg:
+                    if VERB:
+                        print("Received parameters from starter")
+                    self.model_params = init_msg["params"]
+                else:
+                    assert self.chunk_path is not None
+                    if VERB:
+                        print("Loading parameters from disk")
+                    self.model_params = torch.load(
+                        self.chunk_path, map_location=self.device
+                    )
                 self.n_nodes = init_msg["n_nodes"]
                 self.device = init_msg["device"]
                 # Set up the node
@@ -1040,6 +1047,8 @@ class GPTDistributed:
                 "settings_distr",
                 "configuration.json",
             )
+
+        self.mod_split = model_was_split
 
         # Override global constants
         if "verb" in kwargs:
@@ -1256,7 +1265,8 @@ class GPTDistributed:
             curr_msg = self.init_msg.copy()
             curr_msg["role"] = "intermediate"
             curr_msg["model_config"] = self.model_config.asdict()
-            curr_msg["params"] = self.model_chunks["intermediate"][i]
+            if not self.mod_split:
+                curr_msg["params"] = self.model_chunks["intermediate"][i]
             curr_msg["n_nodes"] = self.n_total_nodes
 
             curr_msg["prev_node"] = prev
@@ -1297,7 +1307,8 @@ class GPTDistributed:
         curr_msg = self.init_msg.copy()
         curr_msg["role"] = "finisher"
         curr_msg["model_config"] = self.model_config.asdict()
-        curr_msg["params"] = self.model_chunks["finisher"]
+        if not self.mod_split:
+            curr_msg["params"] = self.model_chunks["finisher"]
         curr_msg["n_nodes"] = self.n_total_nodes
 
         curr_msg["prev_node"] = prev
