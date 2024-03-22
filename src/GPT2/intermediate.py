@@ -1,17 +1,40 @@
 #!/usr/bin/env python3
 
+import argparse
 import json
 import logging
 import os
+import warnings
 
 import cherrypy as cp
 import torch
 
 from sub.model_dist import GPTServer
-from sub.parser import parse_args
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
+settings_path = os.path.join(script_dir, "settings_distr")
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--debug",
+    default=False,
+    action="store_true",
+    help="Enable debug mode (enable profiler)",
+)
+parser.add_argument(
+    "--nodes-config",
+    type=str,
+    default=os.path.join(script_dir, "..", "settings_distr", "configuration.json"),
+    help="Path to the JSON configuration file for the nodes",
+)
+parser.add_argument(
+    "-p",
+    "--path",
+    type=str,
+    default=None,
+    help="Optional path of the model chunk on disk",
+)
 
 if __name__ == "__main__":
     torch.manual_seed(1337)
@@ -20,7 +43,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
     # The only available command line option is '--debug' to launch logger
-    args = parse_args(train=False, mdi=True)
+    args = parser.parse_args()
     if args.debug:
         log_file = os.path.join(script_dir, "logs", "logs_intermediate.log")
         log_wp = logging.getLogger("model_dist")
@@ -32,13 +55,18 @@ if __name__ == "__main__":
         fhdlr.setFormatter(formatter)
         log_wp.addHandler(fhdlr)
 
-    settings_path = os.path.join(script_dir, "settings_distr")
     network_conf_path = args.nodes_config
+
+    if args.path is not None and "intermediate" in args.path or "interm" in args.path:
+        warnings.warn("Possibly wrong chunk file detected")
 
     try:
         with open(network_conf_path, "r") as f:
             full_config = json.load(f)
-            gpt_webserv = GPTServer(node_config=full_config["nodes"]["intermediate"][0])
+            gpt_webserv = GPTServer(
+                node_config=full_config["nodes"]["intermediate"][0],
+                chunk_path=args.path,
+            )
     except KeyboardInterrupt:
         print("Node stopped!")
         cp.engine.stop()
