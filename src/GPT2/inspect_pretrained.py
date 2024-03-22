@@ -71,7 +71,10 @@ if __name__ == "__main__":
         # Count the number of detected transformer layers
         layer_keys = [k for k in mod_keys if k.startswith("transformer.h")]
         layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
-        print(f"Number of transformer layers found in the model: {len(layers_unique)}")
+        if len(layers_unique) > 0:
+            print(
+                f"Number of transformer layers found in the model: {len(layers_unique)}"
+            )
 
         buf = io.BytesIO()
         torch.save(checkpoint["model"], buf)
