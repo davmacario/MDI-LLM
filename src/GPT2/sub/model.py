@@ -256,7 +256,7 @@ class GPT(nn.Module):
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
-        # Output linear layer, producing logits before softmax (only important at training)
+        # Output linear layer, producing logits before softmax
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Weight-Tying: share weights of embedding and output layers
