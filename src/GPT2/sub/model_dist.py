@@ -801,9 +801,25 @@ class GPTServer:
         """
         assert self.model_config is not None and self.model is not None
 
+        if "cuda" in DEVICE:
+            device_type = "cuda"
+        elif "mps" in DEVICE:
+            device_type = "mps"
+        else:
+            device_type = "cpu"
+        ptdtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[DTYPE]
+        ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
+            nullcontext()
+            if device_type == "mps"
+            else torch.autocast(device_type=device_type, dtype=ptdtype)
+        )
+
         # Encode starting sequence (TODO: implement prompt support - different
         # prompts for different samples)
-
         start = "\n"
         start_ids = self.tok_encode(start)
         idx = [
@@ -920,6 +936,24 @@ class GPTServer:
         assert self.sock_to_prev is not None and self.sock_to_next is not None
         assert self.model is not None and self.model_config is not None
 
+        # Should be overrided by kwargs
+        if "cuda" in DEVICE:
+            device_type = "cuda"
+        elif "mps" in DEVICE:
+            device_type = "mps"
+        else:
+            device_type = "cpu"
+        ptdtype = {
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+        }[DTYPE]
+        ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
+            nullcontext()
+            if device_type == "mps"
+            else torch.autocast(device_type=device_type, dtype=ptdtype)
+        )
+
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
@@ -1011,7 +1045,8 @@ class GPTServer:
                         print("Loading parameters from disk")
                     self.model_params = torch.load(
                         self.chunk_path, map_location=self.device
-                    )
+                    )["model"]
+                    print(self.model_params.keys())
                 self.n_nodes = init_msg["n_nodes"]
                 self.device = init_msg["device"]
                 # Set up the node
@@ -1060,7 +1095,7 @@ class GPTDistributed:
     # Syntax of the message used to initialize other nodes
     init_msg = {
         "role": "",  # Role name
-        "params": {},  # State dict
+        # "params": {},  # State dict  # -- REMOVED to allow loading chunks
         "model_config": GPTConfig(),
         "n_nodes": 0,
         "prev_node": {},  # From .json
@@ -1111,24 +1146,6 @@ class GPTDistributed:
             global DEVICE
             print("Overriding 'device'")
             DEVICE = str(kwargs["device"])
-
-        if "cuda" in DEVICE:
-            device_type = "cuda"
-        elif "mps" in DEVICE:
-            device_type = "mps"
-        else:
-            device_type = "cpu"
-        ptdtype = {
-            "float32": torch.float32,
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-        }[DTYPE]
-        global ctx
-        ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
-            nullcontext()
-            if device_type == "mps"
-            else torch.autocast(device_type=device_type, dtype=ptdtype)
-        )
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
