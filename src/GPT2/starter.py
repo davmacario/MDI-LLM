@@ -7,7 +7,6 @@ from datetime import datetime
 import cherrypy as cp
 import torch
 
-from sub.config import PLOTS, VERB
 from sub.model_dist import GPTDistributed
 from sub.parser import parse_args
 
@@ -57,12 +56,9 @@ if __name__ == "__main__":
         log_wp.setLevel(logging.DEBUG)
         log_wp.addHandler(fhdlr)
 
-    VERB = args.verb
-    PLOTS = args.plots
-
     tok_per_sample = args.n_tokens
 
-    setup = {"verb": VERB, "plots": PLOTS}
+    setup = {"verb": args.verb, "plots": args.plots}
 
     out_stats_file = args.time_run
     if out_stats_file is not None:

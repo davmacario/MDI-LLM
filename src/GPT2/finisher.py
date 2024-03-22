@@ -16,6 +16,7 @@ script_dir = os.path.dirname(__file__)
 settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
+parser.add_argument("-v", "--verb", action="store_true", help="Enable verbose mode")
 parser.add_argument(
     "--debug",
     default=False,
@@ -63,8 +64,11 @@ if __name__ == "__main__":
     try:
         with open(network_conf_path, "r") as f:
             full_config = json.load(f)
+            setup = {"verb": args.verb}
             gpt_webserv = GPTServer(
-                node_config=full_config["nodes"]["finisher"], chunk_path=args.path
+                node_config=full_config["nodes"]["finisher"],
+                chunk_path=args.path,
+                **setup
             )
     except KeyboardInterrupt:
         print("Node stopped!")
