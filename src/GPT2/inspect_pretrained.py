@@ -143,7 +143,6 @@ if __name__ == "__main__":
             sd_keys_hf
         ), f"HF: {len(sd_keys_hf)} keys, Mine: {len(sd_keys)} keys"
 
-        # TODO: import parameters
         print("Copying parameters from HF pretrained to GPT")
         for k in sd_keys_hf:
             if any(k.endswith(w) for w in transposed):
