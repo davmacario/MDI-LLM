@@ -33,18 +33,20 @@ original model.
 
 Rationale:
     - Three block types:
-        a. Starter: embedding (tok + pos), dropout,
-        [b. Intermediate: 2 transformer layers]
-        c. Finisher: 2 transformer layers, layer norm
-    - The "Starter" is the main node - it will initiate inference and receive
-    the final logits (outputs of the model) from the "Finisher"
-    - The Starter is also the only one to possess all the model parameters
-
-    - Each node opens 2 ports: one for communication (roles setup and weight
-    exchange), the other one for the actual inference (i.e., exchange of
-    activations)
-
+        a. Starter: embedding (token + positional), dropout, transformer layers + 
+            final linear layer
+        b. Intermediate: transformer layers
+        c. Finisher: transformer layers, layer normalization
+    - The "Starter" is the main node - it will initiate inference and also evaluate the
+        final logits (outputs of the model) from the "Finisher"
+    - Each node opens 2 ports: one for communication (roles setup and weight exchange,
+        using HTTP), the other one for the actual inference (i.e., exchange of
+        activations)
     - All configuration information is stored in a .json file
+        (see src/GPT2/settings_distr)
+    - The model parameters can be either split by the starter node itself (if the model
+        can fit in its memory completely) or can be loaded from chunks stored on the 
+        disk of each device.
 
 Functioning:
     - All nodes run the webserver - it is the key of the application;
@@ -52,12 +54,41 @@ Functioning:
         exchange any type of information (config and inference)
     - Main node instantiates GPTDistributed object, which in turn instantiates
     the GPTServer on the same device
-    - Main node (through GPTDistributed) sends HTTP messages about their role to
-    each other node in the network (role + weights + model_config + next_node +
+    - Main node (through GPTDistributed) sends HTTP messages about their role to each
+    other node in the network (role + optional weights + model_config + next_node +
     predecessor)
-    - The other nodes instantiate the corresponding object (Intermediate/
-    Finisher) and open sockets to/from the corresponding nodes, then start
-    waiting for the information to arrive
+        - If not sending the weights, the other nodes will load their own model chunk
+            from disk
+    - The other nodes instantiate the corresponding object (Intermediate/ Finisher) and
+        open sockets to/from the corresponding nodes, then start waiting for the
+        information to arrive.
+    - The main generation loop is ran by the Starter node (others don't know how many
+        iterations they will perform, they just know that they will have to pass the 
+        incoming message through their local piece of the model and transmit the output
+        to the next node in the chain).
+    - Upon generation completion, the starter node will send the "finish" message to all
+        other nodes to signal the conclusion.
+
+Transmission:
+    - Configuration information is sent over HTTP; each node is also an HTTP server.
+        - The starter will perform POST requests to assign roles and PUT requests to 
+        signal the program termination
+    - Transmission of the intermediate activations is done over TCP/IP sockets; this is
+    necessary because it lacks the overhead of a fully-fledged application layer
+    protocol (such as HTTP) allowing for faster transmission.
+        - The message exchange protocol is very simple: each message will have a
+        fixed-length header indicating the message size in bytes, and the payload will
+        only contain those bytes.
+        - This structure allows each node to catch the message length, and to always be
+        able to expect the correct amount of bytes.
+    - Transmission during inference is handled as follows: each node creates a message
+    FIFO queue to store incoming messages on a separate thread from the main one (which
+    runs the inference). The main node will then look for incoming messages inside the
+    queue.
+    This procedure allows to execute the main loop without interruptions and
+    independently on each device.
+        - The queue is a Python deque object, optimized for 'append' and 'pop'
+        operations
 """
 # Logging
 script_dir = os.path.dirname(__file__)
@@ -284,18 +315,22 @@ class GPTServer:
         performing inference.
 
         Args:
-            node_type: string indicating the node type - here it is just enough
-                to distinguish between "starter" and non-starter (starter is
-                configured already here, while non-starters have to be
-                configured with a POST request)
+            node_type: string indicating the node type - here it is just enough to
+                distinguish between "starter" and non-starter (starter is configured
+                already here, while non-starters have to be configured with a POST
+                request)
             node_config: node configuration information (from .json file)
-            starter_config: extra arguments required for the starter node
-                params: model parameters (state dict) for starter node
-                model_config: GPTConfig object
-                next_node: info about next node
-                prev_node: info about previous node
-                tok_metadata_path: path of the tokenizer metadata (for
-                CharacterTokenizer)
+            starter_config: extra arguments required for the starter node; expected
+                keys:
+                - params: model parameters (state dict) for starter node
+                - model_config: GPTConfig object
+                - next_node: info about next node
+                - prev_node: info about previous node
+                - tok_metadata_path: path of the tokenizer metadata (for
+                    CharacterTokenizer)
+            chunk_path: if intermediate or finisher node, optional path of the model
+                chunk to be used. If not set, the program will expect the chunk from the
+                starter node.
         """
         self.device = DEVICE
 
@@ -525,7 +560,6 @@ class GPTServer:
         while tx_msg:
             tx_msg = tx_msg[self.sock_to_next.send(tx_msg) :]
         logger_wp.debug("Sent full message to next")
-        # self.sock_to_next.sendall(tx_msg)
 
     def create_sockets(self):
         """
@@ -1164,7 +1198,6 @@ class GPTDistributed:
             # - model_args: model parameters (to be passed to GPTConfig after)
             # - config: globals of training - maybe not needed...
             # - dist_config: layer_info - n. of layers for each node
-            self.complete_model = None
             self.starter_has_entire_mod = False
             self.model_chunks = {"starter": self.model_ckpt["model"]}
             self.layers_info = self.model_ckpt["dist_config"]
