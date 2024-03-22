@@ -274,6 +274,7 @@ class GPTServer:
         node_type: Union[None, str] = None,
         starter_config: Union[Dict, None] = None,
         chunk_path: Union[None, str] = None,
+        **kwargs,
     ):
         """
         Initialize GPTServer object.
@@ -297,6 +298,16 @@ class GPTServer:
                 CharacterTokenizer)
         """
         self.device = DEVICE
+
+        # Override global constants
+        if "verb" in kwargs:
+            global VERB
+            print("Overriding 'verb'")
+            VERB = bool(kwargs["verb"])
+        if "plots" in kwargs:
+            global PLOTS
+            print("Overriding 'plots'")
+            PLOTS = bool(kwargs["plots"])
 
         self.own_addr = node_config["addr"]
         self.own_comm_port = node_config["communication"]["port"]
