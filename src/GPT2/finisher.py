@@ -16,8 +16,17 @@ script_dir = os.path.dirname(__file__)
 settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
+parser.add_argument(
+    "-c",
+    "--chunk",
+    type=str,
+    default=None,
+    help="""Optional path of the model chunk on disk - if not provided, need to ensure
+    the starter node will transmit the model chunk.""",
+)
 parser.add_argument("-v", "--verb", action="store_true", help="Enable verbose mode")
 parser.add_argument(
+    "-d",
     "--debug",
     default=False,
     action="store_true",
@@ -26,15 +35,8 @@ parser.add_argument(
 parser.add_argument(
     "--nodes-config",
     type=str,
-    default=os.path.join(script_dir, "..", "settings_distr", "configuration.json"),
+    default=os.path.join(script_dir, "settings_distr", "configuration.json"),
     help="Path to the JSON configuration file for the nodes",
-)
-parser.add_argument(
-    "-p",
-    "--path",
-    type=str,
-    default=None,
-    help="Optional path of the model chunk on disk",
 )
 
 if __name__ == "__main__":
@@ -58,7 +60,9 @@ if __name__ == "__main__":
 
     network_conf_path = args.nodes_config
 
-    if args.path is not None and "finisher" in args.path or "finish" in args.path:
+    if args.chunk is not None and not (
+        "finisher" in args.chunk or "finish" in args.chunk
+    ):
         warnings.warn("Possibly wrong chunk file detected")
 
     try:
@@ -67,7 +71,7 @@ if __name__ == "__main__":
             setup = {"verb": args.verb}
             gpt_webserv = GPTServer(
                 node_config=full_config["nodes"]["finisher"],
-                chunk_path=args.path,
+                chunk_path=args.chunk,
                 **setup
             )
     except KeyboardInterrupt:

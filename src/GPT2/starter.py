@@ -39,23 +39,32 @@ group.add_argument(
     "--chunk",
     type=str,
     default=None,
-    help="""Path of the chunk of model assigned
-    to the starter node. This argument overrides '--model' and will require the other
-    nodes to be provided the path of their own chunks as well.""",
+    help="""Path of the chunk of model assigned to the starter node.
+    This argument overrides '--model' and will require the other nodes to be provided
+    the path of their own chunks as well.""",
 )
-
-
 parser.add_argument(
-    "--debug", default=False, action="store_true", help="Enable debug mode (profiler)"
+    "-d",
+    "--debug",
+    default=False,
+    action="store_true",
+    help="Enable debug mode (profiler)",
 )
 parser.add_argument(
     "-v", "--verb", default=False, action="store_true", help="Enable verbose mode"
 )
 parser.add_argument(
+    "-p",
     "--plots",
     default=False,
     action="store_true",
-    help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder",
+    help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder)",
+)
+parser.add_argument(
+    "--n-tokens",
+    type=int,
+    default=300,
+    help="Number of tokens to be generated, default: 300",
 )
 parser.add_argument(
     "--time-run",
@@ -89,7 +98,7 @@ if __name__ == "__main__":
         else:
             raise ValueError(f"Unknown pretrained model: {args.model}")
     elif args.chunk is not None:
-        if os.path.exists(args.model):
+        if os.path.exists(args.chunk):
             ckpt_path = args.chunk
             out_dir = os.path.dirname(args.chunk)
             model_is_split = True
