@@ -39,6 +39,9 @@ Rationale:
         c. Finisher: transformer layers, layer normalization
     - The "Starter" is the main node - it will initiate inference and also evaluate the
         final logits (outputs of the model) from the "Finisher"
+        - The last layer has been moved to the starter node, and is executed at the end,
+        because this allows to transmit the same size of data (i.e., tensors of size
+        "N_EMBD" - the length of the embedded data) between all the nodes.
     - Each node opens 2 ports: one for communication (roles setup and weight exchange,
         using HTTP), the other one for the actual inference (i.e., exchange of
         activations)
