@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import logging
 import os
 from datetime import datetime
@@ -8,36 +9,69 @@ import cherrypy as cp
 import torch
 
 from sub.model_dist import GPTDistributed
-from sub.parser import parse_args
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
+data_dir = os.path.join(script_dir, "data", "shakespeare_gpt2")
 
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
+csv_header_stats = ",".join(
+    ["timestamp", "n_samples", "n_layers", "context_size", "gen_time"]
+)
+
+parser = argparse.ArgumentParser("Starter node - MDI")
+parser.add_argument(
+    "-m",
+    "--model",
+    type=str,
+    default=None,
+    help="""Path/name of the pretrained model. If it is a GPT-2 flavor ('gpt2',
+    'gpt2-medium', 'gpt2-large', 'gpt2-xl') it will be downloaded from Huggingface""",
+)
+parser.add_argument(
+    "--debug", default=False, action="store_true", help="Enable debug mode (profiler)"
+)
+parser.add_argument(
+    "-v", "--verb", default=False, action="store_true", help="Enable verbose mode"
+)
+parser.add_argument(
+    "--plots",
+    default=False,
+    action="store_true",
+    help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder",
+)
+parser.add_argument(
+    "--time-run",
+    default=None,
+    type=str,
+    help="""Optional path of the file where to store the run information and generation
+    time""",
+)
+parser.add_argument(
+    "--nodes-config",
+    type=str,
+    default=os.path.join(script_dir, "settings_distr", "configuration.json"),
+    help="""Path of the JSON configuration file for the nodes; if not specified, the
+    default 'settings_distr/configuration.json' will be used""",
+)
+
 if __name__ == "__main__":
     # Parse command line arguments
-    # Example usage:
-    #   python3 nanoGPT/starter.py --ckpt=./nanoGPT/data/shakespeare/out/ckpt_5layers.py --debug
-    args = parse_args(train=False, mdi=True)
+    args = parser.parse_args()
 
-    if args.dataset is not None:
-        data_dir = os.path.join(script_dir, "data", args.dataset)
-    else:
-        data_dir = os.path.join(script_dir, "data", "shakespeare")
-
-    if args.ckpt is not None:
-        assert os.path.exists(args.ckpt) or args.ckpt in {
-            "gpt2",
-            "gpt2-medium",
-            "gpt2-large",
-            "gpt2-xl",
-        }
-        ckpt_path = args.ckpt
-        out_dir = os.path.dirname(args.ckpt)
+    if args.model is not None:
+        if os.path.exists(args.model):
+            ckpt_path = args.model
+            out_dir = os.path.dirname(args.model)
+        elif args.model in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
+            ckpt_path = args.model
+            out_dir = os.path.dirname(args.model)
+        else:
+            raise ValueError(f"Unknown pretrained model: {args.model}")
     else:
         out_dir = os.path.join(data_dir, "out")
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
@@ -85,18 +119,7 @@ if __name__ == "__main__":
                 curr_ts = datetime.now()
                 if not existed:
                     # header
-                    f.write(
-                        ",".join(
-                            [
-                                "timestamp",
-                                "n_samples",
-                                "n_layers",
-                                "context_size",
-                                "gen_time",
-                            ]
-                        )
-                        + "\n"
-                    )
+                    f.write(csv_header_stats + "\n")
                 f.write(
                     f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{len(gen_samples)},{gpt_distr.n_layers_tot},{gpt_distr.model_config.block_size},{gen_time}\n"
                 )
