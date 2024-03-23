@@ -274,10 +274,11 @@ def split_parameters(
         )
     ]
 
-    for k in model_params:
-        print(k)
     for loc_ind, layer_ind in enumerate(valid_layer_ind):
         prefix = f"{base_name_transformer}.{layer_name}.{layer_ind}"
+        if loc_ind == 10:
+            for ke in model_params:
+                print(ke)
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
