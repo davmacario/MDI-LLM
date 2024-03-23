@@ -281,6 +281,7 @@ def split_parameters(
                 end = remove_prefix(k, prefix)
                 new_k = f"starter_model.{layer_name}.{loc_ind}{end}"
                 out_chunks["starter"][new_k] = model_params.pop(k)
+                print("Imported ", k)
 
     out_chunks["starter"][f"starter_model.lm_head.weight"] = model_params.pop(
         f"{output_layer}.weight"
