@@ -28,8 +28,7 @@ from sub.utils import (load_from_hf, loading_bar, plot_tokens_per_time,
                        split_parameters)
 
 """
-Distributed implementation of nanoGPT - using the same blocks defined in the
-original model.
+Distributed implementation of GPT2 - using the same blocks as the original model.
 
 Rationale:
     - Three block types:
