@@ -8,7 +8,8 @@
       "inference": {
         "port_in": 5088,
         "port_out": 5089
-      }
+      },
+      "device": "cuda"
     },
     "intermediate": [
       {
@@ -20,7 +21,8 @@
         "inference": {
           "port_in": 5090,
           "port_out": 5091
-        }
+        },
+        "device": "cuda"
       }
     ],
     "finisher": {
@@ -32,7 +34,8 @@
       "inference": {
         "port_in": 5092,
         "port_out": 5093
-      }
+      },
+      "device": "cuda"
     }
   }
 }

@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 """
+Plot the graphs time vs. tokens, for the generation of 2000 tokens
 Example usage:
     python3 plot_results.py 12layers -n 3samples
 """
@@ -53,38 +54,33 @@ if __name__ == "__main__":
     for fname in os.listdir(tok_t_folder):
         if model_type in fname and samples_info in fname:
             # Line style
-            if "2samples" in fname:
-                line_style = line_styles[1]
-                n_samples = "2 samples"
-            elif "3samples" in fname:
-                line_style = line_styles[0]
-                n_samples = "3 samples"
-            else:
-                line_style = line_styles[2]
-                n_samples = ""
-
-            # Line color
             if "mdi" in fname:
-                label = f"MDI {model_type} {n_samples}"
-                style = "b" + line_style
+                if "2samples" in fname:
+                    label = f"MDI {model_type} 2 nodes"
+                    style = "g"
+                elif "3samples" in fname:
+                    label = f"MDI {model_type} 3 nodes"
+                    style = "b"
+                else:
+                    label = f"MDI {model_type}"
+                    style = "k"
             else:
-                label = f"Standalone {model_type} {n_samples}"
-                style = "r" + line_style
+                label = f"Standalone {model_type}"
+                style = "r"
 
             points = pd.read_csv(
                 os.path.join(tok_t_folder, fname),
                 sep=",",
                 names=["time", "tokens"],
             )
-            plt.plot(points["time"], points["tokens"], style, label=label)
+            points_plot = points.query("tokens <= 2000")
+            plt.plot(points_plot["tokens"], points_plot["time"], style, label=label)
 
-    plt.xlabel("Time (s)")
-    plt.ylabel("N. tokens")
+    plt.ylabel("Time (s)")
+    plt.xlabel("N. tokens")
     plt.grid()
     plt.legend()
     plt.title("Comparison - standalone generation vs. MDI")
     plt.tight_layout()
-    plt.savefig(
-        os.path.join(script_dir, "img", f"tokens_time_comparison_{model_type}.png")
-    )
+    plt.savefig(os.path.join(script_dir, "img", f"time_vs_tokens_{model_type}.png"))
     plt.show()
