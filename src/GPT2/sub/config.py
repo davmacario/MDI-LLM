@@ -84,10 +84,10 @@ N_LAYERS_NODES = {
         5: {"N_LAYERS_START": 2, "N_LAYERS_FINISH": 3},
         7: {"N_LAYERS_START": 3, "N_LAYERS_FINISH": 4},
         9: {"N_LAYERS_START": 4, "N_LAYERS_FINISH": 5},
-        12: {"N_LAYERS_START": 5, "N_LAYERS_FINISH": 7},
-        24: {"N_LAYERS_START": 10, "N_LAYERS_FINISH": 14},
-        36: {"N_LAYERS_START": 16, "N_LAYERS_FINISH": 20},
-        48: {"N_LAYERS_START": 22, "N_LAYERS_FINISH": 26},
+        12: {"N_LAYERS_START": 5, "N_LAYERS_FINISH": 7},  # gpt2
+        24: {"N_LAYERS_START": 10, "N_LAYERS_FINISH": 14},  # gpt2-medium
+        36: {"N_LAYERS_START": 16, "N_LAYERS_FINISH": 20},  # gpt2-large
+        48: {"N_LAYERS_START": 22, "N_LAYERS_FINISH": 26},  # gpt2-xl
     },
     3: {
         5: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 2, "N_LAYERS_FINISH": 2},
