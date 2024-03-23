@@ -279,7 +279,7 @@ def split_parameters(
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
-                new_k = f"starter_model.{layer_name}.{loc_ind}{end}"
+                new_k = f"starter_model.{layer_name}.{loc_ind}.{end}"
                 out_chunks["starter"][new_k] = model_params.pop(k)
 
     out_chunks["starter"][f"starter_model.lm_head.weight"] = model_params.pop(
@@ -320,7 +320,7 @@ def split_parameters(
             for k in relevant_keys:
                 if k.startswith(prefix):
                     end = remove_prefix(k, prefix)
-                    new_k = f"intermediate_model.{layer_name}.{local_layer_ind}{end}"
+                    new_k = f"intermediate_model.{layer_name}.{local_layer_ind}.{end}"
                     curr_params[new_k] = model_params.pop(k)
             local_layer_ind += 1
 
@@ -351,7 +351,7 @@ def split_parameters(
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
-                new_k = f"finisher_model.{layer_name}.{local_layer_ind}{end}"
+                new_k = f"finisher_model.{layer_name}.{local_layer_ind}.{end}"
                 out_chunks["finisher"][new_k] = model_params.pop(k)
         local_layer_ind += 1
 
