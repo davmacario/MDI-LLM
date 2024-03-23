@@ -442,8 +442,6 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Load model weights from Huggingface.
 
-    NOTE: removed possibility to override dropout - as nanoGPT/model.py > from_pretrained
-
     Args:
         model_type: one of ("gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl")
 
@@ -463,6 +461,10 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
     config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
     config_args["bias"] = True  # always True for GPT model checkpoints
+    if "dropout" not in config_args:
+        config_args[
+            "dropout"
+        ] = 0.0  # NOTE: this assumes chunk won't be used for training
 
     # TODO: remove creation of GPT object (too much memory) - pay attention to .attn.bias
     # attn.bias is just the triangular masking matrix used to compute attention
