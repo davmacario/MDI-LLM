@@ -275,11 +275,11 @@ def split_parameters(
     ]
 
     for loc_ind, layer_ind in enumerate(valid_layer_ind):
-        prefix = f"{base_name_transformer}.{layer_name}.{layer_ind}"
+        prefix = f"{base_name_transformer}.{layer_name}.{layer_ind}."
         if loc_ind == 10:
             for ke in model_params:
                 print(ke)
-        for k in relevant_keys:
+        for k in relevant_keys:  # FIXME
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
                 new_k = f"starter_model.{layer_name}.{loc_ind}{end}"
@@ -319,7 +319,7 @@ def split_parameters(
         # Iterate over old keys, select correct, create new keys, copy val
         local_layer_ind = 0
         for ind in valid_layer_ind:
-            prefix = f"{base_name_transformer}.{layer_name}.{ind}"
+            prefix = f"{base_name_transformer}.{layer_name}.{ind}."
             for k in relevant_keys:
                 if k.startswith(prefix):
                     end = remove_prefix(k, prefix)
@@ -350,7 +350,7 @@ def split_parameters(
     ]
     local_layer_ind = 0
     for ind in valid_layer_ind:
-        prefix = f"{base_name_transformer}.{layer_name}.{ind}"
+        prefix = f"{base_name_transformer}.{layer_name}.{ind}."
         for k in relevant_keys:
             if k.startswith(prefix):
                 end = remove_prefix(k, prefix)
