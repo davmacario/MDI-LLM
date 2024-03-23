@@ -17,7 +17,6 @@ settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "-c",
     "--chunk",
     type=str,
     default=None,

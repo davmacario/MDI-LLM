@@ -26,7 +26,6 @@ csv_header_stats = ",".join(
 parser = argparse.ArgumentParser(description="Starter node - MDI")
 group = parser.add_mutually_exclusive_group(required=True)
 group.add_argument(
-    "-m",
     "--model",
     type=str,
     default=None,
@@ -35,7 +34,6 @@ group.add_argument(
     Can be overrode if specifying a chunk (see '-c'/'--chunk')""",
 )
 group.add_argument(
-    "-c",
     "--chunk",
     type=str,
     default=None,
