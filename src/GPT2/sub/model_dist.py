@@ -352,6 +352,9 @@ class GPTServer:
 
         self.node_type = node_type
         self.node_config = node_config
+        # Possibly get device info if found in config file
+        self.device = DEVICE if "device" not in node_config else node_config["device"]
+
         # Extract optional parameters
         if node_type is not None and node_type.lower() == "starter":
             # Configuration of starter node
@@ -374,7 +377,7 @@ class GPTServer:
             self.tok_meta_path = str(starter_config["tok_metadata_path"])
             self.device = starter_config["device"]
 
-            self.init_model(starter_config["n_layers"], set_eval=True)
+            self.init_model(starter_config["n_layers"])
 
         else:
             # Configuration of "secondary" (intermediate or finisher) node
@@ -407,7 +410,7 @@ class GPTServer:
 
     # ----- Public ------------------------------------------------------------
 
-    def init_model(self, n_transf_layers: int, set_eval: bool = True):
+    def init_model(self, n_transf_layers: int):
         """
         Initialize the node's model chunk, passing the parameters.
 
@@ -432,9 +435,6 @@ class GPTServer:
 
         self.model = self.model.to(self.device)
         self.model.load_weights(self.model_params)
-        if set_eval:
-            # Set to evaluation mode (no backpropagation)
-            self.model.eval()
 
     def start(
         self,
@@ -801,9 +801,9 @@ class GPTServer:
         """
         assert self.model_config is not None and self.model is not None
 
-        if "cuda" in DEVICE:
+        if "cuda" in self.device:
             device_type = "cuda"
-        elif "mps" in DEVICE:
+        elif "mps" in self.device:
             device_type = "mps"
         else:
             device_type = "cpu"
@@ -827,6 +827,7 @@ class GPTServer:
             for _ in range(self.n_nodes)
         ]
 
+        self.model.eval()
         start_time = time.time()
         count_wait = 0  # Count the number of times the loop had to wait
         if PLOTS:
@@ -937,9 +938,9 @@ class GPTServer:
         assert self.model is not None and self.model_config is not None
 
         # Should be overrided by kwargs
-        if "cuda" in DEVICE:
+        if "cuda" in self.device:
             device_type = "cuda"
-        elif "mps" in DEVICE:
+        elif "mps" in self.device:
             device_type = "mps"
         else:
             device_type = "cpu"
@@ -954,6 +955,7 @@ class GPTServer:
             else torch.autocast(device_type=device_type, dtype=ptdtype)
         )
 
+        self.model.eval()
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
@@ -1043,12 +1045,16 @@ class GPTServer:
                     assert self.chunk_path is not None
                     if VERB:
                         print("Loading parameters from disk")
-                    self.model_params = torch.load(
-                        self.chunk_path, map_location=self.device
-                    )["model"]
-                    print(self.model_params.keys())
+                    chunk_cont = torch.load(self.chunk_path, map_location=self.device)
+                    # Check compatibility (all keys of chunk_cont should be in init_msg)
+                    assert all(
+                        [
+                            k in init_msg["model_config"]
+                            for k in chunk_cont["model_args"]
+                        ]
+                    ), f"Different settings:\n{chunk_cont['model_args']}\n\n{init_msg['model_config']}"
+                    self.model_params = chunk_cont["model"]
                 self.n_nodes = init_msg["n_nodes"]
-                self.device = init_msg["device"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
                 if VERB:
@@ -1299,7 +1305,7 @@ class GPTDistributed:
         Information sent:
             - Node role ("role")
             - Model config (GPTConfig as dict) ("model_config")
-            - Model parameters ("params") - from pickle.dumps()
+            - Model parameters ("params") - from pickle.dumps() - if not split before
             - Previous node information - from json file ("prev_node")
             - Next node information - from json ("next_node")
 
@@ -1337,9 +1343,6 @@ class GPTDistributed:
             curr_msg["next_node"] = next
 
             curr_msg["n_layers"] = self.layers_info["N_LAYERS_INTERM"]
-            curr_msg["device"] = (
-                DEVICE if "device" not in int_node else int_node["device"]
-            )
 
             # Update next and prev for next iteration
             prev = int_node
