@@ -101,9 +101,6 @@ def replace_pair(
         return newids
 
 
-# TODO: include new tokenizer in model
-
-
 class BPETokenizer:
     """
     Byte-Pair Encoding tokenizer (from A. Karpathy)
@@ -274,9 +271,7 @@ class BPETokenizer:
                     stats = get_pairs_stats(tokens)
                     # This works because we assigned lower values to pairs we replaced first
                     # Use 'inf' as fallback for pairs that don't occur in self.merges
-                    pair = min(
-                        stats, key=lambda p: self.merges.get(p, float("inf"))
-                    )
+                    pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
                     # Check whether the pair was supposed to be substituted
                     if pair not in self.merges:
                         finished_merges = True
