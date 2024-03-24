@@ -599,6 +599,8 @@ class GPTServer:
 
         self._start_server()
         assert self.sock_to_prev is not None
+        if VERB:
+            print("Started listening")
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
@@ -734,6 +736,8 @@ class GPTServer:
                         self.next_node["inference"]["port_in"],
                     )
                 )
+                if VERB:
+                    print("Connected to next node!")
             except:
                 # Can either fail when binding or when connecting
                 tries += 1
