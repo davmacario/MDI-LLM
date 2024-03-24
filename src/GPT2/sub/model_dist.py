@@ -124,6 +124,9 @@ class StarterNode(nn.Module):
             )
         )
 
+        # Including the final linear layer in the starter allows for weight-tying
+        self.starter_model.wte.weight = self.starter_model.lm_head.weight
+
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load weights"""
         try:
