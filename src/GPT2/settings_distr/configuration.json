@@ -10,7 +10,7 @@
         "port_out": 5089
       }
     },
-    "intermediate": [
+    "secondary": [
       {
         "addr": "127.0.0.1",
         "communication": {
@@ -21,18 +21,18 @@
           "port_in": 5090,
           "port_out": 5091
         }
-      }
-    ],
-    "finisher": {
-      "addr": "127.0.0.1",
-      "communication": {
-        "starter_addr": "127.0.0.1",
-        "port": 8090
       },
-      "inference": {
-        "port_in": 5092,
-        "port_out": 5093
+      {
+        "addr": "127.0.0.1",
+        "communication": {
+          "starter_addr": "127.0.0.1",
+          "port": 8090
+        },
+        "inference": {
+          "port_in": 5092,
+          "port_out": 5093
+        }
       }
-    }
+    ]
   }
 }
