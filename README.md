@@ -25,7 +25,7 @@ The network is actually a closed loop, as the outputs of the last node in the ch
 
 ## Testbed
 
-The contents of this repository were developed to run over a network of Nvidia Jetson TX2's (8 GB of shared memory) running JetPack 4.6.4, connected via gigabit ethernet.
+The contents of this repository were developed to run over a network of 3 Nvidia Jetson TX2's (8 GB of shared memory) running JetPack 4.6.4, connected via gigabit ethernet.
 These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.
 See <docs/setup-tx2.md> for how to prepare the testing environment (software side).
 
@@ -57,12 +57,11 @@ See <docs/setup-tx2.md> for how to prepare the testing environment (software sid
 Note: the number of total transformer layers in the model changes depending on the specific model (and "flavor") used.
 These layers are then partitioned in order to assign few of them to the starter node, and the same amount to the other nodes, in an attempt to balance the amount of computation done by each device.
 
-- Three block types:
+- Two node types:
   1. **Starter node**: it is the node that "controls" the network, meaning it starts generation and collects the outputs.
-     This node contains the following layers: token embedding, positional embedding, some transformer layers, plus the final linear layer (producing the output distribution over the tokens space);
+     This node contains the following layers: token embedding, positional embedding, some transformer layers, plus the final normalization layer and linear layer (producing the output distribution over the tokens space);
      This partition was selected to allow each node of the chain to transmit (and receive) the same amount of data - having the last node transmit the output distribution to the starter node would have resulted in a larger amount of data being transmitted.
-  2. **Intermediate node**: it contains transformer layers only.
-  3. **Finisher node**: it contains transformer layers and the final normalization layer before evaluating the distribution over the possible tokens.
+  2. **Secondary node**: it contains transformer layers only.
 - The transmitted messages between the different nodes contain the intermediate results of the network, meaning they are Torch tensors of size: $(\text{embedding dimension}) \times (\text{current context length})$, where the "_embedding dimension_" is the length of the vectors with which each transformer works, and the "_current context length_" is the minimum between the number of generated tokens and the context length of the models, i.e., the attention "window" size.
   - The time effectiveness of Model-Distributed Inference is strictly related to the ability of the network to transmit the messages quickly enough to prevent overhead.
 
