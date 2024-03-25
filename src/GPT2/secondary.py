@@ -17,6 +17,9 @@ settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
+    "IND", type=int, help="Index of the secondary node to be launched on this host"
+)
+parser.add_argument(
     "--chunk",
     type=str,
     default=None,
@@ -46,8 +49,13 @@ if __name__ == "__main__":
 
     # The only available command line option is '--debug' to launch logger
     args = parser.parse_args()
+
+    print("+---------------------------------+")
+    print("| Launching secondary worker node |")
+    print("+---------------------------------+")
+
     if args.debug:
-        log_file = os.path.join(script_dir, "logs", "logs_intermediate.log")
+        log_file = os.path.join(script_dir, "logs", "logs_finisher.log")
         log_wp = logging.getLogger("model_dist")
         formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
         if not os.path.exists(os.path.dirname(log_file)):
@@ -59,19 +67,22 @@ if __name__ == "__main__":
 
     network_conf_path = args.nodes_config
 
-    if args.chunk is not None and not (
-        "intermediate" in args.chunk or "interm" in args.chunk
-    ):
+    if args.chunk is not None and not ("secondary" in args.chunk):
         warnings.warn("Possibly wrong chunk file detected")
 
     try:
         with open(network_conf_path, "r") as f:
             full_config = json.load(f)
+            n_secondary_conf = len(full_config["nodes"]["secondary"])
+            if args.IND >= n_secondary_conf:
+                raise ValueError(
+                    f"Invalid index for the current node: {args.IND} - valid indices are in the range 0 - {n_secondary_conf} for this config file"
+                )
             setup = {"verb": args.verb}
             gpt_webserv = GPTServer(
-                node_config=full_config["nodes"]["intermediate"][0],
+                node_config=full_config["nodes"]["secondary"][args.IND],
                 chunk_path=args.chunk,
-                **setup
+                **setup,
             )
     except KeyboardInterrupt:
         print("Node stopped!")

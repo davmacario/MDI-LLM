@@ -77,26 +77,25 @@ TEMPERATURE = (
 )
 
 # ---- MDI settings ------------------------------
-# Adaptive layer number - first key is the number of nodes, second is the node
-# type
+# Adaptive layer number - first key is the number of nodes, second is the node type
 N_LAYERS_NODES = {
     2: {
-        5: {"N_LAYERS_START": 2, "N_LAYERS_FINISH": 3},
-        7: {"N_LAYERS_START": 3, "N_LAYERS_FINISH": 4},
-        9: {"N_LAYERS_START": 4, "N_LAYERS_FINISH": 5},
-        12: {"N_LAYERS_START": 5, "N_LAYERS_FINISH": 7},  # gpt2
-        24: {"N_LAYERS_START": 10, "N_LAYERS_FINISH": 14},  # gpt2-medium
-        36: {"N_LAYERS_START": 16, "N_LAYERS_FINISH": 20},  # gpt2-large
-        48: {"N_LAYERS_START": 22, "N_LAYERS_FINISH": 26},  # gpt2-xl
+        5: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 3},
+        7: {"N_LAYERS_START": 3, "N_LAYERS_SECONDARY": 4},
+        9: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 5},
+        12: {"N_LAYERS_START": 5, "N_LAYERS_SECONDARY": 7},  # gpt2
+        24: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 14},  # gpt2-medium
+        36: {"N_LAYERS_START": 16, "N_LAYERS_SECONDARY": 20},  # gpt2-large
+        48: {"N_LAYERS_START": 22, "N_LAYERS_SECONDARY": 26},  # gpt2-xl
     },
     3: {
-        5: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 2, "N_LAYERS_FINISH": 2},
-        7: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 3, "N_LAYERS_FINISH": 3},
-        9: {"N_LAYERS_START": 1, "N_LAYERS_INTERM": 4, "N_LAYERS_FINISH": 4},
-        12: {"N_LAYERS_START": 2, "N_LAYERS_INTERM": 5, "N_LAYERS_FINISH": 5},  # gpt2
-        24: {"N_LAYERS_START": 4, "N_LAYERS_INTERM": 10, "N_LAYERS_FINISH": 10},
-        36: {"N_LAYERS_START": 10, "N_LAYERS_INTERM": 13, "N_LAYERS_FINISH": 13},
-        48: {"N_LAYERS_START": 14, "N_LAYERS_INTERM": 17, "N_LAYERS_FINISH": 17},
+        5: {"N_LAYERS_START": 1, "N_LAYERS_SECONDARY": 2},
+        7: {"N_LAYERS_START": 1, "N_LAYERS_SECONDARY": 3},
+        9: {"N_LAYERS_START": 1, "N_LAYERS_SECONDARY": 4},
+        12: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 5},  # gpt2
+        24: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 10},
+        36: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 13},
+        48: {"N_LAYERS_START": 14, "N_LAYERS_SECONDARY": 17},
     },
 }
 

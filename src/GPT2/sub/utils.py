@@ -15,9 +15,11 @@ from torch import nn
 from transformers import GPT2LMHeadModel
 
 from .config import (DEVICE, EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
-                     N_LAYERS_NODES, VERB, WARMUP_ITERS)
+                     N_LAYERS_NODES, WARMUP_ITERS)
 from .data_loader import get_batch
 from .model import GPT, GPTConfig
+
+VERB = False
 
 
 def get_obj_size(obj):
@@ -184,9 +186,8 @@ def split_parameters(
 
     The parameters are divided as such:
         - Starter: token embedding, positional embedding,
-            N_LAYERS_STARTxTransformer Layers + final linear layer
-        - Intermediate: N_LAYERS_INTERMxTransformer Layer
-        - Finisher: N_LAYERS_FINISHxTransformer Layer, LayerNorm
+            N_LAYERS_STARTxTransformer Layers + final layer norm and linear layer
+        - Secondary: N_LAYERS_INTERMxTransformer Layer
 
     Args:
         model_params: complete model parameters (state dict)
@@ -196,8 +197,7 @@ def split_parameters(
     Returns:
         dict containing the following k-v pairs:
             "starter": dict with the starter state dict
-            "intermediate": list containing the intermediate state dicts
-            "finisher": dict with the finisher state dict
+            "secondary": list containing the intermediate state dicts
         Layers information (n. layers per node)
     """
     assert n_nodes >= 2, "There must be at least 2 nodes in the network"
@@ -209,7 +209,7 @@ def split_parameters(
     layer_name = "h"
     transformer_last = f"{base_name_transformer}.ln_f"
     output_layer = "lm_head"
-    n_intermediate_nodes = n_nodes - 2
+    n_secondary_nodes = n_nodes - 1
 
     len_before = len(model_params)
 
@@ -227,21 +227,12 @@ def split_parameters(
     layers_info = {}
     n_layers_start = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_START"]
     layers_info["N_LAYERS_START"] = n_layers_start
-    if n_nodes > 2:
-        n_layers_interm = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_INTERM"]
-        layers_info["N_LAYERS_INTERM"] = n_layers_interm
-    else:
-        n_layers_interm = 0
-        layers_info["N_LAYERS_INTERM"] = n_layers_interm
-
-    n_layers_finish = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_FINISH"]
-    layers_info["N_LAYERS_FINISH"] = n_layers_finish
+    n_layers_secondary = N_LAYERS_NODES[n_nodes][n_layers_model]["N_LAYERS_SECONDARY"]
+    layers_info["N_LAYERS_SECONDARY"] = n_layers_secondary
 
     if VERB:
         print(f"Number of layers - starter node: {n_layers_start}")
-        if n_nodes > 2:
-            print(f"Number of layers - intermediate node: {n_layers_interm}")
-        print(f"Number of layers - finisher node: {n_layers_finish}")
+        print(f"Number of layers - secondary node{'s' if n_layers_secondary > 1 else ''}: {n_layers_secondary}")
 
     out_chunks = {}
 
@@ -263,9 +254,14 @@ def split_parameters(
             f"{base_name_transformer}.{pos_emb}.bias"
         )
 
-    # Starter may have transformer layers
+    # Starter transformer layers
+    # Complicated pythonic list call to select the correct keys to be transferred to the
+    # starter node
+    # As reference, the keys for the layers all start with:
+    #               transformer.h.<layer_ind>.[...]
+    # so we need to select the correct layer indices
     valid_layer_ind = list(range(0, n_layers_start))
-    relevant_keys = [
+    relevant_keys = [  # Keys of the original model that will be copied
         k
         for k in list(model_params.keys())
         if (
@@ -274,14 +270,25 @@ def split_parameters(
         )
     ]
 
-    for loc_ind, layer_ind in enumerate(valid_layer_ind):
-        prefix = f"{base_name_transformer}.{layer_name}.{layer_ind}."
-        for k in relevant_keys:
-            if k.startswith(prefix):
-                end = remove_prefix(k, prefix)
-                new_k = f"starter_model.{layer_name}.{loc_ind}.{end}"
-                out_chunks["starter"][new_k] = model_params.pop(k)
+    for k_orig in relevant_keys:
+        ind_layer = int(k_orig.split(".")[2])
+        ind_layer_chunk = ind_layer  # Starter layers will have the same index
 
+        prefix = f"{base_name_transformer}.{layer_name}.{ind_layer}."
+        end = remove_prefix(k_orig, prefix)
+        new_k = f"starter_model.{layer_name}.{ind_layer_chunk}.{end}"
+        out_chunks["starter"][new_k] = model_params.pop(k_orig)
+
+    # ln_f - last layernorm
+    out_chunks["starter"][f"starter_model.ln_f.weight"] = model_params.pop(
+        f"{transformer_last}.weight"
+    )
+    if f"{transformer_last}.bias" in model_params.keys():
+        out_chunks["starter"][f"starter_model.ln_f.bias"] = model_params.pop(
+            f"{transformer_last}.bias"
+        )
+
+    # lm_head - final linear layers (producing PMF over tokenizer vocabulary)
     out_chunks["starter"][f"starter_model.lm_head.weight"] = model_params.pop(
         f"{output_layer}.weight"
     )
@@ -290,20 +297,15 @@ def split_parameters(
             f"{output_layer}.bias"
         )
 
-    # 2. Select params for every Intermediate
-    out_chunks["intermediate"] = []
-    for i in range(1, n_nodes - 1):
+    # 2. Select params for every Secondary
+    out_chunks["secondary"] = []
+    for i in range(1, n_nodes):
         curr_params = {}
 
-        # Complicated pythonic list call to select the correct keys to be
-        # transferred to the intermediate node
-        # As reference, the keys for the layers all start with:
-        #       transformer.layer.<layer_ind>.[...]
-        # so we need to select the correct layer indices
-        valid_layer_ind = [
-            n_layers_start + n
-            for n in list(range((i - 1) * n_layers_interm, i * n_layers_interm))
-        ]
+        # Calculate valid layers indices in the original model
+        start_layer_ind = n_layers_start + (i - 1) * n_layers_secondary
+        finish_layer_ind = n_layers_start + i * n_layers_secondary
+        valid_layer_ind = list(range(start_layer_ind, finish_layer_ind))
         relevant_keys = [
             k
             for k in list(model_params.keys())
@@ -313,55 +315,16 @@ def split_parameters(
             )
         ]
 
-        # Iterate over old keys, select correct, create new keys, copy val
-        local_layer_ind = 0
-        for ind in valid_layer_ind:
-            prefix = f"{base_name_transformer}.{layer_name}.{ind}."
-            for k in relevant_keys:
-                if k.startswith(prefix):
-                    end = remove_prefix(k, prefix)
-                    new_k = f"intermediate_model.{layer_name}.{local_layer_ind}.{end}"
-                    curr_params[new_k] = model_params.pop(k)
-            local_layer_ind += 1
+        for k_orig in relevant_keys:
+            ind_layer = int(k_orig.split(".")[2])
+            ind_layer_chunk = ind_layer - start_layer_ind 
 
-        out_chunks["intermediate"].append(curr_params)
+            prefix = f"{base_name_transformer}.{layer_name}.{ind_layer}."
+            end = remove_prefix(k_orig, prefix)
+            new_k = f"secondary_model.{layer_name}.{ind_layer_chunk}.{end}"
+            curr_params[new_k] = model_params.pop(k_orig)
 
-    # 3. Select params for Finisher
-    out_chunks["finisher"] = {}
-
-    # Layers:
-    valid_layer_ind = list(
-        range((n_nodes - 2) * n_layers_finish, (n_nodes - 1) * n_layers_finish)
-    )
-    valid_layer_ind = [
-        n_layers_start + n_intermediate_nodes * n_layers_interm + k
-        for k in range(n_layers_finish)
-    ]
-    relevant_keys = [
-        k
-        for k in list(model_params.keys())
-        if (
-            k.startswith(f"{base_name_transformer}.{layer_name}")
-            and int(k.split(".")[2]) in valid_layer_ind
-        )
-    ]
-    local_layer_ind = 0
-    for ind in valid_layer_ind:
-        prefix = f"{base_name_transformer}.{layer_name}.{ind}."
-        for k in relevant_keys:
-            if k.startswith(prefix):
-                end = remove_prefix(k, prefix)
-                new_k = f"finisher_model.{layer_name}.{local_layer_ind}.{end}"
-                out_chunks["finisher"][new_k] = model_params.pop(k)
-        local_layer_ind += 1
-
-    out_chunks["finisher"][f"finisher_model.ln_f.weight"] = model_params.pop(
-        f"{transformer_last}.weight"
-    )
-    if f"{transformer_last}.bias" in model_params.keys():
-        out_chunks["finisher"][f"finisher_model.ln_f.bias"] = model_params.pop(
-            f"{transformer_last}.bias"
-        )
+        out_chunks["secondary"].append(curr_params)
 
     return out_chunks, layers_info
 
