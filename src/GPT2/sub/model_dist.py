@@ -34,10 +34,9 @@ Rationale:
     - Three block types:
         a. Starter: embedding (token + positional), dropout, transformer layers + 
             final linear layer
-        b. Intermediate: transformer layers
-        c. Finisher: transformer layers, layer normalization
+        b. Secondary: transformer layers only (generic worker node)
     - The "Starter" is the main node - it will initiate inference and also evaluate the
-        final logits (outputs of the model) from the "Finisher"
+        final logits (outputs of the model) from the last Secondary node
         - The last layer has been moved to the starter node, and is executed at the end,
         because this allows to transmit the same size of data (i.e., tensors of size
         "N_EMBD" - the length of the embedded data) between all the nodes.
@@ -61,9 +60,8 @@ Functioning:
     predecessor)
         - If not sending the weights, the other nodes will load their own model chunk
             from disk
-    - The other nodes instantiate the corresponding object (Intermediate/ Finisher) and
-        open sockets to/from the corresponding nodes, then start waiting for the
-        information to arrive.
+    - The other nodes instantiate the 'SecondaryNode' object and open sockets to/from
+        the corresponding nodes, then start waiting for the information to arrive.
     - The main generation loop is ran by the Starter node (others don't know how many
         iterations they will perform, they just know that they will have to pass the 
         incoming message through their local piece of the model and transmit the output
@@ -120,6 +118,7 @@ class StarterNode(nn.Module):
                 drop=nn.Dropout(config.dropout),
                 h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 # Final layer:
+                ln_f=LayerNorm(config.n_embd, bias=config.bias),
                 lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),
             )
         )
@@ -177,11 +176,12 @@ class StarterNode(nn.Module):
         """
         Last forward pass - starter node.
         """
+        idx = self.starter_model.ln_f(idx)
         return self.starter_model.lm_head(idx)
 
 
-class IntermediateNode(nn.Module):
-    """Intermediate node"""
+class SecondaryNode(nn.Module):
+    """Secondary worker node"""
 
     params_init = False
 
@@ -192,7 +192,7 @@ class IntermediateNode(nn.Module):
         self.config = config
 
         # Follow naming convention
-        self.intermediate_model = nn.ModuleDict(
+        self.secondary_model = nn.ModuleDict(
             dict(h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
         )
 
@@ -214,59 +214,12 @@ class IntermediateNode(nn.Module):
         return 1
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        """Forward pass - intermediate node"""
+        """Forward pass - secondary node"""
         if not self.params_init:
             raise ValueError("The model parameters have not been initialized!")
         x = idx
-        for block in self.intermediate_model.h:
+        for block in self.secondary_model.h:
             x = block(x)
-        return x
-
-
-class FinisherNode(nn.Module):
-    """Finisher node"""
-
-    params_init = False
-
-    def __init__(self, config: GPTConfig, n_transf_layers: int):
-        super().__init__()
-        assert config.vocab_size is not None
-
-        self.config = config
-
-        self.finisher_model = nn.ModuleDict(
-            dict(
-                h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
-                ln_f=LayerNorm(config.n_embd, bias=config.bias),
-            )
-        )
-
-    def load_weights(self, params: Mapping[str, Any]) -> int:
-        """Load weights"""
-        try:
-            self.load_state_dict(params)
-        except RuntimeError:
-            missing_k, unwanted_k = self.load_state_dict(params, strict=False)
-            if len(missing_k) > 0:
-                raise RuntimeError(
-                    f"The model is missing {len(missing_k)} keys:\n\t{missing_k}"
-                )
-            if not all([k.endswith(".attn.bias") for k in unwanted_k]):
-                raise RuntimeError(f"Unrecognized extra keys:\n\t{unwanted_k}")
-        self.params_init = True
-        if VERB:
-            print(f"Weights loaded!")
-        return 1
-
-    def forward(self, idx: torch.Tensor) -> torch.Tensor:
-        """Forward pass - finisher node"""
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-        x = idx
-        for block in self.finisher_model.h:
-            x = block(x)
-        x = self.finisher_model.ln_f(x)
-
         return x
 
 
@@ -280,7 +233,7 @@ class GPTServer:
     """
 
     exposed = True
-    model: Union[StarterNode, IntermediateNode, FinisherNode, None] = None
+    model: Union[StarterNode, SecondaryNode, None] = None
     next_node: Union[Dict, None] = None
     prev_node: Union[Dict, None] = None
     model_params: Union[Dict, None] = None
@@ -315,9 +268,8 @@ class GPTServer:
         """
         Initialize GPTServer object.
 
-        This object will control a specific model (Starter/Intermediate/
-        Finisher), allowing to pass on the information in the chain while
-        performing inference.
+        This object will control a specific model (Starter/Secondary), allowing to pass
+        on the information in the chain while performing inference.
 
         Args:
             node_type: string indicating the node type - here it is just enough to
@@ -333,9 +285,8 @@ class GPTServer:
                 - prev_node: info about previous node
                 - tok_metadata_path: path of the tokenizer metadata (for
                     CharacterTokenizer)
-            chunk_path: if intermediate or finisher node, optional path of the model
-                chunk to be used. If not set, the program will expect the chunk from the
-                starter node.
+            chunk_path: if SecondaryNode, optional path of the model chunk to be used.
+                If not set, the program will expect the chunk from the starter node.
         """
         self.device = DEVICE
 
@@ -382,7 +333,7 @@ class GPTServer:
             self.init_model(starter_config["n_layers"])
 
         else:
-            # Configuration of "secondary" (intermediate or finisher) node
+            # Configuration of "secondary" node
             self.starter_addr = node_config["communication"]["starter_addr"]
             self._running_thread = threading.Thread()  # Placeholder
             self.chunk_path = chunk_path
@@ -419,8 +370,8 @@ class GPTServer:
         The model will also be moved to the target device.
 
         Args:
-            set_eval: if set to true, the model will be set to "eval" mode, used
-                to perform inference
+            set_eval: if set to true, the model will be set to "eval" mode, used to
+                perform inference
         """
         assert self.model_params is not None, "No model parameters were found!"
         assert self.model_config is not None, "No model configuration was found!"
@@ -428,10 +379,8 @@ class GPTServer:
 
         if self.node_type == "starter":
             self.model = StarterNode(self.model_config, n_transf_layers)
-        elif self.node_type == "intermediate":
-            self.model = IntermediateNode(self.model_config, n_transf_layers)
-        elif self.node_type == "finisher":
-            self.model = FinisherNode(self.model_config, n_transf_layers)
+        elif self.node_type == "secondary":
+            self.model = SecondaryNode(self.model_config, n_transf_layers)
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
@@ -443,29 +392,26 @@ class GPTServer:
         max_new_tokens: Union[None, int] = None,
     ) -> Union[None, Tuple[List[str], float]]:
         """
-        Perform normal operation (open sockets, wait for communication from
-        previous node and forward activations to next one)
+        Perform normal operation (open sockets, wait for communication from previous
+        node and forward activations to next one)
 
-        In starter nodes, the function launches the operation by creating
-        sockets to the nodes and initializing the sample vectors.
-        Starter nodes are the only ones for which the arguments should not be
-        None.
-        The loop, for starter nodes, is not infinite, as they should know how
-        many tokens to generate.
+        In starter nodes, the function launches the operation by creating sockets to the
+        nodes and initializing the sample vectors.
+        Starter nodes are the only ones for which the arguments should not be None.
+        The loop, for starter nodes, is not infinite, as they should know how many
+        tokens to generate.
 
-        This function launches an infinite loop on a separate thread in
-        non-starter nodes, interrupted by the receival of a special message
-        (PUT) over the communication channel that triggers a change in a class
-        attribute.
-        Non-starter node do not know how long the generation will take, hence
-        they need to be stopped "externally" by the starter node once the
-        generation is complete.
+        This function launches an infinite loop on a separate thread in non-starter
+        nodes, interrupted by the receival of a special message (PUT) over the
+        communication channel that triggers a change in a class attribute.
+        Non-starter node do not know how long the generation will take, hence they need
+        to be stopped "externally" by the starter node once the generation is complete.
 
         Args:
-            n_nodes: number of nodes in the network, it is the same as the
-                number of generated samples (recurrent pipelining)
-            max_new_tokens: ONLY FOR STARTER - maximum number of tokens per
-                generated sample
+            n_nodes: number of nodes in the network, it is the same as the number of
+                generated samples (recurrent pipelining)
+            max_new_tokens: ONLY FOR STARTER - maximum number of tokens per generated
+                sample
 
         Returns:
             if starter node, return the list of produced samples, else nothing
@@ -525,8 +471,8 @@ class GPTServer:
         """
         Receive a message of the specified size from the previous node.
 
-        Remark: the size specified in socket.recv(<>) is the MAX size that will
-        be read from the receiver buffer.
+        Remark: the size specified in socket.recv(<>) is the MAX size that will be read
+        from the receiver buffer.
 
         Args:
             size: size (in bytes) of the expected message
@@ -553,9 +499,9 @@ class GPTServer:
         Send any Python object to the next node.
         The sender is a **client**.
 
-        The message is composed by a header of HEADERLENGTH bytes including the
-        length of the actual message, plus a message of MSGLENGTH bytes
-        containing the zero-padded message.
+        The message is composed by a header of HEADERLENGTH bytes including the length
+        of the actual message, plus a message of MSGLENGTH bytes containing the
+        zero-padded message.
         """
         assert self.sock_to_next is not None
 
@@ -568,11 +514,12 @@ class GPTServer:
 
     def create_sockets(self):
         """
-        Create sockets for communicating the intermediate results with the
-        previous and next nodes in the chain.
+        Create sockets for communicating the intermediate results with the previous and
+        next nodes in the chain.
 
-        Starter nodes will open the connection towards the next node first,
-        while all other nodes will first connect to the previous ones.
+        Starter nodes will open the connection towards the next node first, while all
+        other nodes will first connect to the previous ones (otherwise the application
+        would just wait indefinitely, as no node will connect with any other).
         """
         assert self.sock_to_prev is None and self.sock_to_next is None
         assert self.next_node is not None and self.prev_node is not None
@@ -651,9 +598,8 @@ class GPTServer:
         self,
     ) -> Union[CharacterTokenizer, BPETokenizer, tiktoken.Encoding]:
         """
-        Load the tokenizer information from the path specified in class
-        attribute `self.tok_meta_path`.
-
+        Load the tokenizer information from the path specified in class attribute
+        `self.tok_meta_path`.
         The tokenizer object will be stored in `self.tok`.
 
         Returns:
@@ -664,7 +610,7 @@ class GPTServer:
             if VERB:
                 print(f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}")
         else:
-            logger_wp.info("Loading GPT-2 tokenizer")
+            logger_wp.info("Loading GPT-2 tokenizer (50k)")
             if VERB:
                 print("[INFO]: loading GPT-2 tokenizer")
 
@@ -683,8 +629,7 @@ class GPTServer:
 
     def _start_server(self, max_tries: int = 30):
         """
-        Start the server socket, i.e., the socket to the previous node in the
-        chain.
+        Start the server socket, i.e., the socket to the previous node in the chain.
         """
         loopsigns = ["|", "/", "-", "\\"]
         self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -754,17 +699,16 @@ class GPTServer:
 
     def _fill_queue(self):
         """
-        This method has the goal of managing incoming messages from previous
-        nodes in the chain.
+        This method has the goal of managing incoming messages from previous nodes in
+        the chain.
         As a message is received, its contents are stored in the message queue
         (`self.message_queue`).
         This allows to store locally each of the received messages, in order.
-        The order is crucial for the correct functioning of the program
-        (pipelining).
+        The order is crucial for the correct functioning of the program (pipelining).
 
         This method loops infinitely and constantly waits for incoming messages.
-        For this reason, it is ran on a separate thread, and it is stopped when
-        the main thread, running the processing function, finishes.
+        For this reason, it is ran on a separate thread, and it is stopped when the main
+        thread, running the processing function, finishes.
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
@@ -795,8 +739,8 @@ class GPTServer:
     def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
-        This loop has a finite duration, as the starter knows what is the length
-        of the samples to be generated.
+        This loop has a finite duration, as the starter knows what is the length of the
+        samples to be generated.
 
         Args:
             max_new_tokens: maximum number of tokens
@@ -805,6 +749,7 @@ class GPTServer:
             list containing the `n_nodes` generated samples
             total generation time in seconds
         """
+        # TODO: allow to generate as many samples as desired (>= n. nodes) - see #10
         assert self.model_config is not None and self.model is not None
 
         if "cuda" in self.device:
@@ -825,7 +770,7 @@ class GPTServer:
         )
 
         # Encode starting sequence (TODO: implement prompt support - different
-        # prompts for different samples)
+        # prompts for different samples - see #12)
         start = "\n"
         start_ids = self.tok_encode(start)
         idx = [
@@ -853,7 +798,7 @@ class GPTServer:
 
                     if k >= self.n_nodes:
                         # We are not in the first iteration (k starts from 0)
-                        # can start processing messages from finisher
+                        # can start processing messages from last secondary node
                         old_count_w = count_wait
                         while len(self.message_queue) <= 0:
                             count_wait += 1
@@ -934,9 +879,8 @@ class GPTServer:
 
     def _node_loop(self):
         """
-        Execution loop for non-starter nodes. This method must be used as the
-        target of a thread that is launched once the node has been correctly
-        initialized.
+        Execution loop for non-starter nodes. This method must be used as the target of
+        a thread that is launched once the node has been correctly initialized.
 
         The execution will be stopped once a PUT request is made to /stop.
         """
@@ -1030,12 +974,11 @@ class GPTServer:
         """
         Functions:
         - Non-starters:
-            Receive configuration info from the starter node and start
-            connection, with previous and next, then wait for incoming
-            transmission (from prev), process values (forward), and send them
-            over to the next one
+            Receive configuration info from the starter node and start connection with
+            previous and next, then start generation, i.e., wait for incoming data
+            through the sockets to be passed through the local model chunk.
         """
-        if self.node_type is None and self.model is None:
+        if self.node_type is None and self.model is None:  # Only for non-init nodes
             if len(path) > 0 and path[0] == "init":
                 assert not self.running
                 init_msg = pickle.loads(cp.request.body.read())
@@ -1074,14 +1017,14 @@ class GPTServer:
         elif self.model is None:
             raise cp.HTTPError(
                 403,
-                "Failed to configure node - the model was already initialized",
+                f"Failed to configure node - the model was already initialized: {self.node_type}",
             )
 
     def PUT(self, *path):
         """
-        Used by the starter to stop running nodes at the end of the generation
+        Used by the starter to stop running nodes at the end of the generation.
         """
-        if self.node_type not in {"intermediate", "finisher"}:
+        if self.node_type != "secondary":
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
             if len(path) > 0 and path[0] == "stop":
@@ -1101,7 +1044,7 @@ class GPTServer:
 
 class GPTDistributed:
     """
-    Distributed implementation of a minimal GPT2 instance
+    Distributed implementation of a minimal GPT2 instance.
     """
 
     # Syntax of the message used to initialize other nodes
@@ -1173,8 +1116,10 @@ class GPTDistributed:
         self.own_inference_port_out = self.own_config["inference"]["port_out"]
 
         # Get the model parameters and split them based on n. of nodes
-        self.n_intermediate = len(self.nodes_info["nodes"]["intermediate"])
-        self.n_total_nodes = 2 + self.n_intermediate
+        self.n_secondary = len(self.nodes_info["nodes"]["secondary"])
+        if self.n_secondary < 1:
+            raise ValueError("No secondary nodes provided!")
+        self.n_total_nodes = 1 + self.n_secondary
 
         if os.path.exists(ckpt_path):
             # Either load full model, or load chunk
@@ -1197,9 +1142,11 @@ class GPTDistributed:
             assert not model_was_split
             model_sd, model_args = load_from_hf(ckpt_path)
             self.model_ckpt = {"model": model_sd, "model_args": model_args}
+        else:
+            raise ValueError(f"Unrecognized model: {ckpt_path}")
 
         if not model_was_split:
-            # Extract state dict (complete model)
+            # Full model loaded: extract state dict (complete model)
             self.complete_model = self.model_ckpt["model"]  # State dict
             self.starter_has_entire_mod = True
 
@@ -1236,8 +1183,7 @@ class GPTDistributed:
 
         self.n_layers_tot = (
             self.layers_info["N_LAYERS_START"]
-            + self.layers_info["N_LAYERS_FINISH"]
-            + self.n_intermediate * self.layers_info["N_LAYERS_INTERM"]
+            + self.n_secondary * self.layers_info["N_LAYERS_SECONDARY"]
         )
 
         global MODEL_TYPE
@@ -1285,14 +1231,11 @@ class GPTDistributed:
         starter_config["params"] = self.model_chunks["starter"]
         starter_config["model_config"] = self.model_config
         starter_config["n_nodes"] = self.n_total_nodes
-        starter_config["prev_node"] = self.nodes_info["nodes"]["finisher"]
         starter_config["n_layers"] = self.layers_info["N_LAYERS_START"]
-        if self.n_intermediate:
-            starter_config["next_node"] = self.nodes_info["nodes"]["intermediate"][0]
-        else:
-            starter_config["next_node"] = starter_config["prev_node"]
-
+        starter_config["prev_node"] = self.nodes_info["nodes"]["secondary"][-1]
+        starter_config["next_node"] = self.nodes_info["nodes"]["secondary"][0]
         starter_config["tok_metadata_path"] = self.tok_meta_path
+        # Device selection: use default if not found in configuration JSON file
         starter_config["device"] = (
             DEVICE if "device" not in self.own_config else self.own_config["device"]
         )
@@ -1305,8 +1248,8 @@ class GPTDistributed:
 
     def configure_nodes(self) -> int:
         """
-        Send POST requests to the other nodes to inform them of their role and
-        including their chunk of model.
+        Send POST requests to the other nodes to inform them of their role and including
+        their chunk of model.
 
         Information sent:
             - Node role ("role")
@@ -1323,45 +1266,45 @@ class GPTDistributed:
 
         # Store the prev and next in a smart way
         prev = self.nodes_info["nodes"]["starter"]
-        n_interm = len(self.nodes_info["nodes"]["intermediate"])
-        if n_interm == 0:  # No intermediate nodes
-            next = prev
-        elif n_interm == 1:
-            next = self.nodes_info["nodes"]["finisher"]
-        elif n_interm > 1:
-            next = self.nodes_info["nodes"]["intermediate"][1]
+        if self.n_secondary == 1:
+            next = self.nodes_info["nodes"]["starter"]
+        elif self.n_secondary > 1:
+            next = self.nodes_info["nodes"]["secondary"][1]
         else:
             raise ValueError("Should not be here!")
 
-        # Intermediate config
-        for i, int_node in enumerate(self.nodes_info["nodes"]["intermediate"]):
+        # Secondary nodes config
+        for i, sec_node in enumerate(self.nodes_info["nodes"]["secondary"]):
             if VERB:
-                print(f"Initializing intermediate node n.{i}")
+                print(f"Initializing secondary node n.{i}")
 
             curr_msg = self.init_msg.copy()
-            curr_msg["role"] = "intermediate"
+            curr_msg["role"] = "secondary"
             curr_msg["model_config"] = self.model_config.asdict()
             if not self.mod_split:
-                curr_msg["params"] = self.model_chunks["intermediate"][i]
+                curr_msg["params"] = self.model_chunks["secondary"][i]
             curr_msg["n_nodes"] = self.n_total_nodes
 
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
 
-            curr_msg["n_layers"] = self.layers_info["N_LAYERS_INTERM"]
+            curr_msg["n_layers"] = self.layers_info["N_LAYERS_SECONDARY"]
+            curr_msg["device"] = (
+                DEVICE if "device" not in sec_node else sec_node["device"]
+            )
 
             # Update next and prev for next iteration
-            prev = int_node
-            if i == n_interm - 1:  # Last iter in loop
+            prev = sec_node
+            if i == self.n_secondary - 1:  # Last iter in loop - finished
+                next = None
+            elif i == self.n_secondary - 2:  # Second to last iter
                 next = self.nodes_info["nodes"]["starter"]
-            elif i == n_interm - 2:  # Second to last iter
-                next = self.nodes_info["nodes"]["finisher"]
             else:
-                next = self.nodes_info["nodes"]["intermediate"][i + 2]
+                next = self.nodes_info["nodes"]["secondary"][i + 2]
 
             # Send POST request
-            target_addr = int_node["addr"]
-            target_port = int_node["communication"]["port"]
+            target_addr = sec_node["addr"]
+            target_port = sec_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/init"
             out *= self.request_to_node("post", addr, curr_msg)
@@ -1369,46 +1312,12 @@ class GPTDistributed:
             if not out:
                 if VERB:
                     print("> Failed!")
-                logger_wp.error("Failed to initialize node!")
+                logger_wp.error(f"Failed to initialize secondary node {i}!")
                 return out
 
             if VERB:
                 print("> Success!")
-            logger_wp.info("Node was initialized successfully")
-
-        # Finisher config - can use next/prev from last loop iteration
-        curr_msg = self.init_msg.copy()
-        curr_msg["role"] = "finisher"
-        curr_msg["model_config"] = self.model_config.asdict()
-        if not self.mod_split:
-            curr_msg["params"] = self.model_chunks["finisher"]
-        curr_msg["n_nodes"] = self.n_total_nodes
-
-        curr_msg["prev_node"] = prev
-        curr_msg["next_node"] = next
-
-        curr_msg["n_layers"] = self.layers_info["N_LAYERS_FINISH"]
-
-        fin_node = self.nodes_info["nodes"]["finisher"]
-        curr_msg["device"] = DEVICE if "device" not in fin_node else fin_node["device"]
-
-        target_addr = fin_node["addr"]
-        target_port = fin_node["communication"]["port"]
-        addr = f"http://{target_addr}:{target_port}/init"
-        if VERB:
-            print(f"Initializing finisher node ({addr})")
-        logger_wp.info(f"Initializing finisher node ({addr})")
-
-        out *= self.request_to_node("post", addr, curr_msg)
-
-        if out:
-            if VERB:
-                print("> Success!")
-            logger_wp.info("Node was initialized successfully!")
-        elif not out:
-            if VERB:
-                print("> Failed!")
-            logger_wp.error("Failed to initialize finisher node")
+            logger_wp.info(f"Secondary node {i} was initialized successfully")
 
         return out
 
@@ -1537,21 +1446,14 @@ class GPTDistributed:
             0 if at least 1 request failed
         """
         out = 1
-        for int_node in self.nodes_info["nodes"]["intermediate"]:
-            target_addr = int_node["addr"]
-            target_port = int_node["communication"]["port"]
+        for sec_node in self.nodes_info["nodes"]["secondary"]:
+            target_addr = sec_node["addr"]
+            target_port = sec_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/stop"
             if VERB:
                 print(f"Sending PUT request to {addr}")
             out *= self.request_to_node("PUT", addr, {})
-
-        target_addr = self.nodes_info["nodes"]["finisher"]["addr"]
-        target_port = self.nodes_info["nodes"]["finisher"]["communication"]["port"]
-        addr = f"http://{target_addr}:{target_port}/stop"
-        if VERB:
-            print(f"Sending PUT request to {addr}")
-        out *= self.request_to_node("PUT", addr, {})
 
         self.webserv.shutdown()
 
