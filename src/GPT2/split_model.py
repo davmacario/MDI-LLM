@@ -57,7 +57,7 @@ if __name__ == "__main__":
     valid_gpt2_flavors = {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
 
     if args.n_chunks < 2:
-        raise ValueError("The number of nodes must be at least 2")
+        raise ValueError("The number of nodes/chunks must be at least 2")
     n_nodes = args.n_chunks
 
     input_model = args.model
@@ -84,7 +84,7 @@ if __name__ == "__main__":
         state_dict, model_args = load_from_hf(input_model)
         config = {}
     else:
-        raise ValueError(f"Unable to find model: {input_model}")
+        raise ValueError(f"Invalid model: {input_model}")
 
     # Divide loaded state dictionary in chunks
     chunks, layer_info = split_parameters(state_dict, n_nodes)
@@ -94,11 +94,12 @@ if __name__ == "__main__":
     gc.collect()
 
     # Print result of chunk partition
-    n_interm = n_nodes - 2
+    n_secondary = n_nodes - 1
     print("Using the following split:")
-    print(f"Starter: {layer_info['N_LAYERS_START']} layers")
-    print(f"{n_interm} Intermediate(s): {layer_info['N_LAYERS_INTERM']} layers")
-    print(f"Finisher: {layer_info['N_LAYERS_FINISH']} layers")
+    print(f"- Starter node: {layer_info['N_LAYERS_START']} layers")
+    print(
+        f"- {n_secondary} secondary node{'s' if n_secondary - 1 else ''}: {layer_info['N_LAYERS_SECONDARY']} layers"
+    )
 
     # Store each chunk as dict:
     # - model: actual model chunk (params)
@@ -118,25 +119,15 @@ if __name__ == "__main__":
     }
     torch.save(ckpt, starter_fname)
 
-    # Intermediate nodes
-    for i in range(n_interm):
-        curr_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_intermediate{i}.pt")
+    # Secondary nodes
+    for i in range(n_secondary):
+        curr_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_secondary{i}.pt")
         ckpt = {
-            "model": chunks["intermediate"][i],
+            "model": chunks["secondary"][i],
             "model_args": model_args,
             "dist_config": layer_info,
             "config": config,
         }
         torch.save(ckpt, curr_fname)
-
-    # Finisher
-    finisher_fname = os.path.join(args.out_dir, f"ckpt_{model_type}_finisher.pt")
-    ckpt = {
-        "model": chunks["finisher"],
-        "model_args": model_args,
-        "dist_config": layer_info,
-        "config": config,
-    }
-    torch.save(ckpt, finisher_fname)
 
     print("Files have been written to disk!")

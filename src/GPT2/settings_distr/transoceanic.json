@@ -1,7 +1,7 @@
 {
   "nodes": {
     "starter": {
-      "addr": "10.7.48.46",
+      "addr": "100.127.117.69",
       "communication": {
         "port": 8088
       },
@@ -9,32 +9,32 @@
         "port_in": 5088,
         "port_out": 5089
       },
-      "device": "cuda"
+      "device": "mps"
     },
     "intermediate": [
       {
-        "addr": "10.7.48.12",
+        "addr": "100.89.241.94",
         "communication": {
-          "starter_addr": "10.7.48.46",
+          "starter_addr": "100.127.117.69",
           "port": 8089
         },
         "inference": {
           "port_in": 5090,
           "port_out": 5091
         },
-        "device": "cuda"
+        "device": "cuda:0"
       },
       {
-        "addr": "10.7.48.88",
+        "addr": "100.89.241.94",
         "communication": {
-          "starter_addr": "10.7.48.46",
+          "starter_addr": "100.127.117.69",
           "port": 8090
         },
         "inference": {
           "port_in": 5092,
-          "port_out": 5093
+          "port_out": 5094
         },
-        "device": "cuda"
+        "device": "cuda:1"
       }
     ]
   }
