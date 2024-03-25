@@ -5,6 +5,10 @@
 ![Static Badge](https://img.shields.io/badge/Python-3.8%2C%203.10-blue?style=flat&logo=Python&logoColor=yellow)
 ![Static Badge](https://img.shields.io/badge/PyTorch-1.12%2C_2.1.2-red?style=flat&logo=PyTorch)
 
+**Note:** this repository is Work-In-Progress! Some information may be inaccurate or missing.
+
+---
+
 This repository contains the implementation of Model-Distributed Inference for [nanoGPT](https://github.com/karpathy/nanoGPT) and [GPT2](https://huggingface.co/openai-community/gpt2).
 The idea behind this approach for generation is to partition the model among different nodes, by assigning, for example, some layers to each, and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
 This can not only solve memory limitations of resource-limited devices, but also result in lower inference times when paired with _recurrent pipelining_.

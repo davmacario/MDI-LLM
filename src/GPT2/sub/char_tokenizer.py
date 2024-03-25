@@ -10,9 +10,7 @@ class CharacterTokenizer:
     Each character is encoded with a specific token.
     """
 
-    def __init__(
-        self, stoi: Union[Dict, None] = None, itos: Union[Dict, None] = None
-    ):
+    def __init__(self, stoi: Union[Dict, None] = None, itos: Union[Dict, None] = None):
         """
         Instantiate a character tokenizer.
 
@@ -45,7 +43,7 @@ class CharacterTokenizer:
 
         self.init = True
 
-    def encode(self, in_str: str) -> List:
+    def encode(self, in_str: str) -> List[int]:
         if not self.init:
             # "Train" tokenizer on passed sequence
             self.tokenize(in_str)
