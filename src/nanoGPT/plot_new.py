@@ -50,22 +50,27 @@ if __name__ == "__main__":
     tok_t_folder = os.path.join(script_dir, "logs", "tok-per-time")
     assert os.path.exists(tok_t_folder), f"Error: folder not found {tok_t_folder}"
 
-    fig = plt.figure(figsize=(12, 6))
-    for fname in os.listdir(tok_t_folder):
+    fig = plt.figure(figsize=(6, 5))
+    fnames = os.listdir(tok_t_folder)
+    fnames.sort()
+    for fname in fnames:
         if model_type in fname and samples_info in fname:
             # Line style
             if "mdi" in fname:
                 if "2samples" in fname:
-                    label = f"MDI {model_type} 2 nodes"
+                    # label = f"MDI {model_type} 2 nodes"
+                    label = "2 Nodes"
                     style = "g"
                 elif "3samples" in fname:
-                    label = f"MDI {model_type} 3 nodes"
+                    # label = f"MDI {model_type} 3 nodes"
+                    label = "3 Nodes"
                     style = "b"
                 else:
                     label = f"MDI {model_type}"
                     style = "k"
             else:
-                label = f"Standalone {model_type}"
+                # label = f"Standalone {model_type}"
+                label = "1 Node"
                 style = "r"
 
             points = pd.read_csv(
@@ -74,13 +79,34 @@ if __name__ == "__main__":
                 names=["time", "tokens"],
             )
             points_plot = points.query("tokens <= 2000")
-            plt.plot(points_plot["tokens"], points_plot["time"], style, label=label)
+            plt.plot(
+                points_plot["tokens"],
+                points_plot["time"],
+                style,
+                label=label,
+                linewidth=2,
+            )
 
     plt.ylabel("Time (s)")
-    plt.xlabel("N. tokens")
+    plt.xlabel("Number of tokens")
     plt.grid()
+    plt.grid(which="minor", linestyle="dashed", linewidth=0.3)
+    plt.minorticks_on()
     plt.legend()
-    plt.title("Comparison - standalone generation vs. MDI")
+    if "12layers" in model_type:
+        title_str = "12 Layers"
+    elif "9layers" in model_type:
+        title_str = "9 Layers"
+    elif "7layers" in model_type:
+        title_str = "7 Layers"
+    else:
+        title_str = ""
+    if title_str != "":
+        plt.title(f"Standalone generation vs. MDI - {title_str}")
+    else:
+        plt.title(f"Standalone generation vs. MDI")
     plt.tight_layout()
-    plt.savefig(os.path.join(script_dir, "img", f"time_vs_tokens_{model_type}.png"))
+    plt.savefig(
+        os.path.join(script_dir, "img", f"time_vs_tokens_{model_type}.png"), dpi=500
+    )
     plt.show()
