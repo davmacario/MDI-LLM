@@ -90,7 +90,14 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
         plt.show()
 
 
-def main():
+def main(args):
+    proc = start_program(args.cmd)
+    monitor_memory(
+        proc, out_file=args.output, interval=args.interval, img_path=args.img
+    )
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="Memory Monitor")
     parser.add_argument(
         "cmd",
@@ -127,11 +134,4 @@ def main():
 
     args = parser.parse_args()
 
-    proc = start_program(args.cmd)
-    monitor_memory(
-        proc, out_file=args.output, interval=args.interval, img_path=args.img
-    )
-
-
-if __name__ == "__main__":
-    main()
+    main(args)
