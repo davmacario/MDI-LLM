@@ -893,9 +893,6 @@ class GPTServer:
         if VERB:
             print("[INFO] Generation completed!                          ")
             print(f"> Total time for generation: {tot_time} s")
-            print(
-                f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
-            )
 
         return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
 
@@ -961,7 +958,6 @@ class GPTServer:
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        print(f"Total times waited: {count_wait}")
                         self.send_to_next(self.stop_msg)
 
     def _build_msg(self, data, sample_index) -> Dict:
