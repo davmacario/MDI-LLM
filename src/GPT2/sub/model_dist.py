@@ -728,6 +728,9 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
+        if len(self.message_queue) < 1:
+            self.queue_not_empty.clear()
+
         _n_recv_msg = 0
         while self.running:
             # Receive information from the new socket (exact length)
@@ -924,20 +927,17 @@ class GPTServer:
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
-        count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
             with ctx:
                 while self.running:
                     logger_wp.info(f"Iter {iter}")
-                    old_count_w = count_wait
-                    while len(self.message_queue) <= 0:  # Wait for messages
-                        count_wait += 1
-                    if count_wait - old_count_w > 0:
-                        logger_wp.warn(
-                            f"Iter {iter} - Had to wait for queue to fill up!"
-                        )
-                    # Extract message from queue
+
+                    assert self.queue_not_empty.wait()
+
                     in_msg = self.message_queue.popleft()
+                    if len(self.message_queue) <= 0:  # Wait for messages
+                        self.queue_not_empty.clear()
+                    # Extract message from queue
                     # Unpack
                     samp_ind = in_msg["sample_index"]
                     assert (
