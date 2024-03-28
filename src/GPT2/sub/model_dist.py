@@ -1012,7 +1012,7 @@ class GPTServer:
                     assert self.chunk_path is not None
                     if VERB:
                         print("Loading parameters from disk")
-                    chunk_cont = torch.load(self.chunk_path, map_location="cpu")
+                    chunk_cont = torch.load(self.chunk_path, map_location=self.device)
                     # Check compatibility (all keys of chunk_cont should be in init_msg)
                     assert all(
                         [
@@ -1271,9 +1271,6 @@ class GPTDistributed:
             node_config=self.own_config,
             starter_config=starter_config,
         )
-        if model_was_split:
-            del self.model_chunks
-            gc.collect()
 
     def configure_nodes(self) -> int:
         """
