@@ -17,9 +17,6 @@ settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "IND", type=int, help="Index of the secondary node to be launched on this host"
-)
-parser.add_argument(
     "--chunk",
     type=str,
     default=None,
@@ -34,12 +31,17 @@ parser.add_argument(
     action="store_true",
     help="Enable debug mode (enable profiler)",
 )
+
+# The following achieves: (--nodes-config & IND) | --secondary-config
 group = parser.add_mutually_exclusive_group(required=True)
 group.add_argument(
     "--nodes-config",
     type=str,
-    default=os.path.join(script_dir, "settings_distr", "configuration.json"),
-    help="Path to the JSON configuration file for the nodes",
+    metavar=("CONFIG-PATH", "SECONDARY-INDEX"),
+    nargs=2,  # 2 args
+    default=[os.path.join(script_dir, "settings_distr", "configuration.json"), 0],
+    help="""Path to the JSON configuration file for the nodes followed by the positional
+    index of the intermediate node""",
 )
 group.add_argument(
     "--secondary-config",
@@ -74,15 +76,16 @@ if __name__ == "__main__":
         log_wp.addHandler(fhdlr)
 
     if args.secondary_config is None:
-        with open(args.nodes_config) as f:
+        with open(args.nodes_config[0]) as f:
             full_config = json.load(f)
             n_secondary = len(full_config["nodes"]["secondary"])
-            if args.IND >= n_secondary:
+            node_ind = int(args.nodes_config[1])
+            if node_ind >= n_secondary:
                 raise ValueError(
-                    f"""Invalid index for the current node: {args.IND} - valid indices 
+                    f"""Invalid index for the current node: {node_ind} - valid indices
                     are in the range 0 - {n_secondary} for this config file"""
                 )
-            node_config = full_config["nodes"]["secondary"][args.IND]
+            node_config = full_config["nodes"]["secondary"][node_ind]
     else:
         with open(args.secondary_config) as f:
             node_config = json.load(f)
