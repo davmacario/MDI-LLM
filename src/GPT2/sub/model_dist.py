@@ -264,6 +264,7 @@ class GPTServer:
     # Message queue
     message_queue = deque([])
     queue_not_empty = threading.Event()  # Replaces busy waiting
+    queue_not_empty.clear()
 
     # Some model configs:
     top_k = TOP_K
