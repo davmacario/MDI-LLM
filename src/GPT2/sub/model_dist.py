@@ -1160,6 +1160,8 @@ class GPTDistributed:
             raise ValueError(f"Unrecognized model: {ckpt_path}")
 
         if not model_was_split:
+            if VERB:
+                print("Loading full model and splitting it into chunks")
             # Full model loaded: extract state dict (complete model)
             self.complete_model = self.model_ckpt["model"]  # State dict
             self.starter_has_entire_mod = True
@@ -1186,6 +1188,8 @@ class GPTDistributed:
             del self.complete_model
             gc.collect()
         else:
+            if VERB:
+                print("Model was split in advance - loading starter chunk")
             # CKPT chunk components:
             # - model: actual model chunk (params)
             # - model_args: model parameters (to be passed to GPTConfig after)
