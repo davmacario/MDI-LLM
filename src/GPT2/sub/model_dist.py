@@ -348,6 +348,8 @@ class GPTServer:
 
             self.init_model(starter_config["n_layers"])
 
+            assert self.model_params is None, "Model was not flushed"
+
         else:
             # Configuration of "secondary" node
             self.starter_addr = node_config["communication"]["starter_addr"]
@@ -400,11 +402,12 @@ class GPTServer:
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
-        self.model = self.model.to(self.device)
         self.model.load_weights(self.model_params)
+        self.model = self.model.to(self.device)
 
         # Clear memory of model_params
         del self.model_params
+        self.model_params = None
         gc.collect()
 
     def start(
@@ -1009,7 +1012,7 @@ class GPTServer:
                     assert self.chunk_path is not None
                     if VERB:
                         print("Loading parameters from disk")
-                    chunk_cont = torch.load(self.chunk_path, map_location=self.device)
+                    chunk_cont = torch.load(self.chunk_path, map_location="cpu")
                     # Check compatibility (all keys of chunk_cont should be in init_msg)
                     assert all(
                         [
@@ -1021,6 +1024,10 @@ class GPTServer:
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
+                assert (
+                    self.model_params is None
+                ), "The model parameters were not flushed!"
+
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 logger_wp.info("Received initialization information!")
@@ -1264,6 +1271,8 @@ class GPTDistributed:
             node_config=self.own_config,
             starter_config=starter_config,
         )
+        self.model_chunks["starter"] = None
+        gc.collect()
 
     def configure_nodes(self) -> int:
         """
@@ -1337,6 +1346,10 @@ class GPTDistributed:
             if VERB:
                 print("> Success!")
             logger_wp.info(f"Secondary node {i} was initialized successfully")
+
+        # Delete model parameters from memory
+        del self.model_chunks
+        gc.collect()
 
         return out
 
