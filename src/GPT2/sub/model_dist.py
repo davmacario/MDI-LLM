@@ -817,11 +817,11 @@ class GPTServer:
                         # can start processing messages from last secondary node
 
                         # Wait for queue to contain msg
-                        self.queue_not_empty.wait()
+                        assert self.queue_not_empty.wait()
 
                         in_msg = self.message_queue.popleft()
-                        if not len(self.message_queue):
-                            self.message_queue.clear()
+                        if len(self.message_queue) < 1:
+                            self.queue_not_empty.clear()
                         sample_in = in_msg["sample_index"]
 
                         # Check correct order
