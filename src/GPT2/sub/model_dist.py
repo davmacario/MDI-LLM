@@ -1271,8 +1271,9 @@ class GPTDistributed:
             node_config=self.own_config,
             starter_config=starter_config,
         )
-        self.model_chunks["starter"] = None
-        gc.collect()
+        if model_was_split:
+            del self.model_chunks
+            gc.collect()
 
     def configure_nodes(self) -> int:
         """
