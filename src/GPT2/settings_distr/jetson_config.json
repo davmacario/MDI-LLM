@@ -11,7 +11,7 @@
       },
       "device": "cuda"
     },
-    "intermediate": [
+    "secondary": [
       {
         "addr": "10.7.48.12",
         "communication": {
