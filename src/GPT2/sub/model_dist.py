@@ -403,6 +403,10 @@ class GPTServer:
         self.model = self.model.to(self.device)
         self.model.load_weights(self.model_params)
 
+        # Clear memory of model_params
+        del self.model_params
+        gc.collect()
+
     def start(
         self,
         max_new_tokens: Union[None, int] = None,
