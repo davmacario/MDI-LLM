@@ -263,6 +263,7 @@ class GPTServer:
 
     # Message queue
     message_queue = deque([])
+    queue_not_empty = threading.Event()  # Replaces busy waiting
 
     # Some model configs:
     top_k = TOP_K
@@ -749,6 +750,7 @@ class GPTServer:
                 self.running = False
             else:  # Not here if stopping message is received
                 self.message_queue.append(data)
+                self.queue_not_empty.set()
 
     def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
         """
@@ -794,7 +796,6 @@ class GPTServer:
 
         self.model.eval()
         start_time = time.time()
-        count_wait = 0  # Count the number of times the loop had to wait
         if PLOTS:
             self.tok_time.append((0, 0))
         with torch.no_grad():
@@ -813,14 +814,13 @@ class GPTServer:
                     if k >= self.n_nodes:
                         # We are not in the first iteration (k starts from 0)
                         # can start processing messages from last secondary node
-                        old_count_w = count_wait
-                        while len(self.message_queue) <= 0:
-                            count_wait += 1
-                        if count_wait - old_count_w > 0:
-                            logger_wp.warn(
-                                f"Iter {k} - Had to wait for queue to fill up!"
-                            )
+
+                        # Wait for queue to contain msg
+                        self.queue_not_empty.wait()
+
                         in_msg = self.message_queue.popleft()
+                        if not len(self.message_queue):
+                            self.message_queue.clear()
                         sample_in = in_msg["sample_index"]
 
                         # Check correct order
