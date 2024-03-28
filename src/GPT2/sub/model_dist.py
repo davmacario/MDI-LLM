@@ -829,8 +829,8 @@ class GPTServer:
                         ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
 
                         idx_from_fin = in_msg["data"].to(self.device)
-                        out_logits = self.model.forward_last(idx_from_fin)
-                        logits = out_logits[:, -1, :] / self.temperature
+                        logits = self.model.forward_last(idx_from_fin)
+                        logits = logits[:, -1, :] / self.temperature
                         if self.top_k is not None:
                             v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
                             logits[logits < v[:, [-1]]] = -float("Inf")
