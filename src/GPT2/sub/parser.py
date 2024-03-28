@@ -17,9 +17,10 @@ def parse_args(train: bool = True, mdi: bool = False):
         help="Name of the data set used; it must be the name of one of the subfolders of `data`",
     )
     parser.add_argument(
-        "--verb", default=False, action="store_true", help="Enable verbose mode"
+        "-v", "--verb", default=False, action="store_true", help="Enable verbose mode"
     )
     parser.add_argument(
+        "-d",
         "--debug",
         default=False,
         action="store_true",
