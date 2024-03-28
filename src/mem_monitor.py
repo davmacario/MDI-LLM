@@ -98,7 +98,11 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="Memory Monitor")
+    parser = argparse.ArgumentParser(
+        prog="./mem_monitor.py",
+        description="""Monitor the memory usage in time for the execution of a specific
+        program. This script also allows to plot the measured values.""",
+    )
     parser.add_argument(
         "cmd",
         metavar="CMD",
