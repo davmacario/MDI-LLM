@@ -93,6 +93,7 @@ def parse_args(train: bool = True, mdi: bool = False):
             help="Prompt for generation - can specify a file by name calling 'FILE:<path>.txt'",
         )
         parser.add_argument(
+            "-p",
             "--plots",
             default=PLOTS,
             action="store_true",
