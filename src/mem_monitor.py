@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 import psutil
 
+try:
+    from jtop import jtop
+except:
+    pass
+
 
 def start_program(cmd: str):
     """
@@ -35,27 +40,40 @@ def monitor_memory(process, out_file, interval=1, img_path=None):
         interval: time between each measurement in seconds
         img_path (optional): path of the output image plotting memory usage in time
     """
-    header = False
     gpu_list = GPUtil.getGPUs()
-    while process.poll() is None:
-        if (not header) and out_file != sys.stdout:
-            # Write header of csv
-            out_file.write("RAM_MB")
+    nv_gpu = len(gpu_list) > 0
+    if "jtop" in sys.modules:
+        print("Found jtop")
+        jtop_mon = jtop(interval=interval)
+        jtop_mon.start()
+
+    if out_file != sys.stdout:
+        # Write header of csv
+        out_file.write("RAM_MB")
+
+        if nv_gpu:
             for i in range(len(gpu_list)):
                 out_file.write(f",GPU{i}_MB")
-            out_file.write("\n")
-            header = True
+        if "jtop" in sys.modules:
+            out_file.write("GPU_MB")
 
+        out_file.write("\n")
+
+    while process.poll() is None:
         try:
             # Get overall process memory usage
             process_info = psutil.Process(process.pid)
             memory_info = process_info.memory_info()
             out_file.write(f"{memory_info.rss / (1024 ** 2):.2f}")
 
-            # Get GPU memory usage
-            gpu_list = GPUtil.getGPUs()
-            for gpu in gpu_list:
-                out_file.write(f",{gpu.memoryUsed}")
+            if nv_gpu:
+                # Get GPU memory usage
+                gpu_list = GPUtil.getGPUs()
+                for gpu in gpu_list:
+                    out_file.write(f",{gpu.memoryUsed}")
+
+            if "jtop" in sys.modules:
+                out_file.write(f",{jtop_mon.memory.items()['RAM']['shared']}")
 
             out_file.write("\n")
 
