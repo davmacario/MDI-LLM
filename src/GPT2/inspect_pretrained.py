@@ -22,6 +22,15 @@ parser.add_argument(
     type=str,
     help="Model to be inspected. It can either be the path of a model stored locally (.pt) or a gpt2 flavor",
 )
+parser.add_argument(
+    "--save",
+    type=str,
+    default=None,
+    nargs="?",
+    const=os.path.join(script_dir, "out"),
+    help="""If used alongside with a gpt-2 flavor, the inspected model will also be
+    saved to disk at the specified folder. Default: ./out""",
+)
 
 if torch.cuda.is_available():
     device = "cuda:0"
@@ -95,6 +104,7 @@ if __name__ == "__main__":
 
         config = GPTConfig(**config_args)
         model = GPT(config)
+        print(f"Number of parameters: {model.get_num_params()}")
 
         sd = model.state_dict()
 
@@ -160,7 +170,13 @@ if __name__ == "__main__":
                     sd[k].copy_(sd_hf[k])
 
         print("Copied model parameters")
-        time.sleep(5)
+
+        if args.save is not None:
+            print("Saving model to disk!", end="\r")
+            ckpt = {"model": model.state_dict(), "model_args": config_args}
+            fname = os.path.join(args.save, f"ckpt_{args.model}.pt")
+            torch.save(ckpt, fname)
+            print(f"Saved model at: {fname}")
 
     else:
         raise argparse.ArgumentError(args.model, f"Invalid model: {args.model}")

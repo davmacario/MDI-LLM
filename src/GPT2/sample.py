@@ -134,7 +134,7 @@ def main():
     else:
         model = GPT.from_pretrained(args.ckpt, dict(dropout=0.0))
         gptconf = model.config
-        model_type = args.ckpt
+        model_type = "_" + args.ckpt
         n_model_layers = gptconf.n_layer
         checkpoint = None
 

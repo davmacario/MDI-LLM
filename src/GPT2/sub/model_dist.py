@@ -263,6 +263,8 @@ class GPTServer:
 
     # Message queue
     message_queue = deque([])
+    queue_not_empty = threading.Event()  # Replaces busy waiting
+    queue_not_empty.clear()
 
     # Some model configs:
     top_k = TOP_K
@@ -346,6 +348,8 @@ class GPTServer:
 
             self.init_model(starter_config["n_layers"])
 
+            assert self.model_params is None, "Model was not flushed"
+
         else:
             # Configuration of "secondary" node
             self.starter_addr = node_config["communication"]["starter_addr"]
@@ -398,8 +402,13 @@ class GPTServer:
         else:
             raise ValueError(f"Unsupported node type {self.node_type}")
 
-        self.model = self.model.to(self.device)
         self.model.load_weights(self.model_params)
+        self.model = self.model.to(self.device)
+
+        # Clear memory of model_params
+        del self.model_params
+        self.model_params = None
+        gc.collect()
 
     def start(
         self,
@@ -726,6 +735,9 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
+        if len(self.message_queue) < 1:
+            self.queue_not_empty.clear()
+
         _n_recv_msg = 0
         while self.running:
             # Receive information from the new socket (exact length)
@@ -749,6 +761,7 @@ class GPTServer:
                 self.running = False
             else:  # Not here if stopping message is received
                 self.message_queue.append(data)
+                self.queue_not_empty.set()
 
     def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
         """
@@ -794,7 +807,6 @@ class GPTServer:
 
         self.model.eval()
         start_time = time.time()
-        count_wait = 0  # Count the number of times the loop had to wait
         if PLOTS:
             self.tok_time.append((0, 0))
         with torch.no_grad():
@@ -813,14 +825,13 @@ class GPTServer:
                     if k >= self.n_nodes:
                         # We are not in the first iteration (k starts from 0)
                         # can start processing messages from last secondary node
-                        old_count_w = count_wait
-                        while len(self.message_queue) <= 0:
-                            count_wait += 1
-                        if count_wait - old_count_w > 0:
-                            logger_wp.warn(
-                                f"Iter {k} - Had to wait for queue to fill up!"
-                            )
+
+                        # Wait for queue to contain msg
+                        assert self.queue_not_empty.wait()
+
                         in_msg = self.message_queue.popleft()
+                        if len(self.message_queue) < 1:
+                            self.queue_not_empty.clear()
                         sample_in = in_msg["sample_index"]
 
                         # Check correct order
@@ -829,8 +840,8 @@ class GPTServer:
                         ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
 
                         idx_from_fin = in_msg["data"].to(self.device)
-                        out_logits = self.model.forward_last(idx_from_fin)
-                        logits = out_logits[:, -1, :] / self.temperature
+                        logits = self.model.forward_last(idx_from_fin)
+                        logits = logits[:, -1, :] / self.temperature
                         if self.top_k is not None:
                             v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
                             logits[logits < v[:, [-1]]] = -float("Inf")
@@ -885,9 +896,6 @@ class GPTServer:
         if VERB:
             print("[INFO] Generation completed!                          ")
             print(f"> Total time for generation: {tot_time} s")
-            print(
-                f"Total time spent waiting: {count_wait}*0.01 = {count_wait * 0.01} s"
-            )
 
         return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
 
@@ -923,20 +931,17 @@ class GPTServer:
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
-        count_wait = 0  # Count the number of times the loop had to wait
         with torch.no_grad():
             with ctx:
                 while self.running:
                     logger_wp.info(f"Iter {iter}")
-                    old_count_w = count_wait
-                    while len(self.message_queue) <= 0:  # Wait for messages
-                        count_wait += 1
-                    if count_wait - old_count_w > 0:
-                        logger_wp.warn(
-                            f"Iter {iter} - Had to wait for queue to fill up!"
-                        )
-                    # Extract message from queue
+
+                    assert self.queue_not_empty.wait()
+
                     in_msg = self.message_queue.popleft()
+                    if len(self.message_queue) <= 0:  # Wait for messages
+                        self.queue_not_empty.clear()
+                    # Extract message from queue
                     # Unpack
                     samp_ind = in_msg["sample_index"]
                     assert (
@@ -956,7 +961,6 @@ class GPTServer:
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        print(f"Total times waited: {count_wait}")
                         self.send_to_next(self.stop_msg)
 
     def _build_msg(self, data, sample_index) -> Dict:
@@ -1008,7 +1012,7 @@ class GPTServer:
                     assert self.chunk_path is not None
                     if VERB:
                         print("Loading parameters from disk")
-                    chunk_cont = torch.load(self.chunk_path, map_location=self.device)
+                    chunk_cont = torch.load(self.chunk_path)
                     # Check compatibility (all keys of chunk_cont should be in init_msg)
                     assert all(
                         [
@@ -1017,9 +1021,15 @@ class GPTServer:
                         ]
                     ), f"Different settings:\n{chunk_cont['model_args']}\n\n{init_msg['model_config']}"
                     self.model_params = chunk_cont["model"]
+                    del chunk_cont
+                    gc.collect()
                 self.n_nodes = init_msg["n_nodes"]
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
+                assert (
+                    self.model_params is None
+                ), "The model parameters were not flushed!"
+
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 logger_wp.info("Received initialization information!")
@@ -1160,6 +1170,8 @@ class GPTDistributed:
             raise ValueError(f"Unrecognized model: {ckpt_path}")
 
         if not model_was_split:
+            if VERB:
+                print("Loading full model and splitting it into chunks")
             # Full model loaded: extract state dict (complete model)
             self.complete_model = self.model_ckpt["model"]  # State dict
             self.starter_has_entire_mod = True
@@ -1186,6 +1198,8 @@ class GPTDistributed:
             del self.complete_model
             gc.collect()
         else:
+            if VERB:
+                print("Model was split in advance - loading starter chunk")
             # CKPT chunk components:
             # - model: actual model chunk (params)
             # - model_args: model parameters (to be passed to GPTConfig after)
@@ -1260,6 +1274,9 @@ class GPTDistributed:
             starter_config=starter_config,
         )
 
+        del self.model_ckpt
+        gc.collect()
+
     def configure_nodes(self) -> int:
         """
         Send POST requests to the other nodes to inform them of their role and including
@@ -1332,6 +1349,10 @@ class GPTDistributed:
             if VERB:
                 print("> Success!")
             logger_wp.info(f"Secondary node {i} was initialized successfully")
+
+        # Delete model parameters from memory
+        del self.model_chunks
+        gc.collect()
 
         return out
 

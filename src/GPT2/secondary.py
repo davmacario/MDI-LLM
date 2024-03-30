@@ -17,9 +17,6 @@ settings_path = os.path.join(script_dir, "settings_distr")
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "IND", type=int, help="Index of the secondary node to be launched on this host"
-)
-parser.add_argument(
     "--chunk",
     type=str,
     default=None,
@@ -34,11 +31,24 @@ parser.add_argument(
     action="store_true",
     help="Enable debug mode (enable profiler)",
 )
-parser.add_argument(
+
+# The following achieves: (--nodes-config & IND) | --secondary-config
+group = parser.add_mutually_exclusive_group(required=True)
+group.add_argument(
     "--nodes-config",
     type=str,
-    default=os.path.join(script_dir, "settings_distr", "configuration.json"),
-    help="Path to the JSON configuration file for the nodes",
+    metavar=("CONFIG-PATH", "SECONDARY-INDEX"),
+    nargs=2,  # 2 args
+    default=[os.path.join(script_dir, "settings_distr", "configuration.json"), 0],
+    help="""Path to the JSON configuration file for the nodes followed by the positional
+    index of the intermediate node""",
+)
+group.add_argument(
+    "--secondary-config",
+    type=str,
+    default=None,
+    help="""Path of the configuration for the secondary node, alternative to
+    '--nodes-config'""",
 )
 
 if __name__ == "__main__":
@@ -65,25 +75,31 @@ if __name__ == "__main__":
         fhdlr.setFormatter(formatter)
         log_wp.addHandler(fhdlr)
 
-    network_conf_path = args.nodes_config
+    if args.secondary_config is None:
+        with open(args.nodes_config[0]) as f:
+            full_config = json.load(f)
+            n_secondary = len(full_config["nodes"]["secondary"])
+            node_ind = int(args.nodes_config[1])
+            if node_ind >= n_secondary:
+                raise ValueError(
+                    f"""Invalid index for the current node: {node_ind} - valid indices
+                    are in the range 0 - {n_secondary} for this config file"""
+                )
+            node_config = full_config["nodes"]["secondary"][node_ind]
+    else:
+        with open(args.secondary_config) as f:
+            node_config = json.load(f)
 
     if args.chunk is not None and not ("secondary" in args.chunk):
         warnings.warn("Possibly wrong chunk file detected")
 
     try:
-        with open(network_conf_path, "r") as f:
-            full_config = json.load(f)
-            n_secondary_conf = len(full_config["nodes"]["secondary"])
-            if args.IND >= n_secondary_conf:
-                raise ValueError(
-                    f"Invalid index for the current node: {args.IND} - valid indices are in the range 0 - {n_secondary_conf} for this config file"
-                )
-            setup = {"verb": args.verb}
-            gpt_webserv = GPTServer(
-                node_config=full_config["nodes"]["secondary"][args.IND],
-                chunk_path=args.chunk,
-                **setup,
-            )
+        setup = {"verb": args.verb}  # Override globals in other file
+        gpt_webserv = GPTServer(
+            node_config=node_config,
+            chunk_path=args.chunk,
+            **setup,
+        )
     except KeyboardInterrupt:
         print("Node stopped!")
         cp.engine.stop()

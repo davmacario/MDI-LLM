@@ -273,9 +273,6 @@ class GPT(nn.Module):
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
 
-        if VERB:
-            print(f"Number of parameters: {self.get_num_params()}")
-
     def _init_weights(self, module):
         """
         Initialize the model parameters.
