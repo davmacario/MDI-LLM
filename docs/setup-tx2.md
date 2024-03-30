@@ -42,14 +42,18 @@ sudo nvpmodel -m 0  # Set mode to '0': all cores used
 Then, edit the file `/boot/extlinux/extlinux.conf` and set `isolcpus=1-2` to `isolcpus=`.
 Upon rebooting, all cores should be enabled by default.
 
-Then, set up the environment for compiling Torch 1.12 (following [this guide](https://qengineering.eu/install-pytorch-on-jetson-nano.html).
+Then, set up the environment for compiling Torch 1.12 (following [this guide](https://qengineering.eu/install-pytorch-on-jetson-nano.html)).
 
-Install dependencies:
+Setting up Torch compilation and install dependencies:
 
 ```bash
+sudo apt update
+sudo apt upgrade -y
 sudo apt-get install ninja-build git cmake
 sudo apt-get install libjpeg-dev libopenmpi-dev libomp-dev ccache
 sudo apt-get install libopenblas-dev libblas-dev libeigen3-dev
+echo "export OPENBLAS_CORETYPE=ARMV8" >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
 ```
 
 Create and activate the virtual environment
@@ -63,6 +67,7 @@ pip3 install wheel mock pillow
 pip3 install testresources
 pip3 install setuptools==58.3.0
 pip3 install Cython
+pip3 install https://developer.download.nvidia.com/compute/redist/jp/v461/pytorch/torch-1.11.0a0+17540c5+nv22.01-cp36-cp36m-linux_aarch64.whl
 ```
 
 Clone the Torch repository from Github, selecting the branch for version 1.12:
@@ -78,7 +83,7 @@ sudo ln -s /usr/bin/clang++-8 /usr/bin/clang++
 ```
 
 Then, proceed with the modifications described at the link, and launch the compiler.
-It is suggested to compile inside a [tmux](https://www.redhat.com/sysadmin/introduction-tmux-linux) session, and also to run the following commands to fix the core frequencies to their maximum:
+It is suggested to compile inside a [tmux](https://www.redhat.com/sysadmin/introduction-tmux-linux) session, and also to run the following commands to invoke Jetson Clocks and fix the core frequencies to their maximum:
 
 ```bash
 sudo jetson_clocks --store  # Store current "normal" state in the default path
@@ -88,147 +93,47 @@ sudo jetson_clocks --fan  # Ramp up the fan at 100%
 
 Then, once the compilation is complete, run `sudo jetson_clocks --restore` to revert to the original settings.
 
-Setting up torch (possibly a
+Then, compile torch:
 
 ```bash
-sudo apt update
-sudo apt upgrade -y
-echo "export OPENBLAS_CORETYPE=ARMV8" >> "$HOME/.bashrc"
-source "$HOME/.bashrc"
-sudo apt install python3-pip
-pip3 install --upgrade pip
-pip3 install --upgrade protobuf
-pip3 install --upgrade numpy
-pip3 install https://developer.download.nvidia.com/compute/redist/jp/v461/pytorch/torch-1.11.0a0+17540c5+nv22.01-cp36-cp36m-linux_aarch64.whl
-```
-
-Installing jtop to monitor CPU/GPU/RAM/disk usage:
-
-```bash
-sudo pip3 install -U jetson-stats
-sudo systemctl restart jtop.service
-sudo jtop # Or reboot, shouldn't ask to use sudo
-```
-
-Activate all cores:
-
-```bash
-sudo nvpmodel -m 0  # Set mode to '0': all cores used
-```
-
-Then, edit the file `/boot/extlinux/extlinux.conf` and set `isolcpus=1-2` to `isolcpus=`.
-Upon rebooting, all cores should be enabled by default.
-
-**Using Python 3.8 virtualenv**: it is necessary to compile torch (1.12 - last compatible with CUDA 10.2 running on the Jetsons) from source, following [this link](https://qengineering.eu/install-pytorch-on-jetson-nano.html).
-Requirements for this method:
-
-```bash
-sudo apt-get install ninja-build git cmake
-sudo apt-get install libjpeg-dev libopenmpi-dev libomp-dev ccache
-sudo apt-get install libopenblas-dev libblas-dev libeigen3-dev
-cd <project-root>
-python3.8 -m venv .venv
-source .venv/bin/activate
-pip3 install --upgrade pip
-pip3 install future
-pip3 install wheel mock pillow
-pip3 install testresources
-pip3 install setuptools==58.3.0
-pip3 install Cython
-sudo apt-get install python3-pip libjpeg-dev libopenblas-dev libopenmpi-dev libomp-dev
-
-cd "$HOME"
-git clone -b v1.13.0 --depth=1 --recursive https://github.com/pytorch/pytorch.git
+# set NINJA parameters
 cd pytorch
-pip3 install -r requirements.txt
-sudo apt-get install clang-8
-sudo ln -s /usr/bin/clang-8 /usr/bin/clang
-sudo ln -s /usr/bin/clang++-8 /usr/bin/clang++
+export BUILD_CAFFE2_OPS=OFF
+export USE_FBGEMM=OFF
+export USE_FAKELOWP=OFF
+export BUILD_TEST=OFF
+export USE_MKLDNN=OFF
+export USE_NNPACK=OFF
+export USE_XNNPACK=OFF
+export USE_QNNPACK=OFF
+export USE_PYTORCH_QNNPACK=OFF
+export USE_CUDA=ON
+export USE_CUDNN=ON
+export TORCH_CUDA_ARCH_LIST="5.3;6.2;7.2"
+export USE_NCCL=OFF
+export USE_SYSTEM_NCCL=OFF
+export USE_OPENCV=OFF
+export MAX_JOBS=4
+# set path to ccache
+export PATH=/usr/lib/ccache:$PATH
+# set clang compiler
+export CC=clang
+export CXX=clang++
+# set cuda compiler
+export CUDACXX=/usr/local/cuda/bin/nvcc
+# create symlink to cublas
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcublas.so /usr/local/cuda/lib64/libcublas.so
+# clean up the previous build, if necessary
+python3 setup.py clean
+# start the build
+python3 setup.py bdist_wheel
 ```
-
-Then, proceed with the modifications described at the link, and launch the compiler.
-It is suggested to compile inside a tmux session, and also to run
-
-```bash
-sudo jetson_clocks --store  # Store current "normal" state in the default path
-sudo jetson_clocks  # Set the core clocks at the max frequency (2GHz)
-sudo jetson_clocks --fan  # Ramp up the fan at 100%
-```
-
-Then, once the compilation is complete, run `sudo jetson_clocks --restore` to revert to the original settings.
-
-Setting up torch (possibly already in virtual environment):
-
-```bash
-sudo apt update
-sudo apt upgrade -y
-echo "export OPENBLAS_CORETYPE=ARMV8" >> "$HOME/.bashrc"
-source "$HOME/.bashrc"
-sudo apt install python3-pip
-pip3 install --upgrade pip
-pip3 install --upgrade protobuf
-pip3 install --upgrade numpy
-pip3 install https://developer.download.nvidia.com/compute/redist/jp/v461/pytorch/torch-1.11.0a0+17540c5+nv22.01-cp36-cp36m-linux_aarch64.whl
-```
-
-Installing jtop to monitor CPU/GPU/RAM/disk usage:
-
-```bash
-sudo pip3 install -U jetson-stats
-sudo systemctl restart jtop.service
-sudo jtop # Or reboot, shouldn't ask to use sudo
-```
-
-Activate all cores:
-
-```bash
-sudo nvpmodel -m 0  # Set mode to '0': all cores used
-```
-
-Then, edit the file `/boot/extlinux/extlinux.conf` and set `isolcpus=1-2` to `isolcpus=`.
-Upon rebooting, all cores should be enabled by default.
-
-**Using Python 3.8 virtualenv**: it is necessary to compile torch (1.12 - last compatible with CUDA 10.2 running on the Jetsons) from source, following [this link](https://qengineering.eu/install-pytorch-on-jetson-nano.html).
-Requirements for this method:
-
-```bash
-sudo apt-get install ninja-build git cmake
-sudo apt-get install libjpeg-dev libopenmpi-dev libomp-dev ccache
-sudo apt-get install libopenblas-dev libblas-dev libeigen3-dev
-cd <project-root>
-python3.8 -m venv .venv
-source .venv/bin/activate
-pip3 install --upgrade pip
-pip3 install future
-pip3 install wheel mock pillow
-pip3 install testresources
-pip3 install setuptools==58.3.0
-pip3 install Cython
-sudo apt-get install python3-pip libjpeg-dev libopenblas-dev libopenmpi-dev libomp-dev
-
-cd "$HOME"
-git clone -b v1.13.0 --depth=1 --recursive https://github.com/pytorch/pytorch.git
-cd pytorch
-pip3 install -r requirements.txt
-sudo apt-get install clang-8
-sudo ln -s /usr/bin/clang-8 /usr/bin/clang
-sudo ln -s /usr/bin/clang++-8 /usr/bin/clang++
-```
-
-Then, proceed with the modifications described at the link, and launch the compiler.
-It is suggested to compile inside a tmux session, and also to run
-
-```bash
-sudo jetson_clocks --store  # Store current "normal" state in the default path
-sudo jetson_clocks  # Set the core clocks at the max frequency (2GHz)
-sudo jetson_clocks --fan  # Ramp up the fan at 100%
-```
-
-Then, once the compilation is complete, run `sudo jetson_clocks --restore` to revert to the original settings.
 
 This will produce a Python 3.8 wheel containing Torch 1.12 compiled to support CUDA on Jetson TX2s (and Jetson Nanos) - the name should be something like `torch-1.12.0a0+git67ece03-cp38-cp38-linux_aarch64.whl`.
 To install the package, run (from within the Python 3.8 virtual environment):
 
 ```bash
-pip3 install "$HOME"/torch-1.12.0a0+git67ece03-cp38-cp38-linux_aarch64.whl
+cd dist
+ls
+sudo -H pip3 install torch-1.12.0a0+git67ece03-cp38-cp38-linux_aarch64.whl
 ```
