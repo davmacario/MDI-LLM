@@ -30,7 +30,7 @@ The network is actually a closed loop, as the outputs of the last node in the ch
 
 The contents of this repository were developed to run over a network of 3 Nvidia Jetson TX2's (8 GB of shared memory) running JetPack 4.6.4, connected via gigabit ethernet.
 These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.
-See <docs/setup-tx2.md> for how to prepare the testing environment (software side).
+See [docs/setup-tx2.md](docs/setup-tx2.md) for how to prepare the testing environment (software side).
 
 ## Models overview
 
