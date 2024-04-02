@@ -128,26 +128,27 @@ def main() -> int:
         print("> Gradient Accumulation steps: ", GRADIENT_ACCUMULATION_STEPS)
         print("> Log Interval: ", LOG_INTERVAL)
         print("> Checkpoint update interval: ", CKPT_INTERVAL)
+        print("")
     # -------------------------------------------------------------------------
 
     tokens_per_iter = (
         GRADIENT_ACCUMULATION_STEPS * ddp_world_size * BATCH_SIZE * BLOCK_SIZE
     )
     if VERB:
-        print(f"tokens per iteration will be: {tokens_per_iter:,}")
+        print(f"Tokens per iteration will be: {tokens_per_iter:,}")
 
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
-    # for later use in torch.autocast:
+    # For later use in torch.autocast:
     if "cuda" in DEVICE:
         device_type = "cuda"
     elif "mps" in DEVICE:
         device_type = "mps"
     else:
         device_type = "cpu"
-    # note: float16 data type will automatically use a GradScaler
+    # Note: float16 data type will automatically use a GradScaler
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
@@ -302,6 +303,7 @@ def main() -> int:
 
     # Move model to device
     model = model.to(DEVICE)
+
     # Print model settings
     if VERB:
         print("Model settings:")
@@ -315,11 +317,11 @@ def main() -> int:
     optimizer = model.configure_optimizers(
         WEIGHT_DECAY, LEARNING_RATE, (BETA1, BETA2), device_type
     )
-    if INIT_FROM == "resume":
+    if INIT_FROM == "resume":  # Load optimizer settings from checkpoint
         optimizer.load_state_dict(checkpoint["optimizer"])
 
+        # Free up memory
         try:
-            # Free up memory
             del state_dict
             del checkpoint
         except:
@@ -336,7 +338,7 @@ def main() -> int:
         unoptimized_model = model
         model = torch.compile(model)  # requires PyTorch 2.0
 
-    # Distributed
+    # DDP initialization
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
 
@@ -351,12 +353,12 @@ def main() -> int:
     while iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
-        # determine and set the learning rate for this iteration
+        # Determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if DECAY_LR else LEARNING_RATE
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # evaluate the loss on train/val sets and write checkpoints
+        # Evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
             losses = estimate_loss(
                 raw_model, train_data, val_data, BATCH_SIZE, DEVICE, **{"ctx": ctx}
@@ -411,30 +413,32 @@ def main() -> int:
                     micro_step == GRADIENT_ACCUMULATION_STEPS - 1
                 )
             with ctx:
-                logits, loss = model(X, Y)
-                # scale the loss to account for gradient accumulation
+                _, loss = model(X, Y)
+                # Scale the loss to account for gradient accumulation
                 loss = loss / GRADIENT_ACCUMULATION_STEPS
-            # immediately async prefetch next batch while model is doing the forward pass on the GPU
+            # Immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y = get_batch(train_data, BATCH_SIZE, DEVICE, gptconf)
-            # backward pass, with gradient scaling if training in fp16
+            # Backward pass, with gradient scaling if training in fp16
             scaler.scale(loss).backward()
-        # clip the gradient
+
+        # Clip the gradient
         if GRAD_CLIP != 0.0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-        # step the optimizer and scaler if training in fp16
+
+        # Step the optimizer and scaler if training in fp16
         scaler.step(optimizer)
         scaler.update()
-        # flush the gradients as soon as we can, no need for this memory anymore
+        # Flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
 
-        # timing and logging
+        # Timing and logging
         t1 = time.time()
         dt = t1 - t0
         t0 = t1
         if iter_num % LOG_INTERVAL == 0 and master_process:
-            # get loss as float. note: this is a CPU-GPU sync point
-            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+            # Get loss as float. note: this is a CPU-GPU sync point
+            # Scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * GRADIENT_ACCUMULATION_STEPS
             if local_iter_num >= 5:  # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(
