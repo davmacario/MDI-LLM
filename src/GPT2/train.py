@@ -123,6 +123,7 @@ def main() -> int:
     # -------------------------------------------------------------------------
     # Print training parameters:
     if VERB:
+        print("Training configuration:")
         print("> Device: ", DEVICE)
         print("> Batch size: ", BATCH_SIZE)
         print("> Gradient Accumulation steps: ", GRADIENT_ACCUMULATION_STEPS)
@@ -307,6 +308,7 @@ def main() -> int:
 
     # Print model settings
     if VERB:
+        print("")
         print("Model settings:")
         for k, v in model_args.items():
             print(f"> {k}: {v}")
