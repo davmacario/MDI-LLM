@@ -126,6 +126,7 @@ def main() -> int:
         print("> Device: ", DEVICE)
         print("> Batch size: ", BATCH_SIZE)
         print("> Gradient Accumulation steps: ", GRADIENT_ACCUMULATION_STEPS)
+        print("> Max epochs: ", MAX_ITERS)
         print("> Log Interval: ", LOG_INTERVAL)
         print("> Checkpoint update interval: ", CKPT_INTERVAL)
         print("")
