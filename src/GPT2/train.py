@@ -116,6 +116,9 @@ def main() -> int:
         # down the desired gradient accumulation iterations per process proportionally
         assert GRADIENT_ACCUMULATION_STEPS % ddp_world_size == 0
         GRADIENT_ACCUMULATION_STEPS //= ddp_world_size
+    else:
+        # Cannot override device if using ddp
+        DEVICE = args.device
 
     # -------------------------------------------------------------------------
 
@@ -289,7 +292,7 @@ def main() -> int:
         model.crop_block_size(BLOCK_SIZE)
         model.config.block_size = BLOCK_SIZE
 
-    # Move model to device (HERE! Not in __init__)
+    # Move model to device
     model = model.to(DEVICE)
     # Print model settings
     if VERB:

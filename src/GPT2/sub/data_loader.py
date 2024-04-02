@@ -82,7 +82,7 @@ def split_dataset(
 def get_batch(
     dataset,
     batch_size: int,
-    device: "str",
+    device: str,
     model_conf: GPTConfig,
 ):
     """
@@ -93,8 +93,9 @@ def get_batch(
 
     Args:
         dataset: the data set to be loaded to a tensor (tensor/np array/...)
-        model_conf: the GPT configuration object
+        batch_size
         device: the device on which to move the objects (default "cpu")
+        model_conf: the GPT configuration object
 
     Outputs:
         x: context inputs (each input is a block of size given by config)
@@ -129,7 +130,7 @@ def get_batch(
         raise TypeError(f"Unsuppoerted data type {type(dataset)}")
 
     if "cuda" in device:
-        x, y = x.pin_memory().to("cuda", non_blocking=True), y.pin_memory().to(
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(
             device, non_blocking=True
         )
     else:

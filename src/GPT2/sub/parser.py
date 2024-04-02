@@ -3,8 +3,9 @@
 import argparse
 import os
 
-from .config import (BATCH_SIZE, CKPT_INTERVAL, GRADIENT_ACCUMULATION_STEPS,
-                     INIT_FROM, LOG_INTERVAL, MAX_ITERS, PLOTS)
+from .config import (BATCH_SIZE, CKPT_INTERVAL, DEVICE,
+                     GRADIENT_ACCUMULATION_STEPS, INIT_FROM, LOG_INTERVAL,
+                     MAX_ITERS, PLOTS)
 
 script_dir = os.path.dirname(__file__)
 
@@ -25,6 +26,12 @@ def parse_args(train: bool = True, mdi: bool = False):
         default=False,
         action="store_true",
         help="Enable debug mode (enable profiler)",
+    )
+    parser.add_argument(
+        "--device",
+        default=DEVICE,
+        type=str,
+        help="Device used to process the model - 'cpu'/'cuda:n'/'mps'",
     )
     if train:
         parser.add_argument("--ckpt", default=None, help="Specify checkpoint file name")
