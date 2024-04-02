@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from .config import (BIAS, BLOCK_SIZE, DEVICE, DROPOUT, N_EMBD, N_HEADS,
-                     N_LAYER, PLOTS, VERB)
+from .config import (BIAS, BLOCK_SIZE, DROPOUT, N_EMBD, N_HEADS, N_LAYER,
+                     PLOTS, VERB)
 
 ACT2FN = {"GELU": nn.GELU(), "ReLU": nn.ReLU()}
 

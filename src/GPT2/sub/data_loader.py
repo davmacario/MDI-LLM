@@ -82,7 +82,7 @@ def split_dataset(
 def get_batch(
     dataset,
     batch_size: int,
-    device: "str",
+    device: str,
     model_conf: GPTConfig,
 ):
     """
