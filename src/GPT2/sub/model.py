@@ -90,8 +90,8 @@ class CausalSelfAttention(nn.Module):
 
         # NOTE: flash attention unavailable on Jetson TX2 - only if Torch >= 2.0 (I'm on 1.12)
         # Force slow attention for the sake of testing
-        # self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        self.flash = False
+        # self.flash = False
+        self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         if not self.flash:
             if VERB:
                 print("Using slow attention - flash attention not available")
