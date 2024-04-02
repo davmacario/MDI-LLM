@@ -121,6 +121,14 @@ def main() -> int:
         DEVICE = args.device
 
     # -------------------------------------------------------------------------
+    # Print training parameters:
+    if VERB:
+        print("> Device: ", DEVICE)
+        print("> Batch size: ", BATCH_SIZE)
+        print("> Gradient Accumulation steps: ", GRADIENT_ACCUMULATION_STEPS)
+        print("> Log Interval: ", LOG_INTERVAL)
+        print("> Checkpoint update interval: ", CKPT_INTERVAL)
+    # -------------------------------------------------------------------------
 
     tokens_per_iter = (
         GRADIENT_ACCUMULATION_STEPS * ddp_world_size * BATCH_SIZE * BLOCK_SIZE
