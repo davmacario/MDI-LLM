@@ -219,7 +219,7 @@ class Block(nn.Module):
 class GPT(nn.Module):
     """GPT2 implementation"""
 
-    def __init__(self, config: GPTConfig, **setup):
+    def __init__(self, config: GPTConfig, **kwargs):
         """
         Create GPT object.
 
@@ -229,12 +229,14 @@ class GPT(nn.Module):
         """
         assert config.vocab_size is not None
 
-        if "plots" in setup:
+        if "plots" in kwargs:
             global PLOTS
-            PLOTS = setup["plots"]
-        if "verb" in setup:
+            print("Overriding PLOTS")
+            PLOTS = kwargs["plots"]
+        if "verb" in kwargs:
             global VERB
-            VERB = setup["verb"]
+            print("Overriding VERB")
+            VERB = kwargs["verb"]
 
         super().__init__()
         assert config.vocab_size is not None
@@ -373,7 +375,7 @@ class GPT(nn.Module):
                 block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
 
     @classmethod
-    def from_pretrained(cls, model_type: str, override_args=None):
+    def from_pretrained(cls, model_type: str, override_args=None, **kwargs):
         """
         Load weights from external pretrained models.
 
@@ -410,7 +412,7 @@ class GPT(nn.Module):
             config_args["dropout"] = override_args["dropout"]
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
-        model = GPT(config)
+        model = GPT(config, **kwargs)
         sd = model.state_dict()
         sd_keys = [
             k for k in sd.keys() if not k.endswith(".attn.bias")

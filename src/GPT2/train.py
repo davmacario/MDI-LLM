@@ -243,7 +243,7 @@ def main() -> int:
             model_args[k] = checkpoint_model_args[k]
         # Create the model
         gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
+        model = GPT(gptconf, verb=VERB, plots=PLOTS)
         state_dict = checkpoint["model"]
         # ---
         # fix the keys of the state dictionary :(
