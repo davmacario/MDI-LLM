@@ -218,7 +218,7 @@ def main() -> int:
             meta_vocab_size if meta_vocab_size is not None else 50304
         )
         gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
+        model = GPT(gptconf, verb=VERB)
     elif INIT_FROM == "resume":
         # Resume training from a checkpoint (fine-tune).
         print(f"Resuming training from {out_dir}")
@@ -243,7 +243,7 @@ def main() -> int:
             model_args[k] = checkpoint_model_args[k]
         # Create the model
         gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf, verb=VERB, plots=PLOTS)
+        model = GPT(gptconf, verb=VERB)
         state_dict = checkpoint["model"]
         # ---
         # fix the keys of the state dictionary :(
@@ -278,7 +278,7 @@ def main() -> int:
         print(f"Initializing from OpenAI GPT-2 weights: {INIT_FROM}")
         # Initialize from OpenAI GPT-2 weights (Huggingface)
         override_args = dict(dropout=DROPOUT)
-        model = GPT.from_pretrained(INIT_FROM, override_args)
+        model = GPT.from_pretrained(INIT_FROM, override_args, verb=VERB)
         # Read params to be stored in ckpt
         for k in [
             "n_layer",
