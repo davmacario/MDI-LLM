@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Aadapted/rewritten from karpathy/nanoGPT/train.py
+Adapted/rewritten from https://github.com/karpathy/nanoGPT/train.py
 """
 
 import gc
@@ -27,9 +27,9 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = "shakespeare"  # NOTE: dataset *name*
+DATASET = "shakespeare"  # NOTE: dataset *name*, not path
 DATASET_PATH = os.path.join(script_dir, "data", DATASET)
-ddp = False
+ddp = False  # Distributed Data Parallel - train with data parallelism on more GPUs
 
 
 def main() -> int:
@@ -229,9 +229,9 @@ def main() -> int:
             assert (
                 checkpoint_model_args["vocab_size"] == meta_vocab_size
             ), "The vocab sizes do not match!"
-        # force these config attributes to be equal otherwise we can't even
-        # resume training the rest of the attributes (e.g. dropout) can stay as
-        # desired from command line
+        # Force these config attributes to be equal otherwise we can't even resume
+        # training the rest of the attributes (e.g. dropout) can stay as desired from
+        # command line
         for k in [
             "n_layer",
             "n_head",
@@ -241,13 +241,13 @@ def main() -> int:
             "vocab_size",
         ]:
             model_args[k] = checkpoint_model_args[k]
+
         # Create the model
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf, verb=VERB)
         state_dict = checkpoint["model"]
-        # ---
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
+
+        # Fix the keys of the state dictionary
         unwanted_prefix = "_orig_mod."
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
@@ -322,7 +322,7 @@ def main() -> int:
     if INIT_FROM == "resume":  # Load optimizer settings from checkpoint
         optimizer.load_state_dict(checkpoint["optimizer"])
 
-        # Free up memory
+        # Free up memory - FIXME: could be improved (?)
         try:
             del state_dict
             del checkpoint
@@ -351,8 +351,8 @@ def main() -> int:
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
     count_loss_incr = 0
-    raw_model = model.module if ddp else model
-    while iter_num <= MAX_ITERS:
+    raw_model = model.module if ddp else model  # Extract model from DDP
+    while local_iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
         # Determine and set the learning rate for this iteration
@@ -368,7 +368,7 @@ def main() -> int:
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
-            if losses["val"] < best_val_loss or ALWAYS_SAVE_CHECKPOINT:
+            if losses["val"] < best_val_loss or args.always_update:
                 count_loss_incr = 0
                 # Only store ckpt if loss has decreased
                 best_val_loss = losses["val"]

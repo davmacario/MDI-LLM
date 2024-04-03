@@ -114,6 +114,6 @@ COMPILE = False  # use PyTorch 2.0 to compile the model to be faster
 BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 
 # ---- Runtime configuration ---------------------
-VERB = True
+VERB = False
 DEBUG = False
 PLOTS = False
