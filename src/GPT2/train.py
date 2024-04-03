@@ -15,10 +15,9 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
-                        COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
-                        GRAD_CLIP, LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER,
-                        WEIGHT_DECAY)
+from sub.config import (BETA1, BETA2, BIAS, BLOCK_SIZE, COMPILE, DECAY_LR,
+                        DEVICE, DROPOUT, DTYPE, EVAL_ONLY, GRAD_CLIP,
+                        LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER, WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
