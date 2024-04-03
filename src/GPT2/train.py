@@ -275,7 +275,6 @@ def main() -> int:
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
     elif INIT_FROM.startswith("gpt2"):
-        print(f"Initializing from OpenAI GPT-2 weights: {INIT_FROM}")
         # Initialize from OpenAI GPT-2 weights (Huggingface)
         override_args = dict(dropout=DROPOUT)
         model = GPT.from_pretrained(INIT_FROM, override_args, verb=VERB)
@@ -402,15 +401,12 @@ def main() -> int:
             # Exit after 1 evaluation of the loss
             break
 
-        # forward backward update, with optional gradient accumulation to simulate larger batch size
-        # and using the GradScaler if data type is float16
+        # Forward backward update, with optional gradient accumulation to simulate
+        # larger batch size and using the GradScaler if data type is float16
         for micro_step in range(GRADIENT_ACCUMULATION_STEPS):
             # Missing: ddp update step
             if ddp:
-                # in DDP training we only need to sync gradients at the last micro step.
-                # the official way to do this is with model.no_sync() context manager, but
-                # I really dislike that this bloats the code and forces us to repeat code
-                # looking at the source of that context manager, it just toggles this variable
+                # In DDP training we only need to sync gradients at the last micro step
                 model.require_backward_grad_sync = (
                     micro_step == GRADIENT_ACCUMULATION_STEPS - 1
                 )
