@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Aadapted/rewritten from karpathy/nanoGPT/train.py
+Adapted/rewritten from https://github.com/karpathy/nanoGPT/train.py
 """
 
 import gc
@@ -15,10 +15,9 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from sub.config import (ALWAYS_SAVE_CHECKPOINT, BETA1, BETA2, BIAS, BLOCK_SIZE,
-                        COMPILE, DECAY_LR, DEVICE, DROPOUT, DTYPE, EVAL_ONLY,
-                        GRAD_CLIP, LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER,
-                        WEIGHT_DECAY)
+from sub.config import (BETA1, BETA2, BIAS, BLOCK_SIZE, COMPILE, DECAY_LR,
+                        DEVICE, DROPOUT, DTYPE, EVAL_ONLY, GRAD_CLIP,
+                        LEARNING_RATE, N_EMBD, N_HEADS, N_LAYER, WEIGHT_DECAY)
 from sub.data_loader import get_batch
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
@@ -28,9 +27,9 @@ from sub.utils import estimate_loss, get_lr
 # I/O configuration
 script_dir = os.path.dirname(__file__)
 
-DATASET = "shakespeare"  # NOTE: dataset *name*
+DATASET = "shakespeare"  # NOTE: dataset *name*, not path
 DATASET_PATH = os.path.join(script_dir, "data", DATASET)
-ddp = False
+ddp = False  # Distributed Data Parallel - train with data parallelism on more GPUs
 
 
 def main() -> int:
@@ -121,25 +120,36 @@ def main() -> int:
         DEVICE = args.device
 
     # -------------------------------------------------------------------------
+    # Print training parameters:
+    if VERB:
+        print("Training configuration:")
+        print("> Device: ", DEVICE)
+        print("> Batch size: ", BATCH_SIZE)
+        print("> Gradient Accumulation steps: ", GRADIENT_ACCUMULATION_STEPS)
+        print("> Max epochs: ", MAX_ITERS)
+        print("> Log Interval: ", LOG_INTERVAL)
+        print("> Checkpoint update interval: ", CKPT_INTERVAL)
+        print("")
+    # -------------------------------------------------------------------------
 
     tokens_per_iter = (
         GRADIENT_ACCUMULATION_STEPS * ddp_world_size * BATCH_SIZE * BLOCK_SIZE
     )
     if VERB:
-        print(f"tokens per iteration will be: {tokens_per_iter:,}")
+        print(f"Tokens per iteration will be: {tokens_per_iter:,}")
 
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
-    # for later use in torch.autocast:
+    # For later use in torch.autocast:
     if "cuda" in DEVICE:
         device_type = "cuda"
     elif "mps" in DEVICE:
         device_type = "mps"
     else:
         device_type = "cpu"
-    # note: float16 data type will automatically use a GradScaler
+    # Note: float16 data type will automatically use a GradScaler
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
@@ -208,7 +218,7 @@ def main() -> int:
             meta_vocab_size if meta_vocab_size is not None else 50304
         )
         gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
+        model = GPT(gptconf, verb=VERB)
     elif INIT_FROM == "resume":
         # Resume training from a checkpoint (fine-tune).
         print(f"Resuming training from {out_dir}")
@@ -219,9 +229,9 @@ def main() -> int:
             assert (
                 checkpoint_model_args["vocab_size"] == meta_vocab_size
             ), "The vocab sizes do not match!"
-        # force these config attributes to be equal otherwise we can't even
-        # resume training the rest of the attributes (e.g. dropout) can stay as
-        # desired from command line
+        # Force these config attributes to be equal otherwise we can't even resume
+        # training the rest of the attributes (e.g. dropout) can stay as desired from
+        # command line
         for k in [
             "n_layer",
             "n_head",
@@ -231,13 +241,13 @@ def main() -> int:
             "vocab_size",
         ]:
             model_args[k] = checkpoint_model_args[k]
+
         # Create the model
         gptconf = GPTConfig(**model_args)
-        model = GPT(gptconf)
+        model = GPT(gptconf, verb=VERB)
         state_dict = checkpoint["model"]
-        # ---
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
+
+        # Fix the keys of the state dictionary
         unwanted_prefix = "_orig_mod."
         for k, v in list(state_dict.items()):
             if k.startswith(unwanted_prefix):
@@ -265,10 +275,9 @@ def main() -> int:
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
     elif INIT_FROM.startswith("gpt2"):
-        print(f"Initializing from OpenAI GPT-2 weights: {INIT_FROM}")
         # Initialize from OpenAI GPT-2 weights (Huggingface)
         override_args = dict(dropout=DROPOUT)
-        model = GPT.from_pretrained(INIT_FROM, override_args)
+        model = GPT.from_pretrained(INIT_FROM, override_args, verb=VERB)
         # Read params to be stored in ckpt
         for k in [
             "n_layer",
@@ -294,8 +303,10 @@ def main() -> int:
 
     # Move model to device
     model = model.to(DEVICE)
+
     # Print model settings
     if VERB:
+        print("")
         print("Model settings:")
         for k, v in model_args.items():
             print(f"> {k}: {v}")
@@ -307,11 +318,11 @@ def main() -> int:
     optimizer = model.configure_optimizers(
         WEIGHT_DECAY, LEARNING_RATE, (BETA1, BETA2), device_type
     )
-    if INIT_FROM == "resume":
+    if INIT_FROM == "resume":  # Load optimizer settings from checkpoint
         optimizer.load_state_dict(checkpoint["optimizer"])
 
+        # Free up memory - FIXME: could be improved (?)
         try:
-            # Free up memory
             del state_dict
             del checkpoint
         except:
@@ -328,7 +339,7 @@ def main() -> int:
         unoptimized_model = model
         model = torch.compile(model)  # requires PyTorch 2.0
 
-    # Distributed
+    # DDP initialization
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
 
@@ -339,16 +350,16 @@ def main() -> int:
     local_iter_num = 0  # number of iterations in the lifetime of this process
     running_mfu = -1.0
     count_loss_incr = 0
-    raw_model = model.module if ddp else model
-    while iter_num <= MAX_ITERS:
+    raw_model = model.module if ddp else model  # Extract model from DDP
+    while local_iter_num <= MAX_ITERS:
         if VERB:
             print(f"> Training iter {local_iter_num}")
-        # determine and set the learning rate for this iteration
+        # Determine and set the learning rate for this iteration
         lr = get_lr(iter_num) if DECAY_LR else LEARNING_RATE
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # evaluate the loss on train/val sets and write checkpoints
+        # Evaluate the loss on train/val sets and write checkpoints
         if iter_num % CKPT_INTERVAL == 0 and master_process:
             losses = estimate_loss(
                 raw_model, train_data, val_data, BATCH_SIZE, DEVICE, **{"ctx": ctx}
@@ -356,7 +367,7 @@ def main() -> int:
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
-            if losses["val"] < best_val_loss or ALWAYS_SAVE_CHECKPOINT:
+            if losses["val"] < best_val_loss or args.always_update:
                 count_loss_incr = 0
                 # Only store ckpt if loss has decreased
                 best_val_loss = losses["val"]
@@ -390,43 +401,42 @@ def main() -> int:
             # Exit after 1 evaluation of the loss
             break
 
-        # forward backward update, with optional gradient accumulation to simulate larger batch size
-        # and using the GradScaler if data type is float16
+        # Forward backward update, with optional gradient accumulation to simulate
+        # larger batch size and using the GradScaler if data type is float16
         for micro_step in range(GRADIENT_ACCUMULATION_STEPS):
             # Missing: ddp update step
             if ddp:
-                # in DDP training we only need to sync gradients at the last micro step.
-                # the official way to do this is with model.no_sync() context manager, but
-                # I really dislike that this bloats the code and forces us to repeat code
-                # looking at the source of that context manager, it just toggles this variable
+                # In DDP training we only need to sync gradients at the last micro step
                 model.require_backward_grad_sync = (
                     micro_step == GRADIENT_ACCUMULATION_STEPS - 1
                 )
             with ctx:
-                logits, loss = model(X, Y)
-                # scale the loss to account for gradient accumulation
+                _, loss = model(X, Y)
+                # Scale the loss to account for gradient accumulation
                 loss = loss / GRADIENT_ACCUMULATION_STEPS
-            # immediately async prefetch next batch while model is doing the forward pass on the GPU
+            # Immediately async prefetch next batch while model is doing the forward pass on the GPU
             X, Y = get_batch(train_data, BATCH_SIZE, DEVICE, gptconf)
-            # backward pass, with gradient scaling if training in fp16
+            # Backward pass, with gradient scaling if training in fp16
             scaler.scale(loss).backward()
-        # clip the gradient
+
+        # Clip the gradient
         if GRAD_CLIP != 0.0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-        # step the optimizer and scaler if training in fp16
+
+        # Step the optimizer and scaler if training in fp16
         scaler.step(optimizer)
         scaler.update()
-        # flush the gradients as soon as we can, no need for this memory anymore
+        # Flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
 
-        # timing and logging
+        # Timing and logging
         t1 = time.time()
         dt = t1 - t0
         t0 = t1
         if iter_num % LOG_INTERVAL == 0 and master_process:
-            # get loss as float. note: this is a CPU-GPU sync point
-            # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
+            # Get loss as float. note: this is a CPU-GPU sync point
+            # Scale up to undo the division above, approximating the true total loss (exact would have been a sum)
             lossf = loss.item() * GRADIENT_ACCUMULATION_STEPS
             if local_iter_num >= 5:  # let the training loop settle a bit
                 mfu = raw_model.estimate_mfu(

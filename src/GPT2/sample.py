@@ -16,7 +16,7 @@ import tiktoken
 import torch
 
 from sub import BPETokenizer, CharacterTokenizer
-from sub.config import DEVICE, DTYPE, INIT_FROM, TEMPERATURE, TOP_K
+from sub.config import DTYPE, TEMPERATURE, TOP_K
 from sub.model import GPT, GPTConfig
 from sub.parser import parse_args
 from sub.utils import count_model_layers, find_eot, plot_tokens_per_time
@@ -58,11 +58,12 @@ def main():
     else:
         ckpt_path = os.path.join(data_dir, "out", "ckpt.pt")
 
-    VERB = args.verb
     global PROFILE
     PROFILE = args.debug
 
+    VERB = args.verb
     PLOTS = args.plots
+    DEVICE = args.device
 
     out_stats_file = args.time_run
     if out_stats_file is not None:

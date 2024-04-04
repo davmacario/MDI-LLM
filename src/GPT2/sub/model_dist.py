@@ -22,6 +22,7 @@ import pickle
 import socket
 import threading
 import time
+import warnings
 from collections import deque
 from contextlib import nullcontext
 from typing import Any, Dict, List, Mapping, Tuple, Union
@@ -260,6 +261,7 @@ class GPTServer:
     sock_to_prev_prop: Tuple = ()  # NOTE: used now
     sock_to_next: Union[socket.socket, None] = None
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
+    n_samples = None
 
     # Message queue
     message_queue = deque([])
@@ -288,11 +290,11 @@ class GPTServer:
         on the information in the chain while performing inference.
 
         Args:
+            node_config: node configuration information (from .json file)
             node_type: string indicating the node type - here it is just enough to
                 distinguish between "starter" and non-starter (starter is configured
                 already here, while non-starters have to be configured with a POST
                 request)
-            node_config: node configuration information (from .json file)
             starter_config: extra arguments required for the starter node; expected
                 keys:
                 - params: model parameters (state dict) for starter node
@@ -412,6 +414,7 @@ class GPTServer:
 
     def start(
         self,
+        n_samples: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
     ) -> Union[None, Tuple[List[str], float]]:
         """
@@ -450,7 +453,9 @@ class GPTServer:
 
         # Differentiate between different types
         if self.node_type == "starter":
-            assert max_new_tokens is not None
+            assert max_new_tokens is not None and n_samples is not None
+
+            self.n_samples = n_samples
 
             self._load_tokenizer()
             if isinstance(self.tok, tiktoken.Encoding):
@@ -471,10 +476,12 @@ class GPTServer:
             self.queue_thread.start()
 
             if VERB:
-                print("[INFO] Starting generation loop")
+                print(
+                    f"[INFO] Starting generation loop - {n_samples} samples, {max_new_tokens} tokens each"
+                )
             logger_wp.info("Starting generation loop")
 
-            out_text, gen_time = self._starter_loop(max_new_tokens)
+            out_text, gen_time = self._starter_loop(max_new_tokens, n_samples)
 
             return out_text, gen_time
         else:
@@ -763,7 +770,9 @@ class GPTServer:
                 self.message_queue.append(data)
                 self.queue_not_empty.set()
 
-    def _starter_loop(self, max_new_tokens: int) -> Tuple[List[str], float]:
+    def _starter_loop(
+        self, max_new_tokens: int, n_samples: Union[int, None] = None
+    ) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
         This loop has a finite duration, as the starter knows what is the length of the
@@ -776,8 +785,17 @@ class GPTServer:
             list containing the `n_nodes` generated samples
             total generation time in seconds
         """
-        # TODO: allow to generate as many samples as desired (>= n. nodes) - see #10
         assert self.model_config is not None and self.model is not None
+
+        if n_samples is None:
+            n_samples = self.n_nodes
+        elif n_samples < self.n_nodes:
+            warnings.warn(
+                f"Cannot generate less samples than nodes! Overriding n_samples = {self.n_nodes}"
+            )
+            n_samples = self.n_nodes
+
+        assert isinstance(n_samples, int)
 
         if "cuda" in self.device:
             device_type = "cuda"
@@ -793,7 +811,7 @@ class GPTServer:
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
         # Encode starting sequence (TODO: implement prompt support - different
@@ -802,7 +820,7 @@ class GPTServer:
         start_ids = self.tok_encode(start)
         idx = [
             torch.tensor(start_ids, dtype=torch.long, device=self.device)[None, ...]
-            for _ in range(self.n_nodes)
+            for _ in range(n_samples)
         ]
 
         self.model.eval()
@@ -811,7 +829,7 @@ class GPTServer:
             self.tok_time.append((0, 0))
         with torch.no_grad():
             with ctx:
-                total_iters = max_new_tokens * self.n_nodes
+                total_iters = max_new_tokens * n_samples
                 for k in range(total_iters):
                     logger_wp.info(f"Iter {k}")
                     print(
@@ -820,9 +838,9 @@ class GPTServer:
                     )
                     if PLOTS:
                         self.tok_time.append((k, time.time() - start_time))
-                    sample_id = k % self.n_nodes  # Which of the n_nodes samples
+                    sample_id = k % n_samples  # Identify sample
 
-                    if k >= self.n_nodes:
+                    if k >= n_samples:
                         # We are not in the first iteration (k starts from 0)
                         # can start processing messages from last secondary node
 
@@ -850,7 +868,7 @@ class GPTServer:
                         idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
 
                     # Send to next iff not at the last token
-                    if k < (self.n_nodes * (max_new_tokens - 1)):
+                    if k < (n_samples * (max_new_tokens - 1)):
                         # Crop to block size
                         idx_cond = (
                             idx[sample_id]
@@ -873,15 +891,15 @@ class GPTServer:
                 "..",
                 "logs",
                 "tok-per-time",
-                f"tokens_time_samples_mdi_{MODEL_TYPE}_{self.n_nodes}samples.csv",
+                f"tokens_time_samples_mdi_{MODEL_TYPE}_{n_samples}samples_{self.n_nodes}nodes.csv",
             )
             if not os.path.exists(os.path.dirname(points_file_path)):
                 os.mkdir(os.path.dirname(points_file_path))
             with open(points_file_path, "w") as f:
                 times = [x[1] for x in self.tok_time]
-                n_samples = [x[0] for x in self.tok_time]
+                n_tok = [x[0] for x in self.tok_time]
                 for i in range(len(times)):
-                    f.write(f"{times[i]},{n_samples[i]}\n")
+                    f.write(f"{times[i]},{n_tok[i]}\n")
 
             plot_tokens_per_time(
                 self.tok_time,
@@ -908,6 +926,7 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_next is not None
         assert self.model is not None and self.model_config is not None
+        assert self.n_samples is not None
 
         # Should be overrided by kwargs
         if "cuda" in self.device:
@@ -924,7 +943,7 @@ class GPTServer:
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
         self.model.eval()
@@ -942,12 +961,11 @@ class GPTServer:
                     if len(self.message_queue) <= 0:  # Wait for messages
                         self.queue_not_empty.clear()
                     # Extract message from queue
-                    # Unpack
                     samp_ind = in_msg["sample_index"]
                     assert (
                         exp_ind == samp_ind
                     ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                    exp_ind = (samp_ind + 1) % self.n_nodes
+                    exp_ind = (samp_ind + 1) % self.n_samples
 
                     ins = in_msg["data"].to(self.device)
                     if self.running:
@@ -1024,6 +1042,10 @@ class GPTServer:
                     del chunk_cont
                     gc.collect()
                 self.n_nodes = init_msg["n_nodes"]
+                self.n_samples = init_msg["n_samples"]
+                if VERB:
+                    print(f"{self.n_nodes} Nodes, generating {self.n_samples} samples")
+
                 # Set up the node
                 self.init_model(init_msg["n_layers"])
                 assert (
@@ -1081,6 +1103,7 @@ class GPTDistributed:
         "next_node": {},  # From .json
         "n_layers": 0,  # Number of transformer layers
         "device": "cpu",
+        "n_samples": 0,
     }
 
     def __init__(
@@ -1147,6 +1170,8 @@ class GPTDistributed:
 
         if os.path.exists(ckpt_path):
             # Either load full model, or load chunk
+            if VERB:
+                print("Loading model checkpoint")
             try:
                 self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
             except:
@@ -1158,7 +1183,7 @@ class GPTDistributed:
                 gc.collect()
                 # It may be that the model does not fit all in the VRAM
                 if VERB:
-                    print("Loading full model on RAM - not enough VRAM")
+                    warnings.warn("Loading full model on RAM - not enough VRAM")
                 logger_wp.warn("Loading full model on RAM - not enough VRAM")
                 self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
         elif ckpt_path in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
@@ -1218,6 +1243,8 @@ class GPTDistributed:
         embd = self.model_ckpt["model_args"]["n_embd"]
         ctx = self.model_ckpt["model_args"]["block_size"]
         MODEL_TYPE = f"{self.n_layers_tot}layers_{ctx}ctx_{embd}embd"
+        if VERB:
+            print(f"Model type tag: {MODEL_TYPE}")
 
         # Extract tokenizer metadata information (if any) and locate it
         dataset_dir = None
@@ -1245,11 +1272,11 @@ class GPTDistributed:
             else:
                 self.tok_meta_path = None
                 if VERB:
-                    print("No tokenizer information found, assuming GPT-2 encodings...")
+                    print("No tokenizer information found, assuming GPT-2 encodings")
         else:
             self.tok_meta_path = None
             if VERB:
-                print("No tokenizer information found, assuming GPT-2 encodings...")
+                print("No tokenizer information found, assuming GPT-2 encodings")
 
         self.model_config = GPTConfig(**self.model_ckpt["model_args"])
 
@@ -1277,10 +1304,10 @@ class GPTDistributed:
         del self.model_ckpt
         gc.collect()
 
-    def configure_nodes(self) -> int:
+    def configure_nodes(self, n_samples: int) -> int:
         """
-        Send POST requests to the other nodes to inform them of their role and including
-        their chunk of model.
+        Send POST requests to the other nodes to inform them of their role, the number
+        of samples, and including their chunk of model.
 
         Information sent:
             - Node role ("role")
@@ -1315,6 +1342,7 @@ class GPTDistributed:
             if not self.mod_split:
                 curr_msg["params"] = self.model_chunks["secondary"][i]
             curr_msg["n_nodes"] = self.n_total_nodes
+            curr_msg["n_samples"] = n_samples
 
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
@@ -1432,7 +1460,7 @@ class GPTDistributed:
             return 1
         return 0
 
-    def start(self, tokens_per_sample: int = 1000) -> Tuple[List[str], float]:
+    def start(self, n_samples: int, tokens_per_sample: int) -> Tuple[List[str], float]:
         """
         Start the operation - webserver + model
 
@@ -1450,11 +1478,13 @@ class GPTDistributed:
             Total generation time in seconds
         """
         # TODO: add assertions (uninitialized values)
-        if not self.configure_nodes():
+        if not self.configure_nodes(n_samples=n_samples):
             raise AssertionError("Unable to initialize required nodes!")
 
         # The code below assumes we will receive the correct info (not None)
-        out, time_gen = self.webserv.start(max_new_tokens=tokens_per_sample)
+        out, time_gen = self.webserv.start(
+            n_samples=n_samples, max_new_tokens=tokens_per_sample
+        )
 
         print("-------------------------------------------------")
         print("Produced output:\n")

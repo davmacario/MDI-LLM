@@ -59,6 +59,12 @@ parser.add_argument(
     help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder)",
 )
 parser.add_argument(
+    "--n-samples",
+    type=int,
+    default=3,
+    help="Number of samples (independent pieces of text) to be generated",
+)
+parser.add_argument(
     "--n-tokens",
     type=int,
     default=300,
@@ -137,7 +143,9 @@ if __name__ == "__main__":
 
     # Operation
     try:
-        gen_samples, gen_time = gpt_distr.start(tokens_per_sample=tok_per_sample)
+        gen_samples, gen_time = gpt_distr.start(
+            n_samples=args.n_samples, tokens_per_sample=tok_per_sample
+        )
     except KeyboardInterrupt:
         cp.engine.stop()
         print("Starter node was stopped successfully!")
