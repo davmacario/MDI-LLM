@@ -416,6 +416,7 @@ class GPTServer:
         self,
         n_samples: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
+        prompt: Union[None, str] = None,
     ) -> Union[None, Tuple[List[str], float]]:
         """
         Perform normal operation (open sockets, wait for communication from previous
@@ -438,6 +439,8 @@ class GPTServer:
                 text)
             max_new_tokens: ONLY FOR STARTER - maximum number of tokens per generated
                 sample
+            prompt: (STARTER ONLY) - string containing the prompt or
+                "FILE:<filename.txt>"
 
         Returns:
             if starter node, return the list of produced samples, else nothing
@@ -481,7 +484,7 @@ class GPTServer:
                 )
             logger_wp.info("Starting generation loop")
 
-            out_text, gen_time = self._starter_loop(max_new_tokens, n_samples)
+            out_text, gen_time = self._starter_loop(max_new_tokens, n_samples, prompt)
 
             return out_text, gen_time
         else:
@@ -1464,7 +1467,9 @@ class GPTDistributed:
             return 1
         return 0
 
-    def start(self, n_samples: int, tokens_per_sample: int) -> Tuple[List[str], float]:
+    def start(
+        self, n_samples: int, tokens_per_sample: int, prompt: Union[None, str] = None
+    ) -> Tuple[List[str], float]:
         """
         Start the operation - webserver + model
 
@@ -1477,6 +1482,9 @@ class GPTDistributed:
             n_samples: number of samples to be generated
             tokens_per_sample: number of generated tokens per sample; the number
                 of samples is the same as the number of nodes
+            prompt (optional): either a string consisting of the user prompt, or a
+                string with the format "FILE:<prompt.txt>" pointing to a file containing
+                a prompt in each paragraph
 
         Returns:
             List of produced samples
@@ -1488,7 +1496,7 @@ class GPTDistributed:
 
         # The code below assumes we will receive the correct info (not None)
         out, time_gen = self.webserv.start(
-            n_samples=n_samples, max_new_tokens=tokens_per_sample
+            n_samples=n_samples, max_new_tokens=tokens_per_sample, prompt=prompt
         )
 
         print("-------------------------------------------------")

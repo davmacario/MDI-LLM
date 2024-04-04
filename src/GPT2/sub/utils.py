@@ -496,6 +496,10 @@ def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
     """
 
     if prompt.startswith("FILE:"):
+        if not all([prompt.endswith(ext) for ext in (".txt", ".md")]):
+            raise ValueError(
+                f"Unsupported file type for {prompt}\nSupported types are: '.txt', '.md'"
+            )
         print("Reading prompt(s) from file")
         fname = prompt[5:]
         out = []
