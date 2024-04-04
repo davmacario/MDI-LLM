@@ -61,7 +61,7 @@ parser.add_argument(
 parser.add_argument(
     "--prompt",
     type=str,
-    default="\n",
+    default=None,
     help="""(Optional) prompt string or 'FILE:<path_to_file.txt>' indicating a file where each
     paragraph is a prompt""",
 )
