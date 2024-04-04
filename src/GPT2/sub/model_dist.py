@@ -39,7 +39,7 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import (DEVICE, DTYPE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K,
                         VERB)
 from sub.model import Block, GPTConfig, LayerNorm
-from sub.utils import (get_prompt, load_from_hf, loading_bar,
+from sub.utils import (find_eot, get_prompt, load_from_hf, loading_bar,
                        plot_tokens_per_time, split_parameters)
 
 """
@@ -1507,7 +1507,7 @@ class GPTDistributed:
         for i, smpl in enumerate(out):
             print("-------------------------------------------------")
             print(f"Sample {i + 1}:")
-            print(smpl, "\n")
+            print(smpl[: find_eot(smpl)], "\n")
         print("-------------------------------------------------")
 
         # Once finished, send PUT to each node to terminate execution for them
