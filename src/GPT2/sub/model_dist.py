@@ -824,11 +824,16 @@ class GPTServer:
         else:
             start = get_prompt(prompt, n_samples)
 
+        assert len(start) == n_samples
+
         start_ids = [self.tok_encode(txt) for txt in start]
         idx = [
             torch.tensor(start_txt, dtype=torch.long, device=self.device)[None, ...]
             for start_txt in start_ids
         ]
+
+        if VERB:
+            print(f"Starting generation - {n_samples} samples, {max_new_tokens} tokens")
 
         self.model.eval()
         start_time = time.time()
