@@ -822,7 +822,7 @@ class GPTServer:
         if prompt is None:
             start = ["\n"] * n_samples
         else:
-            start = get_prompt(prompt, n_samples)
+            start = get_prompt(prompt, n_samples, verb=VERB)
 
         assert len(start) == n_samples
 

@@ -475,7 +475,7 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 # ---------- PROMPT -------------------------------------------------------------------
 
 
-def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
+def get_prompt(prompt: str, n_samples: int = 1, **kwargs) -> List[str]:
     """
     Extract the user prompt.
 
@@ -494,6 +494,7 @@ def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
     considered.
     If the file contains too few, instead, the output list will be padded with "\\n"
     """
+    verb = kwargs.get("verb", False)
 
     if prompt.startswith("FILE:"):
         if not any([prompt.endswith(ext) for ext in (".txt", ".md")]):
@@ -523,7 +524,8 @@ def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
 
         assert len(out) == n_samples
 
-        print(out)
+        if verb:
+            print(out)
         return out
     else:
         return [prompt] * n_samples
