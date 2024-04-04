@@ -496,7 +496,7 @@ def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
     """
 
     if prompt.startswith("FILE:"):
-        if not all([prompt.endswith(ext) for ext in (".txt", ".md")]):
+        if not any([prompt.endswith(ext) for ext in (".txt", ".md")]):
             raise ValueError(
                 f"Unsupported file type for {prompt}\nSupported types are: '.txt', '.md'"
             )
