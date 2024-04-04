@@ -832,9 +832,6 @@ class GPTServer:
             for start_txt in start_ids
         ]
 
-        if VERB:
-            print(f"Starting generation - {n_samples} samples, {max_new_tokens} tokens")
-
         self.model.eval()
         start_time = time.time()
         if PLOTS:
