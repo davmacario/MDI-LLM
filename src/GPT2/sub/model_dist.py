@@ -484,7 +484,7 @@ class GPTServer:
                 )
             logger_wp.info("Starting generation loop")
 
-            out_text, gen_time = self._starter_loop(max_new_tokens, n_samples, prompt)
+            out_text, gen_time = self._starter_loop(n_samples, max_new_tokens, prompt)
 
             return out_text, gen_time
         else:
