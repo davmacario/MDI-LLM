@@ -523,9 +523,12 @@ def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
 
         assert len(out) == n_samples
 
+        print(out)
         return out
     else:
-        return [prompt] * n_samples
+        out = [prompt] * n_samples
+        print(out)
+        return out
 
 
 # ---------- PLOTS --------------------------------------------------------------------
