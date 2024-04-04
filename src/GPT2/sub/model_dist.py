@@ -476,7 +476,9 @@ class GPTServer:
             self.queue_thread.start()
 
             if VERB:
-                print("[INFO] Starting generation loop")
+                print(
+                    f"[INFO] Starting generation loop - {n_samples} samples, {max_new_tokens} tokens each"
+                )
             logger_wp.info("Starting generation loop")
 
             out_text, gen_time = self._starter_loop(max_new_tokens, n_samples)
@@ -1168,6 +1170,8 @@ class GPTDistributed:
 
         if os.path.exists(ckpt_path):
             # Either load full model, or load chunk
+            if VERB:
+                print("Loading model checkpoint")
             try:
                 self.model_ckpt = torch.load(ckpt_path, map_location=DEVICE)
             except:
@@ -1179,7 +1183,7 @@ class GPTDistributed:
                 gc.collect()
                 # It may be that the model does not fit all in the VRAM
                 if VERB:
-                    print("Loading full model on RAM - not enough VRAM")
+                    warnings.warn("Loading full model on RAM - not enough VRAM")
                 logger_wp.warn("Loading full model on RAM - not enough VRAM")
                 self.model_ckpt = torch.load(ckpt_path, map_location="cpu")
         elif ckpt_path in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}:
@@ -1239,6 +1243,8 @@ class GPTDistributed:
         embd = self.model_ckpt["model_args"]["n_embd"]
         ctx = self.model_ckpt["model_args"]["block_size"]
         MODEL_TYPE = f"{self.n_layers_tot}layers_{ctx}ctx_{embd}embd"
+        if VERB:
+            print(f"Model type tag: {MODEL_TYPE}")
 
         # Extract tokenizer metadata information (if any) and locate it
         dataset_dir = None
@@ -1266,11 +1272,11 @@ class GPTDistributed:
             else:
                 self.tok_meta_path = None
                 if VERB:
-                    print("No tokenizer information found, assuming GPT-2 encodings...")
+                    print("No tokenizer information found, assuming GPT-2 encodings")
         else:
             self.tok_meta_path = None
             if VERB:
-                print("No tokenizer information found, assuming GPT-2 encodings...")
+                print("No tokenizer information found, assuming GPT-2 encodings")
 
         self.model_config = GPTConfig(**self.model_ckpt["model_args"])
 
