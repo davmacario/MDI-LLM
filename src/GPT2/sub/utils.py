@@ -232,7 +232,9 @@ def split_parameters(
 
     if VERB:
         print(f"Number of layers - starter node: {n_layers_start}")
-        print(f"Number of layers - secondary node{'s' if n_layers_secondary > 1 else ''}: {n_layers_secondary}")
+        print(
+            f"Number of layers - secondary node{'s' if n_layers_secondary > 1 else ''}: {n_layers_secondary}"
+        )
 
     out_chunks = {}
 
@@ -317,7 +319,7 @@ def split_parameters(
 
         for k_orig in relevant_keys:
             ind_layer = int(k_orig.split(".")[2])
-            ind_layer_chunk = ind_layer - start_layer_ind 
+            ind_layer_chunk = ind_layer - start_layer_ind
 
             prefix = f"{base_name_transformer}.{layer_name}.{ind_layer}."
             end = remove_prefix(k_orig, prefix)
@@ -470,7 +472,59 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return sd, config_args
 
 
-# ---------- PLOTS -------------------------------------------------------------
+# ---------- PROMPT -------------------------------------------------------------------
+
+
+def get_prompt(prompt: str, n_samples: int = 1) -> List[str]:
+    """
+    Extract the user prompt.
+
+    The given prompt is a string indicating:
+        - The prompt itself
+        - If starting with 'FILE:', it indicates a text file containing, in each
+        paragraph (block of text separated by blank lines) a different prompt
+
+    It is possible to specify the number of samples to return a list with the correct
+    length.
+
+    It returns a list containing the prompts as items.
+    If the given string is the prompt itself, the list will contain that string repeated
+    for n_samples.
+    If the file contains more paragraphs than samples, only the first n_samples will be
+    considered.
+    If the file contains too few, instead, the output list will be padded with "\\n"
+    """
+
+    if prompt.startswith("FILE:"):
+        print("Reading prompt(s) from file")
+        fname = prompt[5:]
+        out = []
+        with open(fname, "r") as f:
+            curr_sample = ""
+            for line in f.readlines():
+                if line.strip() != "":
+                    curr_sample += line  # Not removing '\n'
+                else:  # Paragraph end
+                    out.append(curr_sample)
+                    curr_sample = ""
+
+                if len(out) == n_samples:
+                    break
+
+        if curr_sample != "":
+            out.append(curr_sample)
+
+        if len(out) < n_samples:
+            out += ["\n"] * (n_samples - len(out))
+
+        assert len(out) == n_samples
+
+        return out
+    else:
+        return [prompt] * n_samples
+
+
+# ---------- PLOTS --------------------------------------------------------------------
 file_dir = os.path.dirname(__file__)
 
 

@@ -39,8 +39,8 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import (DEVICE, DTYPE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K,
                         VERB)
 from sub.model import Block, GPTConfig, LayerNorm
-from sub.utils import (load_from_hf, loading_bar, plot_tokens_per_time,
-                       split_parameters)
+from sub.utils import (get_prompt, load_from_hf, loading_bar,
+                       plot_tokens_per_time, split_parameters)
 
 """
 Distributed implementation of GPT2 - using the same blocks as the original model.
@@ -434,8 +434,8 @@ class GPTServer:
         to be stopped "externally" by the starter node once the generation is complete.
 
         Args:
-            n_nodes: number of nodes in the network, it is the same as the number of
-                generated samples (recurrent pipelining)
+            n_samples: number of samples to be generated (i.e., independent pieces of
+                text)
             max_new_tokens: ONLY FOR STARTER - maximum number of tokens per generated
                 sample
 
@@ -771,7 +771,7 @@ class GPTServer:
                 self.queue_not_empty.set()
 
     def _starter_loop(
-        self, max_new_tokens: int, n_samples: Union[int, None] = None
+        self, n_samples: int, max_new_tokens: int, prompt: Union[str, None] = None
     ) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
@@ -779,7 +779,10 @@ class GPTServer:
         samples to be generated.
 
         Args:
+            n_samples: number of produced samples
             max_new_tokens: maximum number of tokens
+            prompt: either the prompt itself or a string of the type "FILE:<prompt.txt>"
+                containing each prompt as a separate paragraph
 
         Returns:
             list containing the `n_nodes` generated samples
@@ -794,8 +797,6 @@ class GPTServer:
                 f"Cannot generate less samples than nodes! Overriding n_samples = {self.n_nodes}"
             )
             n_samples = self.n_nodes
-
-        assert isinstance(n_samples, int)
 
         if "cuda" in self.device:
             device_type = "cuda"
@@ -814,13 +815,16 @@ class GPTServer:
             else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
-        # Encode starting sequence (TODO: implement prompt support - different
-        # prompts for different samples - see #12)
-        start = "\n"
-        start_ids = self.tok_encode(start)
+        # Encode starting sequence - with prompt support
+        if prompt is None:
+            start = ["\n"] * n_samples
+        else:
+            start = get_prompt(prompt, n_samples)
+
+        start_ids = [self.tok_encode(txt) for txt in start]
         idx = [
-            torch.tensor(start_ids, dtype=torch.long, device=self.device)[None, ...]
-            for _ in range(n_samples)
+            torch.tensor(start_txt, dtype=torch.long, device=self.device)[None, ...]
+            for start_txt in start_ids
         ]
 
         self.model.eval()
@@ -1470,6 +1474,7 @@ class GPTDistributed:
         This method calls back self.configure_nodes() and self.webserv.start()
 
         Args:
+            n_samples: number of samples to be generated
             tokens_per_sample: number of generated tokens per sample; the number
                 of samples is the same as the number of nodes
 
