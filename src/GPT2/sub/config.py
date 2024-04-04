@@ -73,7 +73,7 @@ TOP_K = (
     200  # retain only the top_k most likely tokens, clamp others to have 0 probability
 )
 TEMPERATURE = (
-    0.8  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+    1  # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 )
 
 # ---- MDI settings ------------------------------
