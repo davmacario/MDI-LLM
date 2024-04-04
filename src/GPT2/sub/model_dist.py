@@ -799,7 +799,7 @@ class GPTServer:
             raise ValueError("Cannot generate less than 1 sample!")
         elif n_samples < self.n_nodes:
             warnings.warn(
-                f"Generating less samples {n_samples} than nodes ({self.n_nodes}) will not be efficient!"
+                f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
             )
 
         if "cuda" in self.device:
