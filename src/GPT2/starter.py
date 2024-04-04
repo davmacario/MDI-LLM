@@ -59,6 +59,13 @@ parser.add_argument(
     help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder)",
 )
 parser.add_argument(
+    "--prompt",
+    type=str,
+    default=None,
+    help="""(Optional) prompt string or 'FILE:<path_to_file.txt>' indicating a file where each
+    paragraph is a prompt""",
+)
+parser.add_argument(
     "--n-samples",
     type=int,
     default=3,
@@ -144,7 +151,9 @@ if __name__ == "__main__":
     # Operation
     try:
         gen_samples, gen_time = gpt_distr.start(
-            n_samples=args.n_samples, tokens_per_sample=tok_per_sample
+            n_samples=args.n_samples,
+            tokens_per_sample=tok_per_sample,
+            prompt=args.prompt,
         )
     except KeyboardInterrupt:
         cp.engine.stop()
