@@ -977,6 +977,7 @@ class GPTServer:
             )
 
         # Send stop message to the next (no queue used)
+        self.running = False
         self.send_to_next(self.stop_msg)
         logger_wp.info("Generation completed")
         if VERB:
@@ -1049,6 +1050,7 @@ class GPTServer:
                     else:
                         print("> Generation completed!")
                         self.send_to_next(self.stop_msg)
+                        self.running = False
 
     def _build_msg(self, data, sample_index) -> Dict:
         """
