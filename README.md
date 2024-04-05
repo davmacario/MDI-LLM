@@ -1,13 +1,8 @@
----
-title: MDI-LLM
-author: Davide Macario (@davmacario)
----
+# MDI-LLM
 
 Code for "A Model-Distributed Inference Approach for Large Language Models at the Edge"
 
 ---
-
-[[toc]]
 
 > Implementation of Model-Distributed Inference for Large Language Models
 
