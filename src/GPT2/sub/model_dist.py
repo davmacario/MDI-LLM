@@ -632,7 +632,7 @@ class GPTServer:
             1 upon success, 0 otherwise
         """
         if VERB:
-            print("[INFO]: shutting down")
+            print("[INFO] Shutting down")
         try:
             time.sleep(2)
             cp.engine.stop()
@@ -1572,6 +1572,7 @@ class GPTDistributed:
             1 if all requests were successful
             0 if at least 1 request failed
         """
+        print("HERE")
         out = 1
         for sec_node in self.nodes_info["nodes"]["secondary"]:
             target_addr = sec_node["addr"]
