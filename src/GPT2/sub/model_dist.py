@@ -637,14 +637,26 @@ class GPTServer:
         try:
             time.sleep(2)
             if self.node_type != "starter":
+                if VERB:
+                    print("Stopping main thread", end="\r")
                 self._running_thread.join()
             self.running = False  # Redundant
+            if VERB:
+                print("Stopping input queue thread", end="\r")
             self.in_queue_thread.join()
+            if VERB:
+                print("Stopping output queue thread", end="\r")
             self.out_queue_thread.join()
+            if VERB:
+                print("Stopping input and output sockets", end="\r")
             self.sock_to_prev_prop[0].close()
             self.sock_to_prev.close()
             self.sock_to_next.close()
+            if VERB:
+                print("Stopping HTTP server             ", end="\r")
             cp.engine.stop()
+            if VERB:
+                print("Closing application              ", end="\r")
             return 1
         except:
             return 0
@@ -1133,7 +1145,7 @@ class GPTServer:
             if len(path) > 0 and path[0] == "stop":
                 self._end_thr = threading.Thread(target=self.shutdown, daemon=True)
                 self._end_thr.start()
-                self._end_thr.join()
+                # self._end_thr.join()  # cannot wait, since thread stops server
                 if VERB:
                     print("[INFO] Node stopped!")
                 logger_wp.info("Received stopping directive")
