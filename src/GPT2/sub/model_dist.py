@@ -263,10 +263,15 @@ class GPTServer:
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
     n_samples = None
 
-    # Message queue
-    message_queue = deque([])
-    queue_not_empty = threading.Event()  # Replaces busy waiting
-    queue_not_empty.clear()
+    # Input message queue
+    in_message_queue = deque([])
+    in_queue_not_empty = threading.Event()  # Replaces busy waiting
+    in_queue_not_empty.clear()
+
+    # Output message queue
+    out_message_queue = deque([])
+    out_queue_not_empty = threading.Event()
+    out_queue_not_empty.clear()
 
     # Some model configs:
     top_k = TOP_K
@@ -475,8 +480,16 @@ class GPTServer:
             logger_wp.info("Tokenizer loaded!")
             logger_wp.info("Starting queue thread")
 
-            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
-            self.queue_thread.start()
+            # Input queue
+            self.in_queue_thread = threading.Thread(
+                target=self._fill_input_queue, daemon=True
+            )
+            self.in_queue_thread.start()
+            # Output queue
+            self.out_queue_thread = threading.Thread(
+                target=self._empty_output_queue, daemon=True
+            )
+            self.out_queue_thread.start()
 
             if VERB:
                 print(
@@ -492,8 +505,15 @@ class GPTServer:
             if VERB:
                 print("[INFO] Starting queue thread")
             logger_wp.info("Starting queue thread")
-            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
-            self.queue_thread.start()
+            self.in_queue_thread = threading.Thread(
+                target=self._fill_input_queue, daemon=True
+            )
+            self.in_queue_thread.start()
+
+            self.out_queue_thread = threading.Thread(
+                target=self._empty_output_queue, daemon=True
+            )
+            self.out_queue_thread.start()
 
             if VERB:
                 print("[INFO] Starting generation loop")
@@ -618,7 +638,8 @@ class GPTServer:
             self.sock_to_prev.close()
             self.sock_to_next.close()
             self.running = False  # Redundant
-            self.queue_thread.join()
+            self.in_queue_thread.join()
+            self.out_queue_thread.join()
             if self.node_type != "starter":
                 self._running_thread.join()
             return 1
@@ -730,12 +751,12 @@ class GPTServer:
                 f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
             )
 
-    def _fill_queue(self):
+    def _fill_input_queue(self):
         """
         This method has the goal of managing incoming messages from previous nodes in
         the chain.
         As a message is received, its contents are stored in the message queue
-        (`self.message_queue`).
+        (`self.in_message_queue`).
         This allows to store locally each of the received messages, in order.
         The order is crucial for the correct functioning of the program (pipelining).
 
@@ -745,8 +766,8 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
-        if len(self.message_queue) < 1:
-            self.queue_not_empty.clear()
+        if len(self.in_message_queue) < 1:
+            self.in_queue_not_empty.clear()
 
         _n_recv_msg = 0
         while self.running:
@@ -770,8 +791,28 @@ class GPTServer:
                 logger_wp.info("Stopping message received! Generation complete!")
                 self.running = False
             else:  # Not here if stopping message is received
-                self.message_queue.append(data)
-                self.queue_not_empty.set()
+                self.in_message_queue.append(data)
+                self.in_queue_not_empty.set()
+
+    def _empty_output_queue(self):
+        """
+        Handle transmission of messages in the output queue. As messages are placed in
+        the output queue by the execution loops, it will use the output socket to send
+        them to the next node in the chain.
+
+        This method should run on its separate thread.
+        """
+        assert self.sock_to_next is not None
+
+        while self.running:
+            # Wait for message in queue
+            assert self.out_queue_not_empty.wait()
+
+            tx_msg = self.out_message_queue.popleft()
+            if len(self.out_message_queue) < 1:
+                self.out_queue_not_empty.clear()
+
+            self.send_to_next(tx_msg)
 
     def _starter_loop(
         self, n_samples: int, max_new_tokens: int, prompt: Union[str, None] = None
@@ -855,11 +896,11 @@ class GPTServer:
                         # can start processing messages from last secondary node
 
                         # Wait for queue to contain msg
-                        assert self.queue_not_empty.wait()
+                        assert self.in_queue_not_empty.wait()
 
-                        in_msg = self.message_queue.popleft()
-                        if len(self.message_queue) < 1:
-                            self.queue_not_empty.clear()
+                        in_msg = self.in_message_queue.popleft()
+                        if len(self.in_message_queue) < 1:
+                            self.in_queue_not_empty.clear()
                         sample_in = in_msg["sample_index"]
 
                         # Check correct order
@@ -890,7 +931,9 @@ class GPTServer:
 
                         # Build message
                         out_msg = self._build_msg(idx_cond, sample_id)
-                        self.send_to_next(out_msg)
+
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
 
         tot_time = time.time() - start_time
         if PLOTS:
@@ -918,7 +961,7 @@ class GPTServer:
                 ),
             )
 
-        # Send stop message to the next
+        # Send stop message to the next (no queue used)
         self.send_to_next(self.stop_msg)
         logger_wp.info("Generation completed")
         if VERB:
@@ -965,11 +1008,11 @@ class GPTServer:
                 while self.running:
                     logger_wp.info(f"Iter {iter}")
 
-                    assert self.queue_not_empty.wait()
+                    assert self.in_queue_not_empty.wait()
 
-                    in_msg = self.message_queue.popleft()
-                    if len(self.message_queue) <= 0:  # Wait for messages
-                        self.queue_not_empty.clear()
+                    in_msg = self.in_message_queue.popleft()
+                    if len(self.in_message_queue) <= 0:  # Wait for messages
+                        self.in_queue_not_empty.clear()
                     # Extract message from queue
                     samp_ind = in_msg["sample_index"]
                     assert (
@@ -985,7 +1028,8 @@ class GPTServer:
                         # Build msg
                         out_msg = self._build_msg(outs, samp_ind)
                         # Send to next
-                        self.send_to_next(out_msg)
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
                         iter += 1
                     else:
                         print("> Generation completed!")
