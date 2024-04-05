@@ -641,24 +641,24 @@ class GPTServer:
             self.running = False  # Redundant
             if self.node_type != "starter":
                 if VERB:
-                    print("Stopping main thread", end="\r")
+                    print("Stopping main thread")
                 self._running_thread.join()
             if VERB:
-                print("Stopping input queue thread", end="\r")
+                print("Stopping input queue thread")
             self.in_queue_thread.join()
             if VERB:
-                print("Stopping output queue thread", end="\r")
+                print("Stopping output queue thread")
             self.out_queue_thread.join()
             if VERB:
-                print("Stopping input and output sockets", end="\r")
+                print("Stopping input and output sockets")
             self.sock_to_prev_prop[0].close()
             self.sock_to_prev.close()
             self.sock_to_next.close()
             if VERB:
-                print("Stopping HTTP server             ", end="\r")
+                print("Stopping HTTP server")
             cp.engine.exit()
             if VERB:
-                print("Closing application              ", end="\r")
+                print("Closing application")
             return 1
         except:
             return 0
@@ -992,6 +992,8 @@ class GPTServer:
 
         # Send stop message to the next (no queue used)
         self.running = False
+        if VERB:
+            print("Sending stopping message over socket")
         self.out_message_queue.append(self.stop_msg)
         logger_wp.info("Generation completed")
         if VERB:
@@ -1609,15 +1611,12 @@ class GPTDistributed:
             1 if all requests were successful
             0 if at least 1 request failed
         """
-        print("HERE")
         out = 1
         for sec_node in self.nodes_info["nodes"]["secondary"]:
             target_addr = sec_node["addr"]
             target_port = sec_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/stop"
-            if VERB:
-                print(f"Sending PUT request to {addr}")
             out *= self.request_to_node("PUT", addr, {})
 
         self.webserv.shutdown()
