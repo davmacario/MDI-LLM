@@ -600,7 +600,7 @@ class GPTServer:
         self._start_server()
         assert self.sock_to_prev is not None
         if VERB:
-            print("Started listening")
+            print(f"Started listening on port {self.node_config["inference"]["port_in"]}")
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
