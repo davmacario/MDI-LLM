@@ -654,7 +654,7 @@ class GPTServer:
             self.sock_to_next.close()
             if VERB:
                 print("Stopping HTTP server             ", end="\r")
-            cp.engine.stop()
+            cp.engine.exit()
             if VERB:
                 print("Closing application              ", end="\r")
             return 1
