@@ -804,10 +804,14 @@ class GPTServer:
                 if VERB:
                     print("Stopping message received! Generation complete!")
                 logger_wp.info("Stopping message received! Generation complete!")
+                self.in_message_queue.append(data)
                 self.running = False
             else:  # Not here if stopping message is received
                 self.in_message_queue.append(data)
                 self.in_queue_not_empty.set()
+
+        if VERB:
+            print("Input queue thread stopped")
 
     def _empty_output_queue(self):
         """
@@ -827,7 +831,15 @@ class GPTServer:
             if len(self.out_message_queue) < 1:
                 self.out_queue_not_empty.clear()
 
+            if "stop" in tx_msg and tx_msg["stop"]:
+                self.send_to_next(tx_msg)
+                self.running = False
+                break
+
             self.send_to_next(tx_msg)
+
+        if VERB:
+            print("Output queue thread stopped")
 
     def _starter_loop(
         self, n_samples: int, max_new_tokens: int, prompt: Union[str, None] = None
@@ -978,7 +990,7 @@ class GPTServer:
 
         # Send stop message to the next (no queue used)
         self.running = False
-        self.send_to_next(self.stop_msg)
+        self.out_message_queue.append(self.stop_msg)
         logger_wp.info("Generation completed")
         if VERB:
             print("[INFO] Generation completed!                          ")
@@ -1030,6 +1042,10 @@ class GPTServer:
                     if len(self.in_message_queue) <= 0:  # Wait for messages
                         self.in_queue_not_empty.clear()
                     # Extract message from queue
+                    if "stop" in in_msg and in_msg["stop"]:
+                        # Stopping
+                        break
+
                     samp_ind = in_msg["sample_index"]
                     assert (
                         exp_ind == samp_ind
@@ -1049,8 +1065,11 @@ class GPTServer:
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        self.send_to_next(self.stop_msg)
+                        self.out_message_queue.append(self.stop_msg)
                         self.running = False
+        
+        if VERB:
+            print("Node loop stopped")
 
     def _build_msg(self, data, sample_index) -> Dict:
         """
