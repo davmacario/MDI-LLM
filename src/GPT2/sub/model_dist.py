@@ -600,7 +600,9 @@ class GPTServer:
         self._start_server()
         assert self.sock_to_prev is not None
         if VERB:
-            print(f"Started listening on port {self.node_config["inference"]["port_in"]}")
+            print(
+                f"Started listening on port {self.node_config['inference']['port_in']}"
+            )
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
@@ -1067,7 +1069,7 @@ class GPTServer:
                         print("> Generation completed!")
                         self.out_message_queue.append(self.stop_msg)
                         self.running = False
-        
+
         if VERB:
             print("Node loop stopped")
 
