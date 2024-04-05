@@ -993,7 +993,7 @@ class GPTServer:
         # Send stop message to the next (no queue used)
         self.running = False
         if VERB:
-            print("Sending stopping message over socket")
+            print("[INFO] Sending stopping message over socket  ")
         self.out_message_queue.append(self.stop_msg)
         logger_wp.info("Generation completed")
         if VERB:
@@ -1042,22 +1042,18 @@ class GPTServer:
 
                     assert self.in_queue_not_empty.wait()
 
+                    # Extract message from queue
                     in_msg = self.in_message_queue.popleft()
                     if len(self.in_message_queue) <= 0:  # Wait for messages
                         self.in_queue_not_empty.clear()
-                    # Extract message from queue
-                    if "stop" in in_msg and in_msg["stop"]:
-                        # Stopping
-                        break
-
-                    samp_ind = in_msg["sample_index"]
-                    assert (
-                        exp_ind == samp_ind
-                    ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                    exp_ind = (samp_ind + 1) % self.n_samples
-
-                    ins = in_msg["data"].to(self.device)
                     if self.running:
+                        samp_ind = in_msg["sample_index"]
+                        assert (
+                            exp_ind == samp_ind
+                        ), f"Expected sample index {exp_ind}, received {samp_ind}"
+                        exp_ind = (samp_ind + 1) % self.n_samples
+
+                        ins = in_msg["data"].to(self.device)
                         print(f"> Generating {loopsigns[iter % 4]}", end="\r")
                         # Forward pass
                         outs = self.model(ins)
