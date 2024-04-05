@@ -1,4 +1,13 @@
-# MDI-LLM
+---
+title: MDI-LLM
+author: Davide Macario (@davmacario)
+---
+
+Code for "A Model-Distributed Inference Approach for Large Language Models at the Edge"
+
+---
+
+[[toc]]
 
 > Implementation of Model-Distributed Inference for Large Language Models
 
@@ -10,9 +19,99 @@
 ---
 
 This repository contains the implementation of Model-Distributed Inference for [nanoGPT](https://github.com/karpathy/nanoGPT) and [GPT2](https://huggingface.co/openai-community/gpt2).
+
+This framework allows to run these 2 LLMs over a network of computers ("_nodes_").
+With no changes to the code, it is also possible to run the "nodes" on the same computer, enabling, for example, to distribute the inference efforts over multiple GPUs on the same system.
+
+This approach was designed to allow big models to run over multiple devices, without requiring a high VRAM usage on each.
+
+This framework also allows for pipelining the inference process to minimize the idle time of each node.
+Pipelining achieves a good performance in terms of generation time when the number of _samples_ (i.e., independent output pieces of text of the LLM) is at least as great as the number of nodes.
+
+Notice that, since the work found on this repository started with the distributed implementation of NanoGPT, the code used for distributing that model is "outdated" (see [nanoGPT folder](src/nanoGPT)).
+The contents of [src/GPT2](src/GPT2), instead, contain the final version of MDI for GPT-2.
+
+## Quickstart
+
+### GPT-2 over 3 devices
+
+To run GPT-2 on a network of 3 devices, follow these steps.
+
+Having cloned this repository and installed the [requirements](requirements.txt) on each host device, modify or create your own configuration file, using as reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
+Make sure the devices can "see" each other over the network.\
+**Note**: the program will use the GPU, if available, by default.
+To deactivate this, edit the file src/GPT2/sub/config.py.
+
+On the starter node, run:
+
+```bash
+./src/GPT2/starter.py -v --model gpt2 --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json --prompt "Here is the recipe for pizza"
+```
+
+On the first worker node, run:
+
+```bash
+./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 0 --prompt "Here is the recipe for pizza"
+```
+
+On the second worker node, run:
+
+```bash
+./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 1 --prompt "Here is the recipe for pizza"
+```
+
+### GPT-2 XL on multi-GPU system
+
+To run GPT-2 XL over 2 GPUs of the same system, instead, just run the src/GPT2/starter.py and src/GPT2/secondary.py programs on the same host, using the following as node configuration file (see src/GPT2/settings_distr/config_2gpus.json):
+
+```json
+{
+  "nodes": {
+    "starter": {
+      "addr": "127.0.0.1",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port_in": 5088,
+        "port_out": 5089
+      },
+      "device": "cuda:0"
+    },
+    "secondary": [
+      {
+        "addr": "127.0.0.1",
+        "communication": {
+          "starter_addr": "127.0.0.1",
+          "port": 8090
+        },
+        "inference": {
+          "port_in": 5092,
+          "port_out": 5093
+        },
+        "device": "cuda:1"
+      }
+    ]
+  }
+}
+```
+
+Starter node:
+
+```bash
+./src/GPT2/starter.py -v --model gpt2-xl --n-samples 2 --n-tokens 200 --nodes-config src/GPT2/settings_distr/config_2gpus.json --prompt "Here is the recipe for pizza"
+```
+
+Worker node:
+
+```bash
+./src/GPT2/secondary.py -v --n-samples 2 --n-tokens 200 --nodes-config src/GPT2/settings_distr/config_2gpus.json 0 --prompt "Here is the recipe for pizza"
+```
+
+## Rationale
+
 The idea behind this approach for generation is to partition the model among different nodes, by assigning, for example, some layers to each, and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
 
-The system architecture is the following:
 This can not only solve memory limitations of resource-limited devices, but also result in lower inference times when paired with _recurrent pipelining_.
 
 Recurrent pipelining is a technique introduced in this scenario to prevent idle nodes in the network during inference.
@@ -21,15 +120,30 @@ To solve this issue, the rationale is to generate at least as many pieces of tex
 Each node will then process one different sample after the other, in a loop, and then pass the result of its local piece of model to the next one.
 This way, at each step, it is possible to make each of the nodes process a different sample, without having to wait for the same sample to be fed back for the next iteration.
 
-> ![message transmission with pipelining](assets/msg_transmission.svg)
+> ![message transmission with pipelining](assets/msg_transmission_out_q.svg)
 > Message transmission with _recurrent pipelining_
 
 The network is actually a closed loop, as the outputs of the last node in the chain are then transmitted back to the starter node.
 
+## Architecture
+
+The system architecture is the following:
+
+![system architecture](assets/architecture_new.svg)
+
+The starter node acts as the main node (even though it is not a "central server" as in federated scenarios).
+
+It first initializes each worker node by sending a HTTP POST request with the configuration information (and optionally the model chunk).
+Then, the network will set up the communication channel for inference, implemented using Python `sockets` over TCP/IP.
+This reduces the communication overhead to a minimum, while still ensuring reliable transmission.\
+The application layer protocol is a simple "header + payload", where the header only contains the exact size of the payload.
+
+At the end of the generation, the
+
 ## Testbed
 
 The contents of this repository were developed to run over a network of 3 Nvidia Jetson TX2's (8 GB of shared memory) running JetPack 4.6.4, connected via gigabit ethernet.
-These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.
+These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.\
 See [docs/setup-tx2.md](docs/setup-tx2.md) for how to prepare the testing environment (software side).
 
 ## Models overview
