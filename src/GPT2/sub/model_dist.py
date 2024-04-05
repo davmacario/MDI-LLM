@@ -1045,8 +1045,12 @@ class GPTServer:
 
                     # Extract message from queue
                     in_msg = self.in_message_queue.popleft()
-                    if len(self.in_message_queue) <= 0:  # Wait for messages
+                    if len(self.in_message_queue) <= 0:
                         self.in_queue_not_empty.clear()
+
+                    if "stop" in in_msg:
+                        print("[DEBUG] HERE")
+
                     if self.running:
                         samp_ind = in_msg["sample_index"]
                         assert (
