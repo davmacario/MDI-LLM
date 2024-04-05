@@ -631,6 +631,8 @@ class GPTServer:
         Returns:
             1 upon success, 0 otherwise
         """
+        if VERB:
+            print("[INFO]: shutting down")
         try:
             time.sleep(2)
             cp.engine.stop()
