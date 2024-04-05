@@ -636,11 +636,11 @@ class GPTServer:
 
         try:
             time.sleep(2)
+            self.running = False  # Redundant
             if self.node_type != "starter":
                 if VERB:
                     print("Stopping main thread", end="\r")
                 self._running_thread.join()
-            self.running = False  # Redundant
             if VERB:
                 print("Stopping input queue thread", end="\r")
             self.in_queue_thread.join()
