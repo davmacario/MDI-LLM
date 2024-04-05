@@ -39,7 +39,7 @@ from sub.char_tokenizer import CharacterTokenizer
 from sub.config import (DEVICE, DTYPE, HEADERLENGTH, PLOTS, TEMPERATURE, TOP_K,
                         VERB)
 from sub.model import Block, GPTConfig, LayerNorm
-from sub.utils import (get_prompt, load_from_hf, loading_bar,
+from sub.utils import (find_eot, get_prompt, load_from_hf, loading_bar,
                        plot_tokens_per_time, split_parameters)
 
 """
@@ -263,10 +263,15 @@ class GPTServer:
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
     n_samples = None
 
-    # Message queue
-    message_queue = deque([])
-    queue_not_empty = threading.Event()  # Replaces busy waiting
-    queue_not_empty.clear()
+    # Input message queue
+    in_message_queue = deque([])
+    in_queue_not_empty = threading.Event()  # Replaces busy waiting
+    in_queue_not_empty.clear()
+
+    # Output message queue
+    out_message_queue = deque([])
+    out_queue_not_empty = threading.Event()
+    out_queue_not_empty.clear()
 
     # Some model configs:
     top_k = TOP_K
@@ -475,8 +480,16 @@ class GPTServer:
             logger_wp.info("Tokenizer loaded!")
             logger_wp.info("Starting queue thread")
 
-            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
-            self.queue_thread.start()
+            # Input queue
+            self.in_queue_thread = threading.Thread(
+                target=self._fill_input_queue, daemon=True
+            )
+            self.in_queue_thread.start()
+            # Output queue
+            self.out_queue_thread = threading.Thread(
+                target=self._empty_output_queue, daemon=True
+            )
+            self.out_queue_thread.start()
 
             if VERB:
                 print(
@@ -492,8 +505,15 @@ class GPTServer:
             if VERB:
                 print("[INFO] Starting queue thread")
             logger_wp.info("Starting queue thread")
-            self.queue_thread = threading.Thread(target=self._fill_queue, daemon=True)
-            self.queue_thread.start()
+            self.in_queue_thread = threading.Thread(
+                target=self._fill_input_queue, daemon=True
+            )
+            self.in_queue_thread.start()
+
+            self.out_queue_thread = threading.Thread(
+                target=self._empty_output_queue, daemon=True
+            )
+            self.out_queue_thread.start()
 
             if VERB:
                 print("[INFO] Starting generation loop")
@@ -580,7 +600,9 @@ class GPTServer:
         self._start_server()
         assert self.sock_to_prev is not None
         if VERB:
-            print("Started listening")
+            print(
+                f"[INFO] Started listening on port {self.node_config['inference']['port_in']}"
+            )
         self.sock_to_prev.listen(1)
 
         self.sock_to_prev_prop = self.sock_to_prev.accept()
@@ -611,16 +633,32 @@ class GPTServer:
         Returns:
             1 upon success, 0 otherwise
         """
+        if VERB:
+            print("[INFO] Shutting down")
+
         try:
             time.sleep(2)
-            cp.engine.stop()
+            self.running = False  # Redundant
+            if self.node_type != "starter":
+                if VERB:
+                    print("Stopping main thread")
+                self._running_thread.join()
+            if VERB:
+                print("Stopping input queue thread")
+            self.in_queue_thread.join()
+            if VERB:
+                print("Stopping output queue thread")
+            self.out_queue_thread.join()
+            if VERB:
+                print("Stopping input and output sockets")
             self.sock_to_prev_prop[0].close()
             self.sock_to_prev.close()
             self.sock_to_next.close()
-            self.running = False  # Redundant
-            self.queue_thread.join()
-            if self.node_type != "starter":
-                self._running_thread.join()
+            if VERB:
+                print("Stopping HTTP server")
+            cp.engine.exit()
+            if VERB:
+                print("Closing application")
             return 1
         except:
             return 0
@@ -730,12 +768,12 @@ class GPTServer:
                 f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
             )
 
-    def _fill_queue(self):
+    def _fill_input_queue(self):
         """
         This method has the goal of managing incoming messages from previous nodes in
         the chain.
         As a message is received, its contents are stored in the message queue
-        (`self.message_queue`).
+        (`self.in_message_queue`).
         This allows to store locally each of the received messages, in order.
         The order is crucial for the correct functioning of the program (pipelining).
 
@@ -745,8 +783,8 @@ class GPTServer:
         """
         assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
 
-        if len(self.message_queue) < 1:
-            self.queue_not_empty.clear()
+        if len(self.in_message_queue) < 1:
+            self.in_queue_not_empty.clear()
 
         _n_recv_msg = 0
         while self.running:
@@ -768,10 +806,43 @@ class GPTServer:
                 if VERB:
                     print("Stopping message received! Generation complete!")
                 logger_wp.info("Stopping message received! Generation complete!")
+                self.in_message_queue.append(data)
+                self.in_queue_not_empty.set()
                 self.running = False
             else:  # Not here if stopping message is received
-                self.message_queue.append(data)
-                self.queue_not_empty.set()
+                self.in_message_queue.append(data)
+                self.in_queue_not_empty.set()
+
+        if VERB:
+            print("Input queue thread stopped")
+
+    def _empty_output_queue(self):
+        """
+        Handle transmission of messages in the output queue. As messages are placed in
+        the output queue by the execution loops, it will use the output socket to send
+        them to the next node in the chain.
+
+        This method should run on its separate thread.
+        """
+        assert self.sock_to_next is not None
+
+        while self.running:
+            # Wait for message in queue
+            assert self.out_queue_not_empty.wait()
+
+            tx_msg = self.out_message_queue.popleft()
+            if len(self.out_message_queue) < 1:
+                self.out_queue_not_empty.clear()
+
+            if "stop" in tx_msg and tx_msg["stop"]:
+                self.send_to_next(tx_msg)
+                self.running = False
+                break
+
+            self.send_to_next(tx_msg)
+
+        if VERB:
+            print("Output queue thread stopped")
 
     def _starter_loop(
         self, n_samples: int, max_new_tokens: int, prompt: Union[str, None] = None
@@ -799,7 +870,7 @@ class GPTServer:
             raise ValueError("Cannot generate less than 1 sample!")
         elif n_samples < self.n_nodes:
             warnings.warn(
-                f"Generating less samples {n_samples} than nodes ({self.n_nodes}) will not be efficient!"
+                f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
             )
 
         if "cuda" in self.device:
@@ -855,11 +926,11 @@ class GPTServer:
                         # can start processing messages from last secondary node
 
                         # Wait for queue to contain msg
-                        assert self.queue_not_empty.wait()
+                        assert self.in_queue_not_empty.wait()
 
-                        in_msg = self.message_queue.popleft()
-                        if len(self.message_queue) < 1:
-                            self.queue_not_empty.clear()
+                        in_msg = self.in_message_queue.popleft()
+                        if len(self.in_message_queue) < 1:
+                            self.in_queue_not_empty.clear()
                         sample_in = in_msg["sample_index"]
 
                         # Check correct order
@@ -890,7 +961,9 @@ class GPTServer:
 
                         # Build message
                         out_msg = self._build_msg(idx_cond, sample_id)
-                        self.send_to_next(out_msg)
+
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
 
         tot_time = time.time() - start_time
         if PLOTS:
@@ -918,8 +991,12 @@ class GPTServer:
                 ),
             )
 
-        # Send stop message to the next
-        self.send_to_next(self.stop_msg)
+        # Send stop message to the next (no queue used)
+        self.running = False
+        if VERB:
+            print("[INFO] Sending stopping message over socket  ")
+        self.out_message_queue.append(self.stop_msg)
+        self.out_queue_not_empty.set()
         logger_wp.info("Generation completed")
         if VERB:
             print("[INFO] Generation completed!                          ")
@@ -965,31 +1042,41 @@ class GPTServer:
                 while self.running:
                     logger_wp.info(f"Iter {iter}")
 
-                    assert self.queue_not_empty.wait()
+                    assert self.in_queue_not_empty.wait()
 
-                    in_msg = self.message_queue.popleft()
-                    if len(self.message_queue) <= 0:  # Wait for messages
-                        self.queue_not_empty.clear()
                     # Extract message from queue
-                    samp_ind = in_msg["sample_index"]
-                    assert (
-                        exp_ind == samp_ind
-                    ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                    exp_ind = (samp_ind + 1) % self.n_samples
+                    in_msg = self.in_message_queue.popleft()
+                    if len(self.in_message_queue) <= 0:
+                        self.in_queue_not_empty.clear()
 
-                    ins = in_msg["data"].to(self.device)
+                    if "stop" in in_msg:
+                        print("[DEBUG] HERE")
+
                     if self.running:
+                        samp_ind = in_msg["sample_index"]
+                        assert (
+                            exp_ind == samp_ind
+                        ), f"Expected sample index {exp_ind}, received {samp_ind}"
+                        exp_ind = (samp_ind + 1) % self.n_samples
+
+                        ins = in_msg["data"].to(self.device)
                         print(f"> Generating {loopsigns[iter % 4]}", end="\r")
                         # Forward pass
                         outs = self.model(ins)
                         # Build msg
                         out_msg = self._build_msg(outs, samp_ind)
                         # Send to next
-                        self.send_to_next(out_msg)
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        self.send_to_next(self.stop_msg)
+                        self.out_message_queue.append(self.stop_msg)
+                        self.out_queue_not_empty.set()
+                        self.running = False
+
+        if VERB:
+            print("Node loop stopped")
 
     def _build_msg(self, data, sample_index) -> Dict:
         """
@@ -1086,6 +1173,7 @@ class GPTServer:
             if len(path) > 0 and path[0] == "stop":
                 self._end_thr = threading.Thread(target=self.shutdown, daemon=True)
                 self._end_thr.start()
+                # self._end_thr.join()  # cannot wait, since thread stops server
                 if VERB:
                     print("[INFO] Node stopped!")
                 logger_wp.info("Received stopping directive")
@@ -1507,7 +1595,7 @@ class GPTDistributed:
         for i, smpl in enumerate(out):
             print("-------------------------------------------------")
             print(f"Sample {i + 1}:")
-            print(smpl, "\n")
+            print(smpl[: find_eot(smpl)], "\n")
         print("-------------------------------------------------")
 
         # Once finished, send PUT to each node to terminate execution for them
@@ -1532,8 +1620,6 @@ class GPTDistributed:
             target_port = sec_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/stop"
-            if VERB:
-                print(f"Sending PUT request to {addr}")
             out *= self.request_to_node("PUT", addr, {})
 
         self.webserv.shutdown()
