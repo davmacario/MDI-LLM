@@ -995,6 +995,7 @@ class GPTServer:
         if VERB:
             print("[INFO] Sending stopping message over socket  ")
         self.out_message_queue.append(self.stop_msg)
+        self.out_queue_not_empty.set()
         logger_wp.info("Generation completed")
         if VERB:
             print("[INFO] Generation completed!                          ")
@@ -1066,6 +1067,7 @@ class GPTServer:
                     else:
                         print("> Generation completed!")
                         self.out_message_queue.append(self.stop_msg)
+                        self.out_queue_not_empty.set()
                         self.running = False
 
         if VERB:
