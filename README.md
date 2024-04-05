@@ -35,7 +35,7 @@ To run GPT-2 on a network of 3 devices, follow these steps.
 Having cloned this repository and installed the [requirements](requirements.txt) on each host device, modify or create your own configuration file, using as reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
 Make sure the devices can "see" each other over the network.\
 **Note**: the program will use the GPU, if available, by default.
-To deactivate this, edit the file src/GPT2/sub/config.py.
+To deactivate this, edit the file [src/GPT2/sub/config.py](src/GPT2/sub/config.py).
 
 On the starter node, run:
 
@@ -57,7 +57,7 @@ On the second worker node, run:
 
 ### GPT-2 XL on multi-GPU system
 
-To run GPT-2 XL over 2 GPUs of the same system, instead, just run the src/GPT2/starter.py and src/GPT2/secondary.py programs on the same host, using the following as node configuration file (see src/GPT2/settings_distr/config_2gpus.json):
+To run GPT-2 XL over 2 GPUs of the same system, instead, just run the [src/GPT2/starter.py](src/GPT2/starter.py) and [src/GPT2/secondary.py](src/GPT2/secondary.py) programs on the same host, using the following as node configuration file (see [src/GPT2/settings_distr/config_2gpus.json](src/GPT2/settings_distr/config_2gpus.json)):
 
 ```json
 {
@@ -140,6 +140,8 @@ At the end of the generation, the
 The contents of this repository were developed to run over a network of 3 Nvidia Jetson TX2's (8 GB of shared memory) running JetPack 4.6.4, connected via gigabit ethernet.
 These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.\
 See [docs/setup-tx2.md](docs/setup-tx2.md) for how to prepare the testing environment (software side).
+
+The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti (11 GB VRAM).
 
 ## Models overview
 
