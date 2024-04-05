@@ -601,7 +601,7 @@ class GPTServer:
         assert self.sock_to_prev is not None
         if VERB:
             print(
-                f"Started listening on port {self.node_config['inference']['port_in']}"
+                f"[INFO] Started listening on port {self.node_config['inference']['port_in']}"
             )
         self.sock_to_prev.listen(1)
 
@@ -807,6 +807,7 @@ class GPTServer:
                     print("Stopping message received! Generation complete!")
                 logger_wp.info("Stopping message received! Generation complete!")
                 self.in_message_queue.append(data)
+                self.in_queue_not_empty.set()
                 self.running = False
             else:  # Not here if stopping message is received
                 self.in_message_queue.append(data)
