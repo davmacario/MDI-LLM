@@ -633,17 +633,18 @@ class GPTServer:
         """
         if VERB:
             print("[INFO] Shutting down")
+
         try:
             time.sleep(2)
-            cp.engine.stop()
+            if self.node_type != "starter":
+                self._running_thread.join()
             self.sock_to_prev_prop[0].close()
             self.sock_to_prev.close()
             self.sock_to_next.close()
             self.running = False  # Redundant
             self.in_queue_thread.join()
             self.out_queue_thread.join()
-            if self.node_type != "starter":
-                self._running_thread.join()
+            cp.engine.stop()
             return 1
         except:
             return 0
