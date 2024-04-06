@@ -16,15 +16,18 @@ Code for "A Model-Distributed Inference Approach for Large Language Models at th
 This repository contains the implementation of Model-Distributed Inference for [nanoGPT](https://github.com/karpathy/nanoGPT) and [GPT2](https://huggingface.co/openai-community/gpt2).
 
 This framework allows to run these 2 LLMs over a network of computers ("_nodes_").
-With no changes to the code, it is also possible to run the "nodes" on the same computer, enabling, for example, to distribute the inference efforts over multiple GPUs on the same system.
+With no changes to the code, it is also possible to run the "nodes" on the same computer, allowing to distribute the inference efforts over multiple GPUs on the same system.
 
 This approach was designed to allow big models to run over multiple devices, without requiring a high VRAM usage on each.
 
-This framework also allows for pipelining the inference process to minimize the idle time of each node.
-Pipelining achieves a good performance in terms of generation time when the number of _samples_ (i.e., independent output pieces of text of the LLM) is at least as great as the number of nodes.
+This framework also allows to pipeline the inference process to minimize the idle time of each node.
+Pipelining achieves a good performance in terms of generation time when the number of _samples_ (i.e., independent output pieces of text of the LLM) is at least as great as the number of nodes, as it allows the nodes to always be processing a different sample at all times.
 
 Notice that, since the work found on this repository started with the distributed implementation of NanoGPT, the code used for distributing that model is "outdated" (see [nanoGPT folder](src/nanoGPT)).
 The contents of [src/GPT2](src/GPT2), instead, contain the final version of MDI for GPT-2.
+
+This repository also contains the code for training/finetuning and running single-device inference of GPT-2 models (and all possible variants obtained by handpicking the configuration parameters) based off the NanoGPT code (with minor adaptations).
+The code supports Torch's Data-Distributed Parallelism (`DistributedDataParallel`), but I plan to add model-parallelism training following something like [this](https://pytorch.org/tutorials/intermediate/model_parallel_tutorial.html) or supporting [PyTorch's PiPPy](https://github.com/pytorch/PiPPy).
 
 ## Quickstart
 
@@ -35,7 +38,8 @@ To run GPT-2 on a network of 3 devices, follow these steps.
 Having cloned this repository and installed the [requirements](requirements.txt) on each host device, modify or create your own configuration file, using as reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
 Make sure the devices can "see" each other over the network.\
 **Note**: the program will use the GPU, if available, by default.
-To deactivate this, edit the file [src/GPT2/sub/config.py](src/GPT2/sub/config.py).
+To select a specific device, edit the file [src/GPT2/sub/config.py](src/GPT2/sub/config.py), assigning a different value to `DEVICE`.
+It is also possible to specify the device for each node through the configuration file (JSON): just add the `"device"` key to the node information.
 
 On the starter node, run:
 
@@ -105,12 +109,12 @@ Worker node:
 
 ## Rationale
 
-The idea behind this approach for generation is to partition the model among different nodes, by assigning, for example, some layers to each, and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
+The idea behind this approach for generation is to partition the model among different nodes, by assigning a piece of the model to each, and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
 
 This can not only solve memory limitations of resource-limited devices, but also result in lower inference times when paired with _recurrent pipelining_.
 
 Recurrent pipelining is a technique introduced in this scenario to prevent idle nodes in the network during inference.
-Given the autoregressive nature of a decoder-only transformer model, where the generated output is appended to the inputs and fed back again to the model to evaluate the next output token, if generating a single piece of text, this would result in idle nodes when waiting for the next iteration result.\
+Given the autoregressive nature of a decoder-only transformer model, where the generated output is appended to the inputs and fed back to the model input to evaluate the next output token, if generating a single piece of text, this would result in idle nodes when waiting for the current forward pass to finish.\
 To solve this issue, the rationale is to generate at least as many pieces of text (_samples_) as the number of nodes in the network.
 Each node will then process one different sample after the other, in a loop, and then pass the result of its local piece of model to the next one.
 This way, at each step, it is possible to make each of the nodes process a different sample, without having to wait for the same sample to be fed back for the next iteration.
@@ -126,14 +130,18 @@ The system architecture is the following:
 
 ![system architecture](assets/architecture_new.svg)
 
-The starter node acts as the main node (even though it is not a "central server" as in federated scenarios).
-
+The starter node acts as the main node (even though it is not a "central server" as in federated scenarios).\
 It first initializes each worker node by sending a HTTP POST request with the configuration information (and optionally the model chunk).
 Then, the network will set up the communication channel for inference, implemented using Python `sockets` over TCP/IP.
 This reduces the communication overhead to a minimum, while still ensuring reliable transmission.\
 The application layer protocol is a simple "header + payload", where the header only contains the exact size of the payload.
 
-At the end of the generation, the
+At the end of the generation, the starter node (which is the only one tracking the number of generated samples and tokens) will send out a stopping message over the socket, signalling the end of generation.
+Upon receiving this message, each node will interrupt the generation loop and stop the queues.
+Then, then starter node will send a PUT request to each node, which will make them stop all threads and shut down.
+
+_Note_: this approach (stopping message over sockets + PUT request) was selected to allow nodes to stay idle after a generation run and await for further instructions, possibly including other runs to start.
+This feature has not been implemented yet.
 
 ## Testbed
 
@@ -141,7 +149,7 @@ The contents of this repository were developed to run over a network of 3 Nvidia
 These systems only support up to Python 3.8 and Torch (with CUDA support) <= 1.12 (due to their latest CUDA version being v10.2), but this specific version needs to be compiled from source to work.\
 See [docs/setup-tx2.md](docs/setup-tx2.md) for how to prepare the testing environment (software side).
 
-The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti (11 GB VRAM).
+The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti (11 GB VRAM each).
 
 ## Models overview
 
@@ -168,7 +176,8 @@ The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti 
 ## Implementation details
 
 Note: the number of total transformer layers in the model changes depending on the specific model (and "flavor") used.
-These layers are then partitioned in order to assign few of them to the starter node, and the same amount to the other nodes, in an attempt to balance the amount of computation done by each device.
+These layers are then partitioned in order to assign few of them to the starter node, and the same amount to the other nodes, in an attempt to balance the amount of computation done by each device.\
+To ensure transmission of the same amount of data between the devices, the last layer is assigned to the starter node, that will use it on the tensor transmitted by the last worker node of the network, before extracting the next token.
 
 > ![Layers assignment](assets/layers_GPT2.svg)
 > Layers assignment (GPT-2)
@@ -180,9 +189,7 @@ These layers are then partitioned in order to assign few of them to the starter 
   2. **Secondary node**: it contains transformer layers only.
 - The transmitted messages between the different nodes contain the intermediate results of the network, meaning they are Torch tensors of size: $(\text{embedding dimension}) \times (\text{current context length})$, where the "_embedding dimension_" is the length of the vectors with which each transformer works, and the "_current context length_" is the minimum between the number of generated tokens and the context length of the models, i.e., the attention "window" size.
   - The time effectiveness of Model-Distributed Inference is strictly related to the ability of the network to transmit the messages quickly enough to prevent overhead.
-
-> ![Application architecture](assets/architecture_new.svg)
-> Application architecture
+  - The generation of very long samples slows down because of both slow layer processing in each node and increased message size. Notice, however, that the message size increases until the maximum context length is reached.
 
 ## Performance analysis
 
