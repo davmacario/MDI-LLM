@@ -1,3 +1,7 @@
+---
+author: Davide Macario (@davmacario)
+---
+
 # MDI-LLM
 
 Code for "A Model-Distributed Inference Approach for Large Language Models at the Edge"
@@ -9,24 +13,24 @@ Code for "A Model-Distributed Inference Approach for Large Language Models at th
 ![Static Badge](https://img.shields.io/badge/Python-3.8%2C%203.10-blue?style=flat&logo=Python&logoColor=yellow)
 ![Static Badge](https://img.shields.io/badge/PyTorch-1.12%2C_2.1.2-red?style=flat&logo=PyTorch)
 
-**Note:** this repository is Work-In-Progress! Some information may be inaccurate or missing.
+**Note:** this repository is a work in progress! Some information may be inaccurate or missing.
 
 ---
 
 This repository contains the implementation of Model-Distributed Inference for [nanoGPT](https://github.com/karpathy/nanoGPT) and [GPT2](https://huggingface.co/openai-community/gpt2).
 
 This framework allows to run these 2 LLMs over a network of computers ("_nodes_").
-With no changes to the code, it is also possible to run the "nodes" on the same computer, allowing to distribute the inference efforts over multiple GPUs on the same system.
+With no changes to the code, it is also possible to run the "nodes" on the same computer, allowing for distributing inference efforts over multiple GPUs on the same system.
 
-This approach was designed to allow big models to run over multiple devices, without requiring a high VRAM usage on each.
+This approach was designed to allow large models to run over multiple devices with limited VRAM.
 
-This framework also allows to pipeline the inference process to minimize the idle time of each node.
+This framework also allows for pipelining the inference process to minimize the idle time of each node.
 Pipelining achieves a good performance in terms of generation time when the number of _samples_ (i.e., independent output pieces of text of the LLM) is at least as great as the number of nodes, as it allows the nodes to always be processing a different sample at all times.
 
-Notice that, since the work found on this repository started with the distributed implementation of NanoGPT, the code used for distributing that model is "outdated" (see [nanoGPT folder](src/nanoGPT)).
+Notice that since the work found on this repository started with the distributed implementation of NanoGPT, the code used for distributing that model is "outdated" (see [nanoGPT folder](src/nanoGPT)).
 The contents of [src/GPT2](src/GPT2), instead, contain the final version of MDI for GPT-2.
 
-This repository also contains the code for training/finetuning and running single-device inference of GPT-2 models (and all possible variants obtained by handpicking the configuration parameters) based off the NanoGPT code (with minor adaptations).
+This repository also contains the code for training/finetuning and running single-device inference of GPT-2 models (and all possible variants obtained by handpicking the configuration parameters) based on the NanoGPT code (with minor adaptations).
 The code supports Torch's Data-Distributed Parallelism (`DistributedDataParallel`), but I plan to add model-parallelism training following something like [this](https://pytorch.org/tutorials/intermediate/model_parallel_tutorial.html) or supporting [PyTorch's PiPPy](https://github.com/pytorch/PiPPy).
 
 ## Quickstart
@@ -35,9 +39,9 @@ The code supports Torch's Data-Distributed Parallelism (`DistributedDataParallel
 
 To run GPT-2 on a network of 3 devices, follow these steps.
 
-Having cloned this repository and installed the [requirements](requirements.txt) on each host device, modify or create your own configuration file, using as reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
+Having cloned this repository and installed the [requirements](requirements.txt) on each host device, modify or create your own configuration file using as a reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
 Make sure the devices can "see" each other over the network.\
-**Note**: the program will use the GPU, if available, by default.
+**Note**: the program will use the GPU by default, if available.
 To select a specific device, edit the file [src/GPT2/sub/config.py](src/GPT2/sub/config.py), assigning a different value to `DEVICE`.
 It is also possible to specify the device for each node through the configuration file (JSON): just add the `"device"` key to the node information.
 
@@ -119,8 +123,9 @@ To solve this issue, the rationale is to generate at least as many pieces of tex
 Each node will then process one different sample after the other, in a loop, and then pass the result of its local piece of model to the next one.
 This way, at each step, it is possible to make each of the nodes process a different sample, without having to wait for the same sample to be fed back for the next iteration.
 
-> ![message transmission with pipelining](assets/msg_transmission_out_q.svg)
-> Message transmission with _recurrent pipelining_
+> <center><img src="assets/msg_transmission_out_q.svg" alt="message transmission with pipelining" width="600"/>
+>
+> Message transmission with _recurrent pipelining_</center>
 
 The network is actually a closed loop, as the outputs of the last node in the chain are then transmitted back to the starter node.
 
@@ -128,7 +133,7 @@ The network is actually a closed loop, as the outputs of the last node in the ch
 
 The system architecture is the following:
 
-![system architecture](assets/architecture_new.svg)
+<center><img src="assets/architecture_new.svg" alt="System architecture" width="600"/></center>
 
 The starter node acts as the main node (even though it is not a "central server" as in federated scenarios).\
 It first initializes each worker node by sending a HTTP POST request with the configuration information (and optionally the model chunk).
@@ -176,11 +181,12 @@ The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti 
 ## Implementation details
 
 Note: the number of total transformer layers in the model changes depending on the specific model (and "flavor") used.
-These layers are then partitioned in order to assign few of them to the starter node, and the same amount to the other nodes, in an attempt to balance the amount of computation done by each device.\
+These layers are then partitioned in order to assign few of them to the starter node and the same amount to the other nodes, in an attempt to balance the amount of computation done by each device.\
 To ensure transmission of the same amount of data between the devices, the last layer is assigned to the starter node, that will use it on the tensor transmitted by the last worker node of the network, before extracting the next token.
 
-> ![Layers assignment](assets/layers_GPT2.svg)
-> Layers assignment (GPT-2)
+> <center> <img src="assets/layers_GPT2.svg" alt="Layers assignment" width="400"/>
+>
+> Layers assignment (GPT-2)</center>
 
 - Two node types:
   1. **Starter node**: it is the node that "controls" the network, meaning it starts generation and collects the outputs.
@@ -194,12 +200,14 @@ To ensure transmission of the same amount of data between the devices, the last 
 ## Performance analysis
 
 Time vs. number of generated tokens, GPT-2 Large, sample size of 400 tokens:
-![](assets/time_vs_tokens_gpt2-large.png)
+
+<center><img src="assets/time_vs_tokens_gpt2-large.png" alt="Time/tokens, GPT2 large" width="400"/></center>
 
 _Note:_ in order to use pipelining, the 3-node scenario has to produce (at least) 3 samples; as a result, the plot for 3 nodes has been cropped to 800 generated tokens (equivalent to 2 samples), but it would have been longer.
 
 Time vs. number of tokens, GPT-2 XL; because of the model size and memory constraints of the Nvidia Jetson TX2 boards, the only way to run the model is to split it in at least 3 chunks.
-![](assets/time_vs_tokens_gpt2-xl.png)
+
+<center><img src="assets/time_vs_tokens_gpt2-xl.png" alt="Time/tokens, GPT2 XL" width="400"/></center>
 
 ---
 
