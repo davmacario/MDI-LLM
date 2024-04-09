@@ -50,13 +50,13 @@ On the starter node, run:
 On the first worker node, run:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 0 --prompt "Here is the recipe for pizza"
+./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 0
 ```
 
 On the second worker node, run:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 1 --prompt "Here is the recipe for pizza"
+./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 1
 ```
 
 ### GPT-2 XL on multi-GPU system
@@ -104,7 +104,7 @@ Starter node:
 Worker node:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 2 --n-tokens 200 --nodes-config src/GPT2/settings_distr/config_2gpus.json 0 --prompt "Here is the recipe for pizza"
+./src/GPT2/secondary.py -v --n-samples 2 --n-tokens 200 --nodes-config src/GPT2/settings_distr/config_2gpus.json 0
 ```
 
 ## Rationale
