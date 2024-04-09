@@ -59,6 +59,27 @@ On the second worker node, run:
 ./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config src/GPT2/settings_distr/configuration.json 1
 ```
 
+**Note:** the above commands assume that the configuration JSON file is the same on all the devices.
+The `--nodes-config` flag requires two arguments: the configuration file and the positional index of the node configuration parameters in the "secondary" list of the JSON file.
+Using the `--secondary-config` flag, it is possible to specify a JSON file containing the node configuration only as:
+
+```json
+{
+  "addr": "10.7.48.12",
+  "communication": {
+    "starter_addr": "10.7.48.46",
+    "port": 8089
+  },
+  "inference": {
+    "port_in": 5090,
+    "port_out": 5091
+  },
+  "device": "cuda"
+}
+```
+
+The file above will work as long as the same address and ports are specified on the main configuration file passed to the starter node.
+
 ### GPT-2 XL on multi-GPU system
 
 To run GPT-2 XL over 2 GPUs of the same system, instead, just run the [src/GPT2/starter.py](src/GPT2/starter.py) and [src/GPT2/secondary.py](src/GPT2/secondary.py) programs on the same host, using the following as node configuration file (see [src/GPT2/settings_distr/config_2gpus.json](src/GPT2/settings_distr/config_2gpus.json)):
@@ -109,12 +130,12 @@ Worker node:
 
 ## Rationale
 
-The idea behind this approach for generation is to partition the model among different nodes, by assigning a piece of the model to each, and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
+The idea behind this approach for generation is to partition the model among different nodes by assigning a piece of the model to each and perform inference by transmitting over TCP/IP the intermediate results of the model to the next one, who will use them as inputs for its own model chunk, forming a communication chain between the devices.
 
-This can not only solve memory limitations of resource-limited devices, but also result in lower inference times when paired with _recurrent pipelining_.
+This can solve the memory limitations of resource-limited devices and also result in lower inference times when paired with _recurrent pipelining_.
 
 Recurrent pipelining is a technique introduced in this scenario to prevent idle nodes in the network during inference.
-Given the autoregressive nature of a decoder-only transformer model, where the generated output is appended to the inputs and fed back to the model input to evaluate the next output token, if generating a single piece of text, this would result in idle nodes when waiting for the current forward pass to finish.\
+Given the autoregressive nature of a decoder-only transformer model, where the generated output is appended to the inputs and fed back to the model input to evaluate the next output token if generating a single piece of text, this would result in idle nodes when waiting for the current forward pass to finish.\
 To solve this issue, the rationale is to generate at least as many pieces of text (_samples_) as the number of nodes in the network.
 Each node will then process one different sample after the other, in a loop, and then pass the result of its local piece of model to the next one.
 This way, at each step, it is possible to make each of the nodes process a different sample, without having to wait for the same sample to be fed back for the next iteration.
@@ -132,7 +153,7 @@ The system architecture is the following:
 <center><img src="assets/architecture_new.svg" alt="System architecture" width="600"/></center>
 
 The starter node acts as the main node (even though it is not a "central server" as in federated scenarios).\
-It first initializes each worker node by sending a HTTP POST request with the configuration information (and optionally the model chunk).
+First, it initializes each worker node by sending an HTTP POST request with the configuration information and, optionally, the model chunk.
 Then, the network will set up the communication channel for inference, implemented using Python `sockets` over TCP/IP.
 This reduces the communication overhead to a minimum, while still ensuring reliable transmission.\
 The application layer protocol is a simple "header + payload", where the header only contains the exact size of the payload.
