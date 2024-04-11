@@ -344,3 +344,16 @@ split it in at least 3 chunks.
 
 MIT
 
+## Cite
+
+Bibtex:
+
+```bibtex
+@software{Macario_A_Model-Distributed_Inference_2024,
+  author = {Macario, Davide},
+  month = apr,
+  title = {{A Model-Distributed Inference Approach for Large Language Models at the Edge}},
+  version = {1.0.0},
+  year = {2024}
+}
+```
