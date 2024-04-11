@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Macario
+    given-names: Davide
+title: "A Model-Distributed Inference Approach for Large Language Models at the Edge"
+version: 1.0.0
+date-released: 2024-04-01
