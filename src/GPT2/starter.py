@@ -7,95 +7,23 @@ from datetime import datetime
 
 import cherrypy as cp
 import torch
-
 from sub.model_dist import GPTDistributed
 
 # -----------------------------------------------------------------------------
 script_dir = os.path.dirname(__file__)
 data_dir = os.path.join(script_dir, "data", "shakespeare_gpt2")
 
+csv_header_stats = ",".join(
+    ["timestamp", "n_samples", "n_layers", "context_size", "gen_time"]
+)
+
 torch.manual_seed(1337)
 torch.cuda.manual_seed(1337)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
-csv_header_stats = ",".join(
-    ["timestamp", "n_samples", "n_layers", "context_size", "gen_time"]
-)
 
-parser = argparse.ArgumentParser(description="Starter node - MDI")
-group = parser.add_mutually_exclusive_group(required=True)
-group.add_argument(
-    "--model",
-    type=str,
-    default=None,
-    help="""Path/name of the pretrained model. If it is a GPT-2 flavor ('gpt2',
-    'gpt2-medium', 'gpt2-large', 'gpt2-xl') it will be downloaded from Huggingface.
-    Can be overrode if specifying a chunk (see '-c'/'--chunk')""",
-)
-group.add_argument(
-    "--chunk",
-    type=str,
-    default=None,
-    help="""Path of the chunk of model assigned to the starter node.
-    This argument overrides '--model' and will require the other nodes to be provided
-    the path of their own chunks as well.""",
-)
-parser.add_argument(
-    "-d",
-    "--debug",
-    default=False,
-    action="store_true",
-    help="Enable debug mode (profiler)",
-)
-parser.add_argument(
-    "-v", "--verb", default=False, action="store_true", help="Enable verbose mode"
-)
-parser.add_argument(
-    "-p",
-    "--plots",
-    default=False,
-    action="store_true",
-    help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder)",
-)
-parser.add_argument(
-    "--prompt",
-    type=str,
-    default=None,
-    help="""(Optional) prompt string or 'FILE:<path_to_file.txt>' indicating a file where each
-    paragraph is a prompt""",
-)
-parser.add_argument(
-    "--n-samples",
-    type=int,
-    default=3,
-    help="Number of samples (independent pieces of text) to be generated",
-)
-parser.add_argument(
-    "--n-tokens",
-    type=int,
-    default=300,
-    help="Number of tokens to be generated, default: 300",
-)
-parser.add_argument(
-    "--time-run",
-    default=None,
-    type=str,
-    help="""Optional path of the file where to store the run information and generation
-    time""",
-)
-parser.add_argument(
-    "--nodes-config",
-    type=str,
-    default=os.path.join(script_dir, "settings_distr", "configuration.json"),
-    help="""Path of the JSON configuration file for the nodes; if not specified, the
-    default 'settings_distr/configuration.json' will be used""",
-)
-
-if __name__ == "__main__":
-    # Parse command line arguments
-    args = parser.parse_args()
-
+def main(args):
     # NOTE: model and chunk are mutually exclusive (via argparse)!
     if args.model is not None:
         if os.path.exists(args.model):
@@ -176,3 +104,79 @@ if __name__ == "__main__":
                 )
                 f.close()
                 print("Stats written to ", out_stats_file)
+
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Starter node - MDI")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="""Path/name of the pretrained model. If it is a GPT-2 flavor ('gpt2',
+        'gpt2-medium', 'gpt2-large', 'gpt2-xl') it will be downloaded from Huggingface.
+        Can be overrode if specifying a chunk (see '-c'/'--chunk')""",
+    )
+    group.add_argument(
+        "--chunk",
+        type=str,
+        default=None,
+        help="""Path of the chunk of model assigned to the starter node.
+        This argument overrides '--model' and will require the other nodes to be provided
+        the path of their own chunks as well.""",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        default=False,
+        action="store_true",
+        help="Enable debug mode (profiler)",
+    )
+    parser.add_argument(
+        "-v", "--verb", default=False, action="store_true", help="Enable verbose mode"
+    )
+    parser.add_argument(
+        "-p",
+        "--plots",
+        default=False,
+        action="store_true",
+        help="Produce plots and store the points as csv files ('/logs/tok_per_time' folder)",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="""(Optional) prompt string or 'FILE:<path_to_file.txt>' indicating a file where each
+        paragraph is a prompt""",
+    )
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=3,
+        help="Number of samples (independent pieces of text) to be generated",
+    )
+    parser.add_argument(
+        "--n-tokens",
+        type=int,
+        default=300,
+        help="Number of tokens to be generated, default: 300",
+    )
+    parser.add_argument(
+        "--time-run",
+        default=None,
+        type=str,
+        help="""Optional path of the file where to store the run information and generation
+        time""",
+    )
+    parser.add_argument(
+        "--nodes-config",
+        type=str,
+        default=os.path.join(script_dir, "settings_distr", "configuration.json"),
+        help="""Path of the JSON configuration file for the nodes; if not specified, the
+        default 'settings_distr/configuration.json' will be used""",
+    )
+
+    args = parser.parse_args()
+
+    main(args)
