@@ -8,7 +8,7 @@ import time
 import warnings
 
 import torch
-from transformers import AutoModel, LlamaPreTrainedModel
+from transformers import AutoConfig, AutoModel, LlamaPreTrainedModel
 
 script_dir = os.path.dirname(__file__)
 pt_local_file = os.path.join(script_dir, "tmp", "local_pt_keys.txt")
@@ -24,6 +24,7 @@ else:
 
 model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
+
 def get_methods(object, spacing=20):
     methodList = []
     for method_name in dir(object):
@@ -32,13 +33,17 @@ def get_methods(object, spacing=20):
                 methodList.append(str(method_name))
         except Exception:
             methodList.append(str(method_name))
-    processFunc = (lambda s: ' '.join(s.split())) or (lambda s: s)
+    processFunc = (lambda s: " ".join(s.split())) or (lambda s: s)
     for method in methodList:
         try:
-            print(str(method.ljust(spacing)) + ' ' +
-                processFunc(str(getattr(object, method).__doc__)[0:90]))
+            print(
+                str(method.ljust(spacing))
+                + " "
+                + processFunc(str(getattr(object, method).__doc__)[0:90])
+            )
         except Exception:
-            print(method.ljust(spacing) + ' ' + ' getattr() failed')
+            print(method.ljust(spacing) + " " + " getattr() failed")
+
 
 def main(args) -> int:
     if os.path.exists(args.model):
@@ -47,11 +52,9 @@ def main(args) -> int:
         # Attempt to load from HF
         print(f"Loading pretrained model: {args.model}")
         # model_hf = LlamaPreTrainedModel.from_pretrained(args.model)
-        model_hf = AutoModel.from_pretrained(args.model)
-        buf = io.BytesIO()
-        pickle.dump(model_hf, buf)
-        buf.seek(0)
-        print(f"Total model object size: {len(buf.read())} B")
+        config = AutoConfig.from_pretrained(args.model)  # LlamaConfig
+        print(config)
+        model_hf = AutoModel.from_pretrained(args.model)  # LlamaModel
         get_methods(model_hf)
 
         sd_hf = model_hf.state_dict()
@@ -67,6 +70,7 @@ def main(args) -> int:
                 f.write(f"{k}\n")
         return 0
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="""Inspect pretrained model checkpoints"""
@@ -75,20 +79,17 @@ if __name__ == "__main__":
         "-s",
         "--save",
         action="store_true",
-        help="Save model parameter names to default location"
+        help="Save model parameter names to default location",
     )
     parser.add_argument(
         "--model",
         type=str,
         default=model,
         help="""The model to be inspected; can be a local file (.pt) or a Huggingface
-        model"""
+        model""",
     )
     parser.add_argument(
-        "--device", 
-        type=str,
-        default=device,
-        help="Device where to load models"
+        "--device", type=str, default=device, help="Device where to load models"
     )
     args = parser.parse_args()
 
