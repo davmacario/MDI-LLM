@@ -1,0 +1,29 @@
+{
+  "nodes": {
+    "starter": {
+      "addr": "127.0.0.1",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port_in": 5088,
+        "port_out": 5089
+      },
+      "device": "cuda:0"
+    },
+    "secondary": [
+      {
+        "addr": "127.0.0.1",
+        "communication": {
+          "starter_addr": "127.0.0.1",
+          "port": 8090
+        },
+        "inference": {
+          "port_in": 5092,
+          "port_out": 5093
+        },
+        "device": "cuda:1"
+      }
+    ]
+  }
+}
