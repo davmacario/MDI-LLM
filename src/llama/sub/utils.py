@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 
 import gc
+import json
 import math
 import os
 import sys
 import warnings
-from contextlib import nullcontext
-from typing import Any, Dict, List, Mapping, Tuple, Union
+from contextlib import contextmanager, nullcontext
+from dataclasses import asdict
+from functools import partial
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import torch
+import yaml
 from numpy.typing import NDArray
 from torch import nn
 from transformers import GPT2LMHeadModel
@@ -427,9 +432,9 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
     config_args["bias"] = True  # always True for GPT model checkpoints
     if "dropout" not in config_args:
-        config_args[
-            "dropout"
-        ] = 0.0  # NOTE: this assumes chunk won't be used for training
+        config_args["dropout"] = (
+            0.0  # NOTE: this assumes chunk won't be used for training
+        )
 
     # TODO: remove creation of GPT object (too much memory) - pay attention to .attn.bias
     # attn.bias is just the triangular masking matrix used to compute attention
@@ -573,10 +578,3 @@ def plot_tokens_per_time(
     fig.savefig(out_path)
     if disp:
         plt.show()
-
-def find_multiple(n: int, k: int) -> int:
-    assert k > 0
-    if n % k == 0:
-        return n
-    return n + k - (n % k)
-
