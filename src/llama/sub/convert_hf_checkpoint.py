@@ -22,6 +22,9 @@ def copy_weights_hf_llama(
     saver: Optional[incremental_save] = None,
     dtype: Optional[torch.dtype] = None,
 ) -> None:
+    """
+
+    """
     weight_map = {
         "model.embed_tokens.weight": "transformer.wte.weight",
         "model.layers.{}.input_layernorm.weight": "transformer.h.{l}.norm_1.weight",
@@ -103,6 +106,9 @@ def copy_weights_hf_llama(
 
 
 def layer_template(layer_name: str, idx: int) -> Tuple[str, int]:
+    """
+    Template for the transformer layer attribute name in the GPT class;
+    """
     split = layer_name.split(".")
     number = int(split[idx])
     split[idx] = "{}"
@@ -141,10 +147,10 @@ def convert_hf_checkpoint(
 
     Arguments:
         checkpoint_dir: Where to save the downloaded files.
-        model_name: The existing config name to load. This is useful to download alternative weights of existing
-            architectures.
-        dtype: The data type to convert the checkpoint files to. If not specified, the weights will remain in the
-            dtype they are downloaded in.
+        model_name: The existing config name to load. This is useful to
+            download alternative weights of existing architectures.
+        dtype: The data type to convert the checkpoint files to. If not
+            specified, the weights will remain in the dtype they are downloaded in.
     """
     if model_name is None:
         model_name = checkpoint_dir.name
@@ -154,6 +160,7 @@ def convert_hf_checkpoint(
     config = Config.from_name(model_name)
     save_config(config, checkpoint_dir)
 
+    # Check the downloaded model is LLaMa by the MLP class name
     if config.mlp_class_name in ("LLaMAMLP", "GemmaMLP", "LLaMAMoE"):
         # holder to reconstitute the split q, k, v
         qkv_weights = {}
@@ -161,25 +168,33 @@ def convert_hf_checkpoint(
     else:
         raise ValueError("Unsupported model!")
 
-    # initialize a new empty state dict to hold our new weights
+    # Initialize a new empty state dict to hold our new weights
     sd = {}
 
-    # Load the json file containing weight mapping
+    # Load the json file containing weight mapping (if downloaded)
     pytorch_bin_map_json_path = checkpoint_dir / "pytorch_model.bin.index.json"
-    if pytorch_bin_map_json_path.is_file():  # not all checkpoints have this file
+    if pytorch_bin_map_json_path.is_file():  # NOTE: not all checkpoints have this file
+        print(f"Found {pytorch_bin_map_json_path} file containing weight mapping!")
         with open(pytorch_bin_map_json_path, encoding="utf-8") as json_map:
-            bin_index = json.load(json_map)
+            bin_index = json.load(json_map)  # Load mapping as JSON/dict
         bin_files = {checkpoint_dir / bin for bin in bin_index["weight_map"].values()}
     else:
+        # JSON file for weight mapping not found!
+        print(
+            f"Unable to locate {pytorch_bin_map_json_path} file containing weight mapping!"
+        )
         bin_files = set(checkpoint_dir.glob("*.bin"))
-        # some checkpoints serialize the training arguments
+        # Some checkpoints serialize the training arguments
         bin_files = {f for f in bin_files if f.name != "training_args.bin"}
+
+    # NOTE: bin_files is a set of `.bin` files containing the model weights to be converted
+
     if not bin_files:
         raise ValueError(f"Expected {str(checkpoint_dir)!r} to contain .bin files")
 
     with incremental_save(checkpoint_dir / "lit_model.pth") as saver:
-        # for checkpoints that split the QKV across several files, we need to keep all the bin files
-        # open, so we use `ExitStack` to close them all together at the end
+        # for checkpoints that split the QKV across several files, we need to keep all
+        # the bin files open, so we use `ExitStack` to close them together at the end
         for bin_file in sorted(bin_files):
             print("Processing", bin_file)
             hf_weights = lazy_load(bin_file)
