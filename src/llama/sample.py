@@ -139,7 +139,7 @@ def main(args):
             # Ensure the desired amount of new tokens is generated
 
             x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
-            max_new_tokens = start_ids.size(1) + args.n_tokens
+            max_new_tokens = x.size(1) + args.n_tokens
 
             t_start_sample = time.time()
             print(x)
