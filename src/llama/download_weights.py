@@ -43,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt-dir",
         type=Path,
-        default=None,
+        default=Path("checkpoints"),
         help="""Directory where the model will be downloaded; it will be created if not
         present"""
     )
