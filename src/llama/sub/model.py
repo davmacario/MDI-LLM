@@ -401,7 +401,7 @@ class GPT(nn.Module):
         """
         from .utils import loading_bar
 
-        T = prompt.size(1)
+        T = prompt.size(1)  # Already formatted as (B x T x C) unlike original FIXME
         assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
         # NOTE: cannot generate more tokens than the context length!
         if self.max_seq_length < max_returned_tokens - 1:
@@ -411,7 +411,6 @@ class GPT(nn.Module):
             )
 
         device = prompt.device
-        yield_i = 0
         input_pos = torch.arange(0, T, device=device)
         tokens: List[torch.Tensor] = []
         token = prompt
