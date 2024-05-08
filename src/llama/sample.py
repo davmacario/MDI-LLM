@@ -142,7 +142,7 @@ def main(args):
             x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
             t_start_sample = time.time()
-            print(x.size(0))
+            print(x)
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
