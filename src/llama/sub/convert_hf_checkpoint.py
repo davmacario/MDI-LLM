@@ -178,7 +178,7 @@ def convert_hf_checkpoint(
             bin_index = json.load(json_map)  # Load mapping as JSON/dict
         bin_files = {checkpoint_dir / bin for bin in bin_index["weight_map"].values()}
     else:
-        # JSON file for weight mapping not found!
+        # JSON file for weight mapping not found! Will translate the '.bin' file
         print(
             f"Unable to locate {pytorch_bin_map_json_path} file containing weight mapping!"
         )
