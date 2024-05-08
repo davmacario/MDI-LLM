@@ -89,7 +89,7 @@ def main(args):
     config = Config.from_file(checkpoint_dir / "model_config.yaml")
     model = GPT(config)
     # TODO: load weights
-    wt = torch.load(checkpoint_dir / model.bin)
+    wt = torch.load(checkpoint_dir / "lit_model.pth")
     model.load_state_dict(wt)
     model.to(DEVICE)
 
