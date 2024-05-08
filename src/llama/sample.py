@@ -214,7 +214,7 @@ if __name__ == "__main__":
         "-d", "--debug", action="store_true", help="enable debug mode (profiler)"
     )
     parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
-    parser.add_argument("-p", "--plot", action="store_true", help="enable plots")
+    parser.add_argument("-p", "--plots", action="store_true", help="enable plots")
     parser.add_argument(
         "--ckpt",
         type=Path,
