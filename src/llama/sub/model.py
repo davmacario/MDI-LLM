@@ -12,11 +12,11 @@ import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (Any, List, Literal, Optional, Tuple,
-                    Type, Union)
+from typing import Any, List, Literal, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
+import yaml
 from typing_extensions import Self
 
 from .config import configs, name_to_config
