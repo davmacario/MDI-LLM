@@ -105,7 +105,7 @@ def main(args):
     # there as well; instead, we generate individual samples multiple times
 
     # model.set_kv_cache(batch_size=BATCH_SIZE)  # process samples together
-    model.set_kv_cache(batch_size=1)  # Re-set cache for every sample
+    model.set_kv_cache(batch_size=1, device=DEVICE)  # Re-set cache for every sample
 
     model.eval()
 
