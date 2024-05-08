@@ -88,6 +88,7 @@ def main(args):
     # Model setup
     config = Config.from_file(checkpoint_dir / "model_config.yaml")
     model = GPT(config)
+    model.to(DEVICE)
 
     # NOTE: by increasing the batch size, the model can generate more samples together
     # but this would not be fair compared to MDI, as we could raise the batch size
