@@ -221,9 +221,15 @@ class Config:
         )
 
     @property
-    def mlp_class(self) -> Type:
+    def mlp_class(self) -> Any:
         # `self.mlp_class_name` cannot be the type to keep the config serializable
-        return getattr(GPT, self.mlp_class_name)
+        cls = globals().get(self.mlp_class_name)
+        if cls:
+            return cls
+        else:
+            raise RuntimeError(
+                f"mlp_class {self.mlp_class_name} not found in current file"
+            )
 
     @property
     def norm_class(self) -> Type:
