@@ -12,7 +12,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (Any, Dict, Iterator, List, Literal, Optional, Self, Tuple,
+from typing import (Any, List, Literal, Optional, Tuple,
                     Type, Union)
 
 import torch
