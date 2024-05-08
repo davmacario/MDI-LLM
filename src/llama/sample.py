@@ -135,13 +135,15 @@ def main(args):
             prompt = prompt_style.apply(start)
             if VERB:
                 print(prompt)
-            x = tokenizer.encode(prompt, device=DEVICE)
-            print(x)
+            start_ids = tokenizer.encode(prompt, device=DEVICE)
             # Ensure the desired amount of new tokens is generated
-            max_new_tokens = x.size(0) + args.n_tokens
+
+            x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
+            max_new_tokens = start_ids.size(1) + args.n_tokens
 
             t_start_sample = time.time()
             print(x)
+            print(max_new_tokens)
             y = model.generate(
                 x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
