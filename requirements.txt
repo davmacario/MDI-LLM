@@ -11,3 +11,5 @@ tqdm
 cherrypy
 psutil
 gputil
+sentencepiece
+tokenizers
