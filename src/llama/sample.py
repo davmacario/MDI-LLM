@@ -68,9 +68,9 @@ def main(args):
 
     # --------------------------------------------------------------------------
     # For later use in torch.autocast:
-    if "cuda" in DEVICE:
+    if "cuda" in torch.cuda.get_device_name(DEVICE):
         device_type = "cuda"
-    elif "mps" in DEVICE:
+    elif "mps" in torch.cuda.get_device_name(DEVICE):
         device_type = "mps"
     else:
         device_type = "cpu"
