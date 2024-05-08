@@ -2,7 +2,6 @@
 
 import gc
 import json
-from collections import defaultdict
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union

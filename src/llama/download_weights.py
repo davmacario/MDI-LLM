@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-import os
 from argparse import ArgumentParser
 from pathlib import Path
 
-import torch
 from sub import download_from_hub
 
 
