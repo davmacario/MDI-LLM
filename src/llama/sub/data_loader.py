@@ -7,14 +7,12 @@ import numpy as np
 import tiktoken
 import torch
 
-from .bpe_tokenizer import BPETokenizer
-from .char_tokenizer import CharacterTokenizer
 from .model import Config
 
 
 def load_dataset(
     input_path: str,
-    tokenizer: Union[CharacterTokenizer, BPETokenizer, tiktoken.Encoding],
+    tokenizer: tiktoken.Encoding,
     *args,
     **kwargs,
 ) -> List:
@@ -42,15 +40,7 @@ def load_dataset(
         text = f.read()
         f.close()
 
-    if isinstance(tokenizer, CharacterTokenizer):
-        # Encode and move to tensor
-        # NOTE: the tokenizer gets updated automatically
-        data = tokenizer.encode(text)
-    elif isinstance(tokenizer, BPETokenizer):
-        vocab_size = kwargs.get("vocab_size", 500)
-        tokenizer.tokenize(text, out_vocab_size=vocab_size)
-        data = tokenizer.encode(text)
-    elif isinstance(tokenizer, tiktoken.Encoding):
+    if isinstance(tokenizer, tiktoken.Encoding):
         data = tokenizer.encode_ordinary(text)
     else:
         raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
