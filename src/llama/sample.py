@@ -88,6 +88,9 @@ def main(args):
     # Model setup
     config = Config.from_file(checkpoint_dir / "model_config.yaml")
     model = GPT(config)
+    # TODO: load weights
+    wt = torch.load(checkpoint_dir / model.bin)
+    model.load_state_dict(wt)
     model.to(DEVICE)
 
     # NOTE: by increasing the batch size, the model can generate more samples together
@@ -112,34 +115,31 @@ def main(args):
     )
     stop_tokens = prompt_style.stop_tokens(tokenizer)
 
-
-
     # ---- GENERATION -------------------------------------------------------------
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with torch.inference_mode():
-        with ctx:
-            if VERB:
-                print("Beginning generation")
+    with ctx:
+        if VERB:
+            print("Beginning generation")
 
-            t_start = time.time()
-            for k in range(BATCH_SIZE):
-                # TODO: fix support for one prompt per sample
-                prompt = prompt_style.apply(start)
-                start_ids = tokenizer.encode(prompt, device=DEVICE)
-                # Ensure the desired amount of new tokens is generated
-                max_new_tokens = start_ids.size(0) + args.n_tokens
+        t_start = time.time()
+        for k in range(BATCH_SIZE):
+            # TODO: fix support for one prompt per sample
+            prompt = prompt_style.apply(start)
+            start_ids = tokenizer.encode(prompt, device=DEVICE)
+            # Ensure the desired amount of new tokens is generated
+            max_new_tokens = start_ids.size(0) + args.n_tokens
 
-                x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
+            x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
 
-                t_start_sample = time.time()
-                y = model.generate(
-                    x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
-                )
-                decoded_text = tokenizer.decode(y[0].tolist())
-                print(decoded_text[: find_eot(decoded_text)])
-                print("---------------")
+            t_start_sample = time.time()
+            y = model.generate(
+                x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
+            )
+            decoded_text = tokenizer.decode(y[0].tolist())
+            print(decoded_text[: find_eot(decoded_text)])
+            print("---------------")
 
     tot_gen_time = time.time() - t_start
     if VERB:
