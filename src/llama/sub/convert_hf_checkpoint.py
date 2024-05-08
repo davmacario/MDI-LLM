@@ -143,6 +143,7 @@ def convert_hf_checkpoint(
 ) -> None:
     """
     Convert a Hugging Face Transformers checkpoint into a LitGPT compatible checkpoint.
+    The file name will be: `lit_model.pth`
 
     Arguments:
         checkpoint_dir: Where to save the downloaded files.
