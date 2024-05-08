@@ -86,10 +86,17 @@ def main(args):
     )
 
     # Model setup
-    config = Config.from_file(checkpoint_dir / "model_config.yaml")
+    conf_fname = checkpoint_dir / "model_config.yaml"
+    if VERB:
+        print(f"Loading config from {conf_fname}")
+    config = Config.from_file(conf_fname)
     model = GPT(config)
-    # TODO: load weights
-    wt = torch.load(checkpoint_dir / "lit_model.pth")
+    pt_fname = checkpoint_dir / "lit_model.pth"
+    if VERB:
+        print(f"Loading weights from {pt_fname}")
+    wt = torch.load(pt_fname)
+    if VERB:
+        print("Weights loaded")
     model.load_state_dict(wt)
     model.to(DEVICE)
 
@@ -122,7 +129,6 @@ def main(args):
     with ctx:
         if VERB:
             print("Beginning generation")
-
         t_start = time.time()
         for k in range(BATCH_SIZE):
             # TODO: fix support for one prompt per sample
