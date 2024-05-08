@@ -133,6 +133,8 @@ def main(args):
         for k in range(BATCH_SIZE):
             # TODO: fix support for one prompt per sample
             prompt = prompt_style.apply(start)
+            if VERB:
+                print(prompt)
             start_ids = tokenizer.encode(prompt, device=DEVICE)
             # Ensure the desired amount of new tokens is generated
             max_new_tokens = start_ids.size(0) + args.n_tokens
@@ -249,7 +251,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prompt",
         type=str,
-        default="\n",
+        default="Who are you?",
         help="""specify a prompt for the language model;
         if starting with 'FILE:', the prompt will be extracted for a file.
         If the string is the prompt itself, it will be used for all generated samples,
