@@ -1,16 +1,19 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file
 # at https://github.com/Lightning-AI/litgpt/blob/main/LICENSE.
 
-"""Full definition of a decoder-only transformer-based language model, all of it in this single file.
+"""Full definition of a decoder-only transformer-based language model, all of
+it in this single file.
 
 Based on the nanoGPT implementation: https://github.com/karpathy/nanoGPT and
 https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 """
 
 import math
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Self, Tuple, Type, Union
+from typing import (Any, Dict, Iterator, List, Literal, Optional, Self, Tuple,
+                    Type, Union)
 
 import torch
 import torch.nn as nn
@@ -26,15 +29,71 @@ def find_multiple(n: int, k: int) -> int:
     return n + k - (n % k)
 
 
+def multinomial_num_samples_1(probs: torch.Tensor) -> torch.Tensor:
+    if torch._dynamo.is_compiling():
+        # Faster alternative to `torch.multinomial(probs, num_samples=1)` that is also CUDAGraph friendly
+        distribution = torch.empty_like(probs).exponential_(1)
+        return torch.argmax(probs / distribution, dim=-1, keepdim=True)
+    return torch.multinomial(probs, num_samples=1)
+
+
+def sample_top_p(logits: torch.Tensor, top_p: float) -> torch.Tensor:
+    """
+    Apply top-p logic to a discrete distribution, i.e., isolate the elements such that
+    their cumulative probability adds up to p.
+
+    Args:
+        logits
+        top_p: value of `p` (in the range [0, 1])
+    """
+    sorted_logits, sorted_indices = torch.sort(logits, descending=False)
+    cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
+    # Example:
+    # sorted_probs=[0.1, 0.15, 0.2, 0.25, 0.3] -> sorted_cumprobs=[0.1, 0.25, 0.45, 0.7, 1.0]
+    # sorted_indices_to_remove = [1, 1, 0, 0, 0] if top_p=0.7
+    sorted_indices_to_remove = cumulative_probs <= (1 - top_p)
+    # Keep at least 1 token always to prevent the case where no token is selected
+    # In this case the most probable one is always kept
+    sorted_indices_to_remove[-1:] = 0
+    indices_to_remove = sorted_indices_to_remove.scatter(
+        0, sorted_indices, sorted_indices_to_remove
+    )
+    logits = logits.masked_fill(indices_to_remove, float("-inf"))
+    return logits
+
+
+def sample(
+    logits: torch.Tensor,
+    temperature: float = 1.0,
+    top_k: Optional[int] = None,
+    top_p: float = 1.0,
+) -> torch.Tensor:
+    if top_p < 0.0 or top_p > 1.0:
+        raise ValueError(f"top_p must be in [0, 1], got {top_p}")
+    logits = logits[0, -1]
+    # optionally crop the logits to only the top k options
+    if top_k is not None:
+        v, i = torch.topk(logits, min(top_k, logits.size(-1)))
+        # do not use `torch.where` as in nanogpt because it will repeat top-k collisions
+        logits = torch.full_like(logits, float("-inf")).scatter_(-1, i, v)
+    # optionally scale the logits and sample from a probability distribution
+    if temperature > 0.0 or top_p > 0.0:
+        if temperature > 0.0:
+            logits = logits / temperature
+        # optionally crop the logits to smallest set of logits with a cumulative probability above top_p
+        if top_p < 1.0:
+            logits = sample_top_p(logits, top_p)
+        probs = torch.nn.functional.softmax(logits, dim=-1)
+        return multinomial_num_samples_1(probs)
+    return torch.argmax(logits, dim=-1, keepdim=True)
+
+
 @dataclass
 class Config:
     """
     Model configuration.
 
     This class specifies all the parameters that characterize a specific model.
-
-    Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file at
-    https://github.com/Lightning-AI/litgpt/blob/main/LICENSE.
     """
 
     name: str = ""
@@ -161,20 +220,16 @@ class Config:
             f"For {str(path)!r} neither 'model_config.yaml' nor matching config exists."
         )
 
-    # TODO: remove, as the MLP class used will be only one (LLaMa's)
     @property
     def mlp_class(self) -> Type:
         # `self.mlp_class_name` cannot be the type to keep the config serializable
         return getattr(GPT, self.mlp_class_name)
 
-    # TODO: remove, as the norm class used will be only one (LLaMa's)
     @property
     def norm_class(self) -> Type:
         # `self.norm_class_name` cannot be the type to keep the config serializable
         if self.norm_class_name == "RMSNorm":
             from functools import partial
-
-            from model import RMSNorm
 
             return partial(RMSNorm, add_unit_offset="Gemma" in self.name)
         return getattr(torch.nn, self.norm_class_name)
@@ -241,6 +296,13 @@ class GPT(nn.Module):
     def forward(
         self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
+        """
+        GPT forward pass.
+
+        Args:
+            idx: input tensor
+            input_pos (optional):
+        """
         T = idx.size(1)
         if self.max_seq_length < T:
             raise ValueError(
@@ -309,6 +371,61 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             block.attn.kv_cache = None
 
+    @torch.inference_mode()
+    def generate(
+        self,
+        prompt: torch.Tensor,
+        max_returned_tokens: int,
+        *,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+    ) -> List[torch.Tensor]:
+        """
+        Generate a text sample using this GPT model, given an initial sequence (prompt)
+        and a predefined number of tokens.
+
+        Args:
+            prompt: Tensor containing the encoded text prompt; shape: (T).
+            max_returned_tokens: (maximum) number of generated tokens; to provide a
+                reference, it is the exact number of generated tokens (generation will
+                continue even after end of sequence),
+            temperature: scaling factor applied to the logits (1 / temperature).
+            top_k: if specified, only sample among the tokens with the `k` highest
+                probabilities.
+        """
+        from .utils import loading_bar
+
+        T = prompt.size(0)
+        assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
+        # NOTE: cannot generate more tokens than the context length!
+        if self.max_seq_length < max_returned_tokens - 1:
+            # See: https://github.com/Lightning-AI/litgpt/blob/6f03d6cc8638a7850b610b86f4602fba81c16edc/litgpt/chat/base.py#L57-L59
+            raise NotImplementedError(
+                f"max_seq_length {self.max_seq_length} needs to be >= {max_returned_tokens - 1}"
+            )
+
+        device = prompt.device
+        yield_i = 0
+        input_pos = torch.arange(0, T, device=device)
+        tokens: List[torch.Tensor] = []
+        token = prompt
+        t_start = time.time()
+        tok_time = []
+        for t in range(1, max_returned_tokens - T + 1):
+            tok_time.append((t - 1, time.time() - t_start))
+            print(
+                f"Generating {loading_bar(t, max_returned_tokens - T, 30)} "
+                f"{t}/{max_returned_tokens - T}",
+                end="\r",
+            )
+            logits = self(token, input_pos)
+            next = sample(logits)
+            token = next.to(dtype=token.dtype)
+            tokens.append(token)
+            input_pos = input_pos[-1:].add_(1)
+
+        return tokens
+
 
 class Block(nn.Module):
     def __init__(self, config: Config) -> None:
@@ -367,13 +484,21 @@ class Block(nn.Module):
 
 
 class CausalSelfAttention(nn.Module):
+    """
+    Causal Self-Attention module implementing Grouped-Query Attention (GQA)
+    """
+
     def __init__(self, config: Config) -> None:
         super().__init__()
+        assert (
+            config.n_query_groups is not None and config.head_size is not None
+        ), "Model config was not initialized correctly!"
         shape = (config.n_head + 2 * config.n_query_groups) * config.head_size
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias)
-        # output projection
-        # if `head_size` is explicitly specified in the config, `n_emd` might not be equal to `head_size * n_head`
+        # Output projection
+        # if `head_size` is explicitly specified in the config, `n_emd` might not be
+        # equal to `head_size * n_head`
         self.proj = nn.Linear(
             config.head_size * config.n_head, config.n_embd, bias=config.bias
         )
@@ -393,10 +518,12 @@ class CausalSelfAttention(nn.Module):
         B, T, C = (
             x.size()
         )  # batch size, sequence length, embedding dimensionality (n_embd)
+        assert C == self.config.n_embd
 
         qkv = self.attn(x)
 
-        # assemble into a number of query groups to support MHA, MQA and GQA together (see `config.n_query_groups`)
+        # assemble into a number of query groups to support MHA, MQA and GQA together
+        # (see `config.n_query_groups`)
         q_per_kv = self.config.n_head // self.config.n_query_groups
         total_qkv = q_per_kv + 2  # each group has 1+ queries, 1 key, and 1 value
         qkv = qkv.view(
@@ -407,7 +534,7 @@ class CausalSelfAttention(nn.Module):
         # split batched computation into three
         q, k, v = qkv.split((q_per_kv, 1, 1), dim=2)
 
-        # maybe repeat k and v if for the non multi-head attention cases
+        # Maybe repeat k and v if for the non multi-head attention cases
         # training: flash attention requires it
         # inference: multi-query would require a full kv cache so avoid it to limit its memory usage
         if self.config.n_query_groups != self.config.n_head and (
@@ -591,6 +718,14 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
 
 
 class KVCache(nn.Module):
+    """
+    Key-Value cache.
+
+    Stores cached K and V tensors in buffers accessed as `self.k` and `self.v`.
+    These tensors can be used to prevent recomputation of K and V in the causal
+    self-attention mechanism in the decoder.
+    """
+
     def __init__(
         self,
         k_shape: Tuple[int, int, int, int],
@@ -609,10 +744,16 @@ class KVCache(nn.Module):
     def forward(
         self, input_pos: torch.Tensor, k: torch.Tensor, v: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # move the buffer to the activation dtype for when AMP is used
+        """
+        KVCache forward pass:
+        -
+        """
+        # Move the buffer to the activation dtype for when AMP is used
         self.k = self.k.to(k.dtype)
         self.v = self.v.to(v.dtype)
-        # update the cache
+        # Update the cache
+        # `index_copy_` will insert the elements of the "new" k/v in the positions
+        # specified by `input_pos` along the "z" dimension (2) of the k, v caches
         k = self.k.index_copy_(2, input_pos, k)
         v = self.v.index_copy_(2, input_pos, v)
         return k, v
