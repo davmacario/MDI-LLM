@@ -423,7 +423,8 @@ class GPT(nn.Module):
                 f"{t}/{max_returned_tokens - T}",
                 end="\r",
             )
-            logits = self(token.view(-1, 1), input_pos)
+            # NOTE: need to reshape the input tensor
+            logits = self(token.view(1, -1), input_pos)
             next = sample(logits)
             token = next.to(dtype=token.dtype)
             tokens.append(token)
