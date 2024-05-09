@@ -30,10 +30,10 @@ def find_multiple(n: int, k: int) -> int:
 
 
 def multinomial_num_samples_1(probs: torch.Tensor) -> torch.Tensor:
-    if torch._dynamo.is_compiling():
-        # Faster alternative to `torch.multinomial(probs, num_samples=1)` that is also CUDAGraph friendly
-        distribution = torch.empty_like(probs).exponential_(1)
-        return torch.argmax(probs / distribution, dim=-1, keepdim=True)
+    # if torch._dynamo.is_compiling():
+    #     # Faster alternative to `torch.multinomial(probs, num_samples=1)` that is also CUDAGraph friendly
+    #     distribution = torch.empty_like(probs).exponential_(1)
+    #     return torch.argmax(probs / distribution, dim=-1, keepdim=True)
     return torch.multinomial(probs, num_samples=1)
 
 
