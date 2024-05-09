@@ -140,8 +140,6 @@ def main(args):
             max_new_tokens = start_ids.size(0) + args.n_tokens
 
             t_start_sample = time.time()
-            print(start_ids)
-            print(max_new_tokens)
             y = model.generate(
                 start_ids, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )

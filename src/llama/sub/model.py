@@ -412,11 +412,12 @@ class GPT(nn.Module):
 
         device = prompt.device
         input_pos = torch.arange(0, T, device=device)
-        tokens: List[torch.Tensor] = []
+        tokens: torch.Tensor = prompt.view(1, -1)
         token = prompt
         t_start = time.time()
         tok_time = []
         for t in range(1, max_returned_tokens - T + 1):
+            # Thanks to caching, at each forward pass we can only provide the next token
             tok_time.append((t - 1, time.time() - t_start))
             print(
                 f"Generating {loading_bar(t, max_returned_tokens - T, 30)} "
@@ -427,10 +428,10 @@ class GPT(nn.Module):
             logits = self(token.view(1, -1), input_pos)
             next = sample(logits)
             token = next.to(dtype=token.dtype)
-            tokens.append(token)
+            tokens = torch.cat((tokens, token), dim=1)
             input_pos = input_pos[-1:].add_(1)
 
-        return torch.Tensor(tokens)
+        return tokens
 
 
 class Block(nn.Module):
