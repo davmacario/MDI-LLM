@@ -69,14 +69,14 @@ def main(args):
 
     # --------------------------------------------------------------------------
     # For later use in torch.autocast:
-    if "cuda" in torch.cuda.get_device_name(DEVICE):
+    if "cuda" in DEVICE:
         device_type = "cuda"
-    elif "mps" in torch.cuda.get_device_name(DEVICE):
+    elif "mps" in DEVICE:
         device_type = "mps"
     else:
         device_type = "cpu"
     if VERB:
-        print(f"Device name: {torch.cuda.get_device_name(DEVICE)}")
+        print(f"Using {DEVICE}")
         print(f"Device type: {device_type}")
     ptdtype = {
         "float32": torch.float32,
@@ -88,6 +88,7 @@ def main(args):
         if device_type == "mps"
         else torch.autocast(device_type=device_type, dtype=ptdtype)
     )
+    torch_device = torch.device(DEVICE)
 
     # Model setup
     conf_fname = checkpoint_dir / "model_config.yaml"
@@ -102,14 +103,14 @@ def main(args):
     if VERB:
         print("Weights loaded")
     model.load_state_dict(wt)
-    model.to(DEVICE)
+    model.to(torch_device)
 
     # NOTE: by increasing the batch size, the model can generate more samples together
     # but this would not be fair compared to MDI, as we could raise the batch size
     # there as well; instead, we generate individual samples multiple times
 
     # model.set_kv_cache(batch_size=BATCH_SIZE)  # process samples together
-    model.set_kv_cache(batch_size=1, device=DEVICE)  # Re-set cache for every sample
+    model.set_kv_cache(batch_size=1, device=torch_device)  # Re-set cache for every sample
 
     model.eval()
 
@@ -139,7 +140,7 @@ def main(args):
             prompt = prompt_style.apply(start)
             if VERB:
                 print(prompt)
-            start_ids = tokenizer.encode(prompt, device=DEVICE)
+            start_ids = tokenizer.encode(prompt, device=torch_device)
             # Ensure the desired amount of new tokens is generated
             max_new_tokens = start_ids.size(0) + args.n_tokens
 
@@ -246,7 +247,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--device",
-        type=torch.device,
+        type=str,
         default=default_device,
         help="torch device where to load model and tensors",
     )
