@@ -121,4 +121,4 @@ class Tokenizer:
 
     def decode(self, tensor: torch.Tensor) -> str:
         tokens = [tensor.item()] if tensor.ndim == 0 else tensor.tolist()
-        return self.processor.decode(tokens)
+        return self.processor.decode(tokens)[0]
