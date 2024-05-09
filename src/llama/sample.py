@@ -137,15 +137,13 @@ def main(args):
                 print(prompt)
             start_ids = tokenizer.encode(prompt, device=DEVICE)
             # Ensure the desired amount of new tokens is generated
-
-            x = torch.tensor(start_ids, dtype=torch.long, device=DEVICE)[None, ...]
-            max_new_tokens = x.size(1) + args.n_tokens
+            max_new_tokens = start_ids.size(0) + args.n_tokens
 
             t_start_sample = time.time()
-            print(x)
+            print(start_ids)
             print(max_new_tokens)
             y = model.generate(
-                x, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
+                start_ids, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
             decoded_text = tokenizer.decode(y[0].tolist())
             print(decoded_text[: find_eot(decoded_text)])

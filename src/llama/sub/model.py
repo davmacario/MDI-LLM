@@ -401,7 +401,7 @@ class GPT(nn.Module):
         """
         from .utils import loading_bar
 
-        T = prompt.size(1)  # Already formatted as (B x T x C) unlike original FIXME
+        T = prompt.size(0)  # The input tensor has size (T)
         assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
         # NOTE: cannot generate more tokens than the context length!
         if self.max_seq_length < max_returned_tokens - 1:
