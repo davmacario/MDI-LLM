@@ -76,6 +76,7 @@ def main(args):
     else:
         device_type = "cpu"
     if VERB:
+        print(f"Device name: {torch.cuda.get_device_name(DEVICE)}")
         print(f"Device type: {device_type}")
     ptdtype = {
         "float32": torch.float32,
