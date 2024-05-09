@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -14,6 +15,7 @@ def main(args):
 
     download_from_hub(
         repo_id=args.model_name,
+        access_token=args.hf_token,
         dtype=args.dtype,
         checkpoint_dir=args.ckpt_dir,
         model_name=args.saved_name,
@@ -39,6 +41,12 @@ if __name__ == "__main__":
         # ),
         default=None,
         help="Data type of downloaded weights - they will be quantized if necessary",
+    )
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        default=os.getenv("HF_TOKEN"),
+        help="Huggingface token to access restricted/private workspaces",
     )
     parser.add_argument(
         "--ckpt-dir",
