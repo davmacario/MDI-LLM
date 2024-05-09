@@ -166,11 +166,12 @@ def remove_prefix(text: str, prefix: str) -> str:
     return text
 
 
-def find_eot(text: str) -> int:
+def find_eot(text: str, stop_tokens: Optional[List[int]] = None) -> int:
     """
     Return the index of the first character of '<|endoftext|>', if found in text.
     Else, return len(text)
     """
+    # TODO: add support for tokenizer eos and bos
     tbf = "<|endoftext|>"
 
     for i in range(0, len(text) - len(tbf)):
