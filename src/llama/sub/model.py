@@ -580,9 +580,9 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        scale = 1.0 / math.sqrt(self.config.head_size)
+        # scale = 1.0 / math.sqrt(self.config.head_size)
         y = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None
+            q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=mask is None
         )
         return y.transpose(1, 2)
 
