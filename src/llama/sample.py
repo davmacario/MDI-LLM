@@ -75,6 +75,8 @@ def main(args):
         device_type = "mps"
     else:
         device_type = "cpu"
+    if VERB:
+        print(f"Device type: {device_type}")
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
