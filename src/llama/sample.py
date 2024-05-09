@@ -6,20 +6,17 @@ Perform inference on a pre-trained model - TinyLlama & Llama
 
 import cProfile
 import os
-import pickle
 import pstats
 import time
 from argparse import ArgumentParser
 from contextlib import nullcontext
-from datetime import datetime
 from pathlib import Path
 
-import tiktoken
 import torch
 from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
 from sub.prompts import has_prompt_style, load_prompt_style
-from sub.utils import count_model_layers, find_eot, plot_tokens_per_time
+from sub.utils import find_eot, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
 

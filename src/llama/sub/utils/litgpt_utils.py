@@ -13,7 +13,7 @@ import yaml
 from torch.serialization import normalize_storage_type
 from typing_extensions import override
 
-from .model import Config
+from sub.model import Config
 
 
 def find_weight_files(

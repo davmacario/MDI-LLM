@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Iterable, List, Tuple, Union
+from typing import List, Tuple
 
 import numpy as np
 import tiktoken
 import torch
-
-from .model import Config
+from sub.model import Config
 
 
 def load_dataset(

@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
 
 import gc
-import json
 import math
-import os
 import sys
 import warnings
-from contextlib import contextmanager, nullcontext
-from dataclasses import asdict
-from functools import partial
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import torch
-import yaml
 from numpy.typing import NDArray
 from torch import nn
 from transformers import GPT2LMHeadModel
 
-from .config import (DEVICE, EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
+from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                      N_LAYERS_NODES, WARMUP_ITERS)
-from .data_loader import get_batch
-from .model import GPT, Config
+from sub.model import Config
+from sub.utils.data_loader import get_batch
 
 VERB = False
 
@@ -61,7 +55,7 @@ def get_obj_size(obj):
 
 @torch.no_grad()  # Tell the program not to evaluate the gradients (no BP)
 def estimate_loss(
-    model: Union[GPT, nn.Module],
+    model: nn.Module,
     train: Union[torch.Tensor, NDArray],
     val: Union[torch.Tensor, NDArray],
     batch_size: int,
@@ -113,6 +107,9 @@ def get_lr(
     warmup_it: int = WARMUP_ITERS,
     lr_decay_it: int = LR_DECAY_ITERS,
 ):
+    """
+    Evaluate learning rate for decayed LR.
+    """
     # 1) linear warmup for warmup_iters steps
     if it < warmup_it:
         return lr * it / warmup_it
@@ -152,20 +149,21 @@ def loading_bar(
     """
     n_elem = int(current_iter * n_chars / tot_iter)
     prog = str("".join([ch] * n_elem))
-    n_prog = str("".join([" "] * (n_chars - n_elem - 1)))
+    n_prog = str("".join([n_ch] * (n_chars - n_elem - 1)))
     return "[" + prog + n_prog + "]"
 
 
 def remove_prefix(text: str, prefix: str) -> str:
     """
     Remove the specified prefix from the given string.
-    NOTE: starting Python 3.9, use text.removeprefix(prefix)
+    NOTE: starting Python 3.9, use text.removeprefix(prefix);
     """
     if text.startswith(prefix):
         return text[len(prefix) :]
     return text
 
 
+# FIXME
 def find_eot(text: str, stop_tokens: Optional[List[int]] = None) -> int:
     """
     Return the index of the first character of '<|endoftext|>', if found in text.
@@ -353,8 +351,7 @@ def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
 
 def deserialize_params(params: Dict) -> Mapping[str, Any]:
     """
-    De-serialize a dictionary and return a state dictionary containing a torch
-    model parameters.
+    De-serialize a dictionary and return a state dict containing torch model parameters.
     """
     deserialized_params = {}
     for key, value in params.items():
@@ -367,46 +364,61 @@ def deserialize_params(params: Dict) -> Mapping[str, Any]:
     return deserialized_params
 
 
-def count_model_layers(model_params: Dict[str, Any]) -> int:
+def count_transformer_blocks(state_dict: Dict[str, Any]) -> int:
+    """
+    Given a state dict, return the number of detected transformer blocks
+    """
     base_name_transformer = "transformer"
     layer_name = "h"
 
     # Count the number of detected transformer layers
     layer_keys = [
         k
-        for k in model_params.keys()
+        for k in state_dict.keys()
         if k.startswith(f"{base_name_transformer}.{layer_name}")
     ]
     layers_unique = list(set([".".join(k.split(".")[:3]) for k in layer_keys]))
     return len(layers_unique)
 
 
-def load_from_pt(model_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def load_from_pt(
+    model_path: Union[Path, str], device: Optional[Union[torch.device, str]] = "cpu"
+) -> Tuple[Config, Dict[str, Any]]:
     """
     Load model weights from disk.
 
     Args:
         model_path: path to the checkpoint
+        device (optional): device where to load state dict; default: "cpu"
 
     Returns:
-        model state dictionary
-        model config (args of GPTConfig) as dictionary
+        tuple (model config, model state dict)
     """
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Unable to find model checkpoint at {model_path}")
+    if isinstance(model_path, str):
+        model_dir = Path(model_path)
+    elif isinstance(model_path, Path):
+        model_dir = model_path
+    else:
+        raise TypeError
 
+    if not model_dir.is_dir():
+        raise NotADirectoryError(f"Unable to find model checkpoint at {model_dir}")
+
+    config = Config.from_file(model_dir / "model_config.yaml")
+
+    pth_file = model_dir / "lit_model.pth"
     try:
-        checkpoint = torch.load(model_path, map_location=DEVICE)
+        sd = torch.load(pth_file, map_location=device)
     except:
-        if DEVICE != "cpu":
+        if device != "cpu":
             warnings.warn(
-                f"Unable to fit model ckpt in {DEVICE} memory! Retrying with cpu"
+                f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
             )
-            checkpoint = torch.load(model_path, map_location="cpu")
+            sd = torch.load(pth_file, map_location="cpu")
         else:
             raise MemoryError("Not enough system memory to load ckpt!")
 
-    return checkpoint["model"], checkpoint["model_args"]
+    return config, sd
 
 
 def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -420,162 +432,4 @@ def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         model state dictionary, imported from gpt2
         model config (arguments of GPTConfig) as dictionary
     """
-    assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
-
-    config_args = {
-        "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
-        "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
-        "gpt2-large": dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
-        "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
-    }[model_type]
-
-    config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
-    config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
-    config_args["bias"] = True  # always True for GPT model checkpoints
-    if "dropout" not in config_args:
-        config_args["dropout"] = (
-            0.0  # NOTE: this assumes chunk won't be used for training
-        )
-
-    # TODO: remove creation of GPT object (too much memory) - pay attention to .attn.bias
-    # attn.bias is just the triangular masking matrix used to compute attention
-    # Should not be a problem to use default one (?) - since we are not using flash attn
-    config = Config(**config_args)
-    model = GPT(config)
-    sd = model.state_dict()
-    sd_keys = [k for k in sd.keys() if not k.endswith(".attn.bias")]
-
-    model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-    sd_hf = model_hf.state_dict()
-
-    sd_keys_hf = [
-        k
-        for k in sd_hf.keys()
-        if not (k.endswith(".attn.masked_bias") or k.endswith(".attn.bias"))
-    ]
-
-    transposed = [
-        "attn.c_attn.weight",
-        "attn.c_proj.weight",
-        "mlp.c_fc.weight",
-        "mlp.c_proj.weight",
-    ]
-    assert len(sd_keys_hf) == len(
-        sd_keys
-    ), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-    for k in sd_keys_hf:
-        if any(k.endswith(w) for w in transposed):
-            # Special treatment for Conv1D parameters
-            assert sd_hf[k].shape[::-1] == sd[k].shape
-            with torch.no_grad():
-                sd[k].copy_(sd_hf[k].t())
-        else:
-            # Vanilla copy over the other parameters
-            assert sd_hf[k].shape == sd[k].shape
-            with torch.no_grad():
-                sd[k].copy_(sd_hf[k])
-
-    return sd, config_args
-
-
-# ---------- PROMPT -------------------------------------------------------------------
-
-
-def get_prompt(prompt: str, n_samples: int = 1, **kwargs) -> List[str]:
-    """
-    Extract the user prompt.
-
-    The given prompt is a string indicating:
-        - The prompt itself
-        - If starting with 'FILE:', it indicates a text file containing, in each
-        paragraph (block of text separated by blank lines) a different prompt
-
-    It is possible to specify the number of samples to return a list with the correct
-    length.
-
-    It returns a list containing the prompts as items.
-    If the given string is the prompt itself, the list will contain that string repeated
-    for n_samples.
-    If the file contains more paragraphs than samples, only the first n_samples will be
-    considered.
-    If the file contains too few, instead, the output list will be padded with "\\n"
-    """
-    verb = kwargs.get("verb", False)
-
-    if prompt.startswith("FILE:"):
-        if not any([prompt.endswith(ext) for ext in (".txt", ".md")]):
-            raise ValueError(
-                f"Unsupported file type for {prompt}\nSupported types are: '.txt', '.md'"
-            )
-        print("Reading prompt(s) from file")
-        fname = prompt[5:]
-        out = []
-        with open(fname, "r") as f:
-            curr_sample = ""
-            for line in f.readlines():
-                if line.strip() != "":
-                    curr_sample += line  # Not removing '\n'
-                else:  # Paragraph end
-                    out.append(curr_sample)
-                    curr_sample = ""
-
-                if len(out) == n_samples:
-                    break
-
-        if curr_sample != "":
-            out.append(curr_sample)
-
-        if len(out) < n_samples:
-            out += ["\n"] * (n_samples - len(out))
-
-        assert len(out) == n_samples
-
-        if verb:
-            print(out)
-        return out
-    else:
-        return [prompt] * n_samples
-
-
-# ---------- PLOTS --------------------------------------------------------------------
-file_dir = os.path.dirname(__file__)
-
-
-def plot_tokens_per_time(
-    tok_time: List[Union[Tuple, List[Tuple]]],
-    out_path: str = os.path.join(file_dir, "..", "img", "tokens_time.png"),
-    disp: bool = True,
-):
-    """
-    Plot a graph representing the number of generated tokens in time.
-
-    Args:
-        tok_time: list of couples, where the 1st element is the number of
-            samples and the 2nd element is the time at which it was generated.
-            It can also be a list of list of couples (multiple samples); in this
-            case, the plot will distinguish between the different samples
-        out_path: path of the produced output image
-        disp: if true, the image will also be displayed at runtime
-    """
-    assert len(tok_time) >= 1
-
-    fig = plt.figure(figsize=(12, 8))
-    if isinstance(tok_time[0], Tuple):
-        time = [x[1] for x in tok_time]
-        n_samples = [x[0] for x in tok_time]
-        plt.plot(time, n_samples)
-        plt.title("Number of generated samples vs. time - MDI")
-    elif isinstance(tok_time[0], List):
-        for i, sublist in enumerate(tok_time):
-            time = [x[1] for x in sublist]
-            n_samples = [x[0] for x in sublist]
-            plt.plot(time, n_samples, label=f"Sample {i + 1}")
-            plt.legend()
-        plt.title("Number of generated samples vs. time - standalone")
-    plt.xlabel("Time (s)")
-    plt.ylabel("N. samples")
-    plt.grid()
-    plt.tight_layout()
-    fig.savefig(out_path)
-    if disp:
-        plt.show()
+    pass

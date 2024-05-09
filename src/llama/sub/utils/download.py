@@ -41,7 +41,7 @@ def download_from_hub(
     """
 
     if repo_id is None:
-        from .config import configs
+        from sub.config import configs
 
         options = [
             f"{config['hf_config']['org']}/{config['hf_config']['name']}"

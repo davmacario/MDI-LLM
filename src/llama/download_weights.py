@@ -3,7 +3,7 @@
 from argparse import ArgumentParser
 from pathlib import Path
 
-from sub import download_from_hub
+from sub.utils import download_from_hub
 
 
 def main(args):

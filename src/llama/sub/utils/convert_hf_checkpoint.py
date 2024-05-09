@@ -10,7 +10,7 @@ import torch
 
 from .litgpt_utils import (NotYetLoadedTensor, incremental_save, lazy_load,
                            save_config)
-from .model import Config
+from sub.model import Config
 
 
 def copy_weights_hf_llama(
@@ -22,7 +22,7 @@ def copy_weights_hf_llama(
     dtype: Optional[torch.dtype] = None,
 ) -> None:
     """
-
+    Translate weights from HF Llama to LitGPT format.
     """
     weight_map = {
         "model.embed_tokens.weight": "transformer.wte.weight",

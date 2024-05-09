@@ -8,11 +8,10 @@ Based on the nanoGPT implementation: https://github.com/karpathy/nanoGPT and
 https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 """
 
-import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -239,6 +238,36 @@ class Config:
 
             return partial(RMSNorm, add_unit_offset="Gemma" in self.name)
         return getattr(torch.nn, self.norm_class_name)
+
+    def asdict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "hf_config": self.hf_config,
+            "scale_embeddings": self.scale_embeddings,
+            "block_size": self.block_size,
+            "vocab_size": self.vocab_size,
+            "padding_multiple": self.padding_multiple,
+            "padded_vocab_size": self.padded_vocab_size,
+            "n_layer": self.n_layer,
+            "n_head": self.n_head,
+            "head_size": self.head_size,
+            "n_embd": self.n_embd,
+            "rotary_percentage": self.rotary_percentage,
+            "parallel_residual": self.parallel_residual,
+            "bias": self.bias,
+            "lm_head_bias": self.lm_head_bias,
+            "n_query_groups": self.n_query_groups,
+            "shared_attention_norm": self.shared_attention_norm,
+            "norm_class_name": self.norm_class_name,
+            "norm_eps": self.norm_eps,
+            "mlp_class_name": self.mlp_class_name,
+            "gelu_approximate": self.gelu_approximate,
+            "intermediate_size": self.intermediate_size,
+            "rope_condense_ratio": self.rope_condense_ratio,
+            "rope_base": self.rope_base,
+            "n_expert": self.n_expert,
+            "n_expert_per_token": self.n_expert_per_token,
+        }
 
 
 class GPT(nn.Module):

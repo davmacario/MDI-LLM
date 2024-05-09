@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 
 import argparse
+import dataclasses
 import io
 import os
-import pickle
-import time
-import warnings
+from pathlib import Path
 
 import torch
-from transformers import AutoConfig, AutoModel, LlamaPreTrainedModel
+from sub import Config
+from sub.utils import count_transformer_blocks
+from transformers import AutoConfig, AutoModel
 
-script_dir = os.path.dirname(__file__)
-pt_local_file = os.path.join(script_dir, "tmp", "local_pt_keys.txt")
-my_keys_file = os.path.join(script_dir, "tmp", "my_llama_keys.txt")
-hf_keys_file = os.path.join(script_dir, "tmp", "hf_llama_keys.txt")
+script_dir = Path(os.path.dirname(__file__))
+pt_local_file = script_dir / "tmp" / "local_pt_keys.txt"
+my_keys_file = script_dir / "tmp" / "my_llama_keys.txt"
+hf_keys_file = script_dir / "tmp" / "hf_llama_keys.txt"
 
 if torch.cuda.is_available():
     device = "cuda:0"
@@ -45,10 +46,31 @@ def get_methods(object, spacing=20):
             print(method.ljust(spacing) + " " + " getattr() failed")
 
 
-def main(args) -> int:
-    if os.path.exists(args.model):
-        return 1
+def main(args):
+    checkpoint_dir = Path(args.model)
+    if checkpoint_dir.is_dir():
+        conf_file = checkpoint_dir / "model_config.yaml"
+        config = Config.from_file(conf_file)
+        config_dict = config.asdict()
+        for k, v in config_dict.items():
+            print(f"{k}: {v}")
+        print("")
+
+        pth_file = checkpoint_dir / "lit_model.pth"
+        sd = torch.load(pth_file)
+
+        n_blocks_detect = count_transformer_blocks(sd)
+        print(f"{n_blocks_detect} transformer blocks detected", end=" ")
+        if n_blocks_detect == config_dict["n_layer"]:
+            print("-> Config checks out")
+        else:
+            print("")
+            raise ValueError(
+                f"{n_blocks_detect} layers have been detected, "
+                f"but the configuration says {config_dict['n_layer']}"
+            )
     else:
+        # TODO: remake
         # Attempt to load from HF
         print(f"Loading pretrained model: {args.model}")
         # model_hf = LlamaPreTrainedModel.from_pretrained(args.model)
@@ -85,8 +107,8 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default=model,
-        help="""The model to be inspected; can be a local file (.pt) or a Huggingface
-        model""",
+        help="""The model to be inspected; can be a local folder (containing the
+        lit_model.pth and model_config.yaml files) or a Huggingface model""",
     )
     parser.add_argument(
         "--device", type=str, default=device, help="Device where to load models"
