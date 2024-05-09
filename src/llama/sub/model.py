@@ -385,7 +385,7 @@ class GPT(nn.Module):
         *,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
-    ) -> List[torch.Tensor]:
+    ) -> torch.Tensor:
         """
         Generate a text sample using this GPT model, given an initial sequence (prompt)
         and a predefined number of tokens.
@@ -430,7 +430,7 @@ class GPT(nn.Module):
             tokens.append(token)
             input_pos = input_pos[-1:].add_(1)
 
-        return tokens
+        return torch.Tensor(tokens)
 
 
 class Block(nn.Module):

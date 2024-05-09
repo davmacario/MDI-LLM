@@ -146,7 +146,7 @@ def main(args):
                 start_ids, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
             )
             print(y)
-            decoded_text = tokenizer.decode(y[0])
+            decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
             print("---------------")
 
