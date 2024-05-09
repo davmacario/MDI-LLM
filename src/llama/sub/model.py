@@ -413,7 +413,8 @@ class GPT(nn.Module):
         device = prompt.device
         input_pos = torch.arange(0, T, device=device)
         tokens: torch.Tensor = prompt.view(1, -1)
-        token = prompt
+        # NOTE: need to reshape the input tensor
+        token = prompt.view(1, -1)
         t_start = time.time()
         tok_time = []
         for t in range(1, max_returned_tokens - T + 1):
@@ -424,10 +425,9 @@ class GPT(nn.Module):
                 f"{t}/{max_returned_tokens - T}",
                 end="\r",
             )
-            # NOTE: need to reshape the input tensor
-            logits = self(token.view(1, -1), input_pos)
+            logits = self(token, input_pos)
             next = sample(logits)
-            token = next.to(dtype=token.dtype)
+            token = next.to(dtype=token.dtype).view(1, -1)
             tokens = torch.cat((tokens, token), dim=1)
             input_pos = input_pos[-1:].add_(1)
 
