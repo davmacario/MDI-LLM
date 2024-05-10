@@ -246,17 +246,9 @@ def split_parameters(
     out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params.pop(
         f"{base_name_transformer}.{tok_emb}.weight"
     )
-    out_chunks["starter"][f"starter_model.{pos_emb}.weight"] = model_params.pop(
-        f"{base_name_transformer}.{pos_emb}.weight"
-    )
     if f"{base_name_transformer}.{tok_emb}.bias" in model_params.keys():
         out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params.pop(
             f"{base_name_transformer}.{tok_emb}.bias"
-        )
-
-    if f"{base_name_transformer}.{pos_emb}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.{pos_emb}.bias"] = model_params.pop(
-            f"{base_name_transformer}.{pos_emb}.bias"
         )
 
     # Starter transformer layers
