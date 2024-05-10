@@ -184,11 +184,12 @@ def split_parameters(
     """
     Split the model parameters (contained in a state dict) among the different
     available nodes.
+    The model structure is that of LitGPT (https://github.com/Lightning-AI/litgpt).
 
     The number of nodes should be at least 2 (starter and finisher).
 
     The parameters are divided as such:
-        - Starter: token embedding, positional embedding,
+        - Starter: token embedding,
             N_LAYERS_STARTxTransformer Layers + final layer norm and linear layer
         - Secondary: N_LAYERS_INTERMxTransformer Layer
 
@@ -208,13 +209,9 @@ def split_parameters(
     # Set up some parameters - they are used to gather the relevant keys
     base_name_transformer = "transformer"  # Name of the ModuleDict in GPT
     tok_emb = "wte"
-    pos_emb = "wpe"
     layer_name = "h"
     transformer_last = f"{base_name_transformer}.ln_f"
     output_layer = "lm_head"
-    n_secondary_nodes = n_nodes - 1
-
-    len_before = len(model_params)
 
     # Count the number of detected transformer layers and check consistency
     layer_keys = [
