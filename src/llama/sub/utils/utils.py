@@ -10,13 +10,12 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
 from numpy.typing import NDArray
-from torch import nn
-from transformers import GPT2LMHeadModel
-
 from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
-                     N_LAYERS_NODES, WARMUP_ITERS)
+                        N_LAYERS_NODES, WARMUP_ITERS)
 from sub.model import Config
 from sub.utils.data_loader import get_batch
+from torch import nn
+from transformers import GPT2LMHeadModel
 
 VERB = False
 
@@ -421,15 +420,41 @@ def load_from_pt(
     return config, sd
 
 
-def load_from_hf(model_type: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def load_from_hf(
+    repo_id: str,
+    access_token: Optional[str] = None,
+    dtype: Optional[str] = None,
+    checkpoint_dir: Path = Path("checkpoints"),
+    model_name: Optional[str] = None,
+    device: Optional[str] = "cpu",
+) -> Tuple[Config, Dict[str, Any]]:
     """
     Load model weights from Huggingface.
+    It saves the files to the checkpoint directory, converts them to the right format
+    and loads the model configuration and the state dict.
 
     Args:
-        model_type: one of ("gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl")
+        repo_id: Huggingface Hub repository ID
+        access_token: optional API token for accessing private Huggingface models
+        dtype: data type for the downloaded weights
+        checkpoint_dir: path of the directory where to place the model folders
+        model_name: the existing config name to use for this `repo_id`. This is  
+            useful to download alternative weights of existing architectures.
+        device: device where to load state dict
 
     Returns:
-        model state dictionary, imported from gpt2
-        model config (arguments of GPTConfig) as dictionary
+        model config (Config object)
+        model state dictionary, compatible with GPT2
     """
-    pass
+    from .download import download_from_hub
+
+    download_from_hub(
+        repo_id=repo_id,
+        access_token=access_token,
+        dtype=dtype,
+        checkpoint_dir=checkpoint_dir,
+        model_name=model_name
+    )
+
+    model_path = checkpoint_dir / repo_id
+    return load_from_pt(model_path, device)

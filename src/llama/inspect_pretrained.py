@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 from sub import Config
-from sub.utils import count_transformer_blocks
+from sub.utils import count_transformer_blocks, load_from_hf, load_from_pt
 from transformers import AutoConfig, AutoModel
 
 script_dir = Path(os.path.dirname(__file__))
@@ -49,48 +49,37 @@ def get_methods(object, spacing=20):
 def main(args):
     checkpoint_dir = Path(args.model)
     if checkpoint_dir.is_dir():
-        conf_file = checkpoint_dir / "model_config.yaml"
-        config = Config.from_file(conf_file)
-        config_dict = config.asdict()
-        for k, v in config_dict.items():
-            print(f"{k}: {v}")
-        print("")
-
-        pth_file = checkpoint_dir / "lit_model.pth"
-        sd = torch.load(pth_file)
-
-        n_blocks_detect = count_transformer_blocks(sd)
-        print(f"{n_blocks_detect} transformer blocks detected", end=" ")
-        if n_blocks_detect == config_dict["n_layer"]:
-            print("-> Config checks out")
-        else:
-            print("")
-            raise ValueError(
-                f"{n_blocks_detect} layers have been detected, "
-                f"but the configuration says {config_dict['n_layer']}"
-            )
+        config, sd = load_from_pt(checkpoint_dir)
     else:
-        # TODO: remake
-        # Attempt to load from HF
-        print(f"Loading pretrained model: {args.model}")
-        # model_hf = LlamaPreTrainedModel.from_pretrained(args.model)
-        config = AutoConfig.from_pretrained(args.model)  # LlamaConfig
-        print(config)
-        model_hf = AutoModel.from_pretrained(args.model)  # LlamaModel
-        get_methods(model_hf)
+        # NOTE: loading parameters from HF will save them to disk!!
+        print(f"Loading pretrained model {args.model} from Huggingface")
+        config, sd = load_from_hf(args.model, checkpoint_dir=args.ckpt_folder)
 
-        sd_hf = model_hf.state_dict()
+    config_dict = config.asdict()
+    for k, v in config_dict.items():
+        print(f"{k}: {v}")
+    print("")
 
-        buf = io.BytesIO()
-        torch.save(sd_hf, buf)
-        buf.seek(0)
-        print(f"Total HF model size (torch load to buffer): {len(buf.read())} B")
+    n_blocks_detect = count_transformer_blocks(sd)
+    print(f"{n_blocks_detect} transformer blocks detected", end=" ")
+    if n_blocks_detect == config_dict["n_layer"]:
+        print("-> Config checks out")
+    else:
+        print("")
+        raise ValueError(
+            f"{n_blocks_detect} layers have been detected, "
+            f"but the configuration says {config_dict['n_layer']}"
+        )
 
-        with open(hf_keys_file, "w") as f:
-            print(f"Writing keys of Huggingface model to {hf_keys_file}")
-            for k in sd_hf:
-                f.write(f"{k}\n")
-        return 0
+    buf = io.BytesIO()
+    torch.save(sd, buf)
+    buf.seek(0)
+    print(f"Total HF model size (torch load to buffer): {len(buf.read())} B")
+
+    with open(hf_keys_file, "w") as f:
+        print(f"Writing keys of Huggingface model to {hf_keys_file}")
+        for k in sd:
+            f.write(f"{k}\n")
 
 
 if __name__ == "__main__":
@@ -109,6 +98,13 @@ if __name__ == "__main__":
         default=model,
         help="""The model to be inspected; can be a local folder (containing the
         lit_model.pth and model_config.yaml files) or a Huggingface model""",
+    )
+    parser.add_argument(
+        "--ckpt-folder",
+        type=str,
+        default=os.path.join(script_dir, "checkpoints"),
+        help="""subfolder where the model directory will be placed; the model files
+        will be found at `<ckpt_folder>/<hf_model_name>/`"""
     )
     parser.add_argument(
         "--device", type=str, default=device, help="Device where to load models"

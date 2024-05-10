@@ -15,10 +15,11 @@ def main(args):
 
     download_from_hub(
         repo_id=args.model_name,
-        access_token=args.hf_token,
+        access_token=args.hf_token if args.hf_token is not None else os.getenv("HF_TOKEN"),
         dtype=args.dtype,
         checkpoint_dir=args.ckpt_dir,
         model_name=args.saved_name,
+        convert_checkpoint=args.no_convert,
     )
     print("Weights saved!")
 
