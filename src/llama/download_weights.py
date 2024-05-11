@@ -27,47 +27,41 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgumentParser(description="Download model weights from Huggingface Hub")
     parser.add_argument(
-        "--model-name",
+        "MODEL",
         type=str,
-        default="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        help="Name of the model on Huggingface Hub",
+        help="name of the model on Huggingface Hub",
     )
     parser.add_argument(
         "--dtype",
         type=str,
-        # default=(
-        #     "bfloat16"
-        #     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        #     else "float16"
-        # ),
         default=None,
-        help="Data type of downloaded weights - they will be quantized if necessary",
+        help="data type of downloaded weights - they will be quantized if necessary",
     )
     parser.add_argument(
         "--hf-token",
         type=str,
         default=os.getenv("HF_TOKEN"),
-        help="Huggingface token to access restricted/private workspaces",
+        help="huggingface token to access restricted/private workspaces",
     )
     parser.add_argument(
         "--ckpt-dir",
         type=Path,
         default=Path("checkpoints"),
-        help="""Directory where the model will be downloaded; it will be created if not
+        help="""directory where the model will be downloaded; it will be created if not
         present"""
     )
     parser.add_argument(
         "--saved-name",
         type=str,
         default=None,
-        help="""If specified, the name of the subfolder of '--ckpt-dir' where the model
+        help="""if specified, the name of the subfolder of '--ckpt-dir' where the model
         will be stored"""
     )
     parser.add_argument(
         "--no-convert",
         default=True,
         action="store_false",
-        help="If set, prevent converting the weights to LitGPT format"
+        help="if set, prevent converting the weights to LitGPT format"
     )
     args = parser.parse_args()
     main(args)
