@@ -54,7 +54,7 @@ def main(args):
         or (checkpoint_dir / "pytorch_model.bin.index.json").is_file()
     ):
         # Weights are there but in wrong format
-        from sub.convert_hf_checkpoint import convert_hf_checkpoint
+        from sub.utils.convert_hf_checkpoint import convert_hf_checkpoint
 
         convert_hf_checkpoint(checkpoint_dir=checkpoint_dir, dtype=DTYPE)
 
