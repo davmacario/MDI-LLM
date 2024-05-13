@@ -370,6 +370,18 @@ def count_transformer_blocks(state_dict: Dict[str, Any]) -> int:
 
 
 def load_sd(model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"):
+    """
+    Load a state dictionary (model parameters).
+
+    Args:
+        model_path: path of the file (typically .pt or .pth) containing the model
+            parameters.
+        device (default "cpu"): device where to load the weights (NOT the model!)
+
+    Returns:
+        state dict of the model (can be passed to a compatible nn.Module object through
+            the method `nn.Module.load_state_dict()`.
+    """
     try:
         sd = torch.load(model_path, map_location=device)
     except:
