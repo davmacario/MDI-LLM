@@ -388,7 +388,7 @@ def load_from_pt(
     model_path: Union[Path, str],
     device: Optional[Union[torch.device, str]] = "cpu",
     config_only: Optional[bool] = False,
-) -> Union[Tuple[Config, Dict[str, Any]], Config]:
+) -> Tuple[Config, Optional[Dict[str, Any]]]:
     """
     Load model weights from disk.
 
@@ -414,7 +414,7 @@ def load_from_pt(
     config = Config.from_file(model_dir / "model_config.yaml")
 
     if config_only:
-        return config
+        return config, None
 
     pth_file = model_dir / "lit_model.pth"
     sd = load_sd(pth_file, device)
@@ -430,7 +430,7 @@ def load_from_hf(
     model_name: Optional[str] = None,
     device: Optional[str] = "cpu",
     config_only: Optional[bool] = False,
-) -> Union[Tuple[Config, Dict[str, Any]], Config]:
+) -> Tuple[Config, Optional[Dict[str, Any]]]:
     """
     Load model weights from Huggingface.
     It saves the files to the checkpoint directory, converts them to the right format
@@ -462,4 +462,4 @@ def load_from_hf(
     )
 
     model_path = checkpoint_dir / repo_id
-    return load_from_pt(model_path, device)
+    return load_from_pt(model_path, device, config_only=config_only)
