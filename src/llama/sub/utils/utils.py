@@ -369,18 +369,37 @@ def count_transformer_blocks(state_dict: Dict[str, Any]) -> int:
     return len(layers_unique)
 
 
+def load_sd(model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"):
+    try:
+        sd = torch.load(model_path, map_location=device)
+    except:
+        if device != "cpu":
+            warnings.warn(
+                f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
+            )
+            sd = torch.load(model_path, map_location="cpu")
+        else:
+            raise MemoryError("Not enough system memory to load ckpt!")
+
+    return sd
+
+
 def load_from_pt(
-    model_path: Union[Path, str], device: Optional[Union[torch.device, str]] = "cpu"
-) -> Tuple[Config, Dict[str, Any]]:
+    model_path: Union[Path, str],
+    device: Optional[Union[torch.device, str]] = "cpu",
+    config_only: Optional[bool] = False,
+) -> Union[Tuple[Config, Dict[str, Any]], Config]:
     """
     Load model weights from disk.
 
     Args:
         model_path: path to the checkpoint
-        device (optional): device where to load state dict; default: "cpu"
+        device (default: "cpu"): device where to load state dict; default: "cpu"
+        config_only (default: False): if True, only return the Config object
 
     Returns:
-        tuple (model config, model state dict)
+        model config (Config object)
+        [model state dictionary, compatible with GPT class]
     """
     if isinstance(model_path, str):
         model_dir = Path(model_path)
@@ -394,17 +413,11 @@ def load_from_pt(
 
     config = Config.from_file(model_dir / "model_config.yaml")
 
+    if config_only:
+        return config
+
     pth_file = model_dir / "lit_model.pth"
-    try:
-        sd = torch.load(pth_file, map_location=device)
-    except:
-        if device != "cpu":
-            warnings.warn(
-                f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
-            )
-            sd = torch.load(pth_file, map_location="cpu")
-        else:
-            raise MemoryError("Not enough system memory to load ckpt!")
+    sd = load_sd(pth_file, device)
 
     return config, sd
 
@@ -416,7 +429,8 @@ def load_from_hf(
     checkpoint_dir: Path = Path("checkpoints"),
     model_name: Optional[str] = None,
     device: Optional[str] = "cpu",
-) -> Tuple[Config, Dict[str, Any]]:
+    config_only: Optional[bool] = False,
+) -> Union[Tuple[Config, Dict[str, Any]], Config]:
     """
     Load model weights from Huggingface.
     It saves the files to the checkpoint directory, converts them to the right format
@@ -427,13 +441,15 @@ def load_from_hf(
         access_token: optional API token for accessing private Huggingface models
         dtype: data type for the downloaded weights
         checkpoint_dir: path of the directory where to place the model folders
-        model_name: the existing config name to use for this `repo_id`. This is  
+        model_name: the existing config name to use for this `repo_id`. This is
             useful to download alternative weights of existing architectures.
         device: device where to load state dict
+        config_only (default: False): if true, only return the Config object (note that
+            the model will be downloaded anyways)
 
     Returns:
         model config (Config object)
-        model state dictionary, compatible with GPT2
+        [model state dictionary, compatible with GPT class]
     """
     from .download import download_from_hub
 
@@ -442,7 +458,7 @@ def load_from_hf(
         access_token=access_token,
         dtype=dtype,
         checkpoint_dir=checkpoint_dir,
-        model_name=model_name
+        model_name=model_name,
     )
 
     model_path = checkpoint_dir / repo_id

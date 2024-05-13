@@ -7,7 +7,7 @@ from .plots import plot_tokens_per_time
 from .utils import (count_transformer_blocks, deserialize_params,
                     estimate_loss, find_eot, get_lr, get_obj_size,
                     load_from_hf, load_from_pt, loading_bar, remove_prefix,
-                    serialize_params, split_parameters)
+                    serialize_params, split_parameters, load_sd)
 
 __all__ = [
     "convert_hf_checkpoint",
@@ -29,4 +29,5 @@ __all__ = [
     "remove_prefix",
     "serialize_params",
     "split_parameters",
+    "load_sd",
 ]
