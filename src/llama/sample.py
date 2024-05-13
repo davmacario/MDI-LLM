@@ -16,7 +16,7 @@ import torch
 from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
 from sub.prompts import has_prompt_style, load_prompt_style
-from sub.utils import find_eot, plot_tokens_per_time
+from sub.utils import find_eot, plot_tokens_per_time, load_from_pt
 
 script_dir = Path(os.path.dirname(__file__))
 
@@ -88,17 +88,9 @@ def main(args):
     torch_device = torch.device(DEVICE)
 
     # Model setup
-    conf_fname = checkpoint_dir / "model_config.yaml"
-    if VERB:
-        print(f"Loading config from {conf_fname}")
-    config = Config.from_file(conf_fname)
+    config, wt = load_from_pt(checkpoint_dir)
+    assert wt is not None
     model = GPT(config)
-    pt_fname = checkpoint_dir / "lit_model.pth"
-    if VERB:
-        print(f"Loading weights from {pt_fname}")
-    wt = torch.load(pt_fname)
-    if VERB:
-        print("Weights loaded")
     model.load_state_dict(wt)
     model.to(torch_device)
 
