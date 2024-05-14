@@ -36,6 +36,7 @@ class NodePrototype(nn.Module):
 
     def __init__(self):
         super().__init__()
+        self.transformer = nn.ModuleDict()
         self.mask_cache: Optional[torch.Tensor] = None
 
     @property
@@ -86,6 +87,10 @@ class NodePrototype(nn.Module):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
+        """
+        Initialize KV cache to allow for faster inference.
+
+        """
         if rope_cache_length is None:
             rope_cache_length = self.cos.size(-1)
         max_seq_length = self.max_seq_length
@@ -127,17 +132,16 @@ class StarterNode(NodePrototype):
 
         self.verb = True if "VERB" in kwargs and kwargs["VERB"] else False
 
-        self.starter_model = nn.ModuleDict(
+        self.transformer = nn.ModuleDict(
             dict(
                 # Initial layers
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
                 h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]),
                 # Final layers:
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
-                # FIXME: lm_head is outside of 'transformer' in litgpt's GPT class
-                lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),
             )
         )
+        self.lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),
         self.max_seq_length = self.config.block_size
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
@@ -151,7 +155,8 @@ class StarterNode(NodePrototype):
     def forward(
         self,
         idx: torch.Tensor,
-        input_pos: Optional[torch.Tensor],
+        input_pos: Optional[torch.Tensor] = None,
+        *,
         first_pass: Optional[bool] = True,
     ) -> torch.Tensor:
         """
@@ -230,7 +235,7 @@ class SecondaryNode(NodePrototype):
         self.verb = True if "VERB" in kwargs and kwargs["VERB"] else False
 
         # Follow naming convention
-        self.secondary_model = nn.ModuleDict(
+        self.transformer = nn.ModuleDict(
             dict(h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
         )
 
