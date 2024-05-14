@@ -11,7 +11,7 @@ https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -335,10 +335,10 @@ class GPT(nn.Module):
         GPT forward pass.
 
         Args:
-            idx: input tensor
+            idx: input tensor - dimensions: (batch size) x (context) x (n_embd)
             input_pos (optional):
         """
-        T = idx.size(1)
+        T = idx.size(1)  # Shape is: BatchSz x Context x n_embd
         if self.max_seq_length < T:
             raise ValueError(
                 f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}."
@@ -414,6 +414,7 @@ class GPT(nn.Module):
         *,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
+        tok_time: List = [],
     ) -> torch.Tensor:
         """
         Generate a text sample using this GPT model, given an initial sequence (prompt)
@@ -424,13 +425,17 @@ class GPT(nn.Module):
             max_returned_tokens: (maximum) number of generated tokens; to provide a
                 reference, it is the exact number of generated tokens (generation will
                 continue even after end of sequence),
+            *
             temperature: scaling factor applied to the logits (1 / temperature).
             top_k: if specified, only sample among the tokens with the `k` highest
                 probabilities.
+            tok_time: optional list token/time measurements will be appended to (as
+                tuples); this allows to keep the return value as the output tensor
+                containing all generated tokens.
         """
         from .utils import loading_bar
 
-        T = prompt.size(0)  # The input tensor has size (T)
+        T = prompt.size(0)  # The input tensor has size (T) x (n_embd): not yet reshaped
         assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
         # NOTE: cannot generate more tokens than the context length!
         if self.max_seq_length < max_returned_tokens - 1:
@@ -441,13 +446,12 @@ class GPT(nn.Module):
 
         device = prompt.device
         input_pos = torch.arange(0, T, device=device)
+        # NOTE: need to reshape the input tensor to comply with (B x T x n_embd)
         tokens: torch.Tensor = prompt.view(1, -1)
-        # NOTE: need to reshape the input tensor
         token = prompt.view(1, -1)
         t_start = time.time()
-        tok_time = []
         for t in range(1, max_returned_tokens - T + 1):
-            # Thanks to caching, at each forward pass we can only provide the next token
+            # Thanks to caching, at each forward pass we can provide the next token only
             tok_time.append((t - 1, time.time() - t_start))
             print(
                 f"Generating {loading_bar(t, max_returned_tokens - T, 30)} "
@@ -455,7 +459,7 @@ class GPT(nn.Module):
                 end="\r",
             )
             logits = self(token, input_pos)
-            next = sample(logits)
+            next = sample(logits, temperature=temperature, top_k=top_k)
             token = next.to(dtype=token.dtype).view(1, -1)
             tokens = torch.cat((tokens, token), dim=1)
             input_pos = input_pos[-1:].add_(1)
@@ -551,9 +555,8 @@ class CausalSelfAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         input_pos: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        B, T, C = (
-            x.size()
-        )  # batch size, sequence length, embedding dimensionality (n_embd)
+        # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()
         assert C == self.config.n_embd
 
         qkv = self.attn(x)

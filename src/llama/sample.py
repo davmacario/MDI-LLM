@@ -16,7 +16,7 @@ import torch
 from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
 from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
-from sub.utils import find_eot, plot_tokens_per_time, load_from_pt
+from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
 model_type = "llama"
@@ -96,7 +96,9 @@ def main(args):
     # there as well; instead, we generate individual samples multiple times
 
     # model.set_kv_cache(batch_size=BATCH_SIZE)  # process samples together
-    model.set_kv_cache(batch_size=1, device=torch_device)  # Re-set cache for every sample
+    model.set_kv_cache(
+        batch_size=1, device=torch_device
+    )  # Re-set cache for every sample
 
     model.eval()
 
@@ -130,9 +132,12 @@ def main(args):
             # Ensure the desired amount of new tokens is generated
             max_new_tokens = start_ids.size(0) + args.n_tokens
 
-            t_start_sample = time.time()
             y = model.generate(
-                start_ids, max_new_tokens, temperature=TEMPERATURE, top_k=TOP_K
+                start_ids,
+                max_new_tokens,
+                temperature=TEMPERATURE,
+                top_k=TOP_K,
+                tok_time=tok_time_all,
             )
             decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
