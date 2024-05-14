@@ -190,9 +190,10 @@ def get_user_prompt(prompt: str, n_samples: int = 1, **kwargs) -> List[str]:
     If the file contains too few, instead, the output list will be padded with "\\n"
     """
     verb = kwargs.get("verb", False)
+    supported_ftypes = (".txt", ".md", ".tex")
 
     if prompt.startswith("FILE:"):
-        if not any([prompt.endswith(ext) for ext in (".txt", ".md")]):
+        if not any([prompt.endswith(ext) for ext in supported_ftypes]):
             raise ValueError(
                 f"Unsupported file type for {prompt}\nSupported types are: '.txt', '.md'"
             )
