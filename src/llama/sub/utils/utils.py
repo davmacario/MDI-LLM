@@ -208,10 +208,12 @@ def split_parameters(
 
     # Set up some parameters - they are used to gather the relevant keys
     base_name_transformer = "transformer"  # Name of the ModuleDict in GPT
+    base_name_starter = "transformer"
+    base_name_secondary = "transformer"
     tok_emb = "wte"
     layer_name = "h"
     transformer_last = f"{base_name_transformer}.ln_f"
-    output_layer = "lm_head"
+    output_layer = "lm_head"  # outside transformer now
 
     # Count the number of detected transformer layers and check consistency
     layer_keys = [
@@ -240,11 +242,11 @@ def split_parameters(
 
     # 1. Select params for Starter
     out_chunks["starter"] = {}
-    out_chunks["starter"][f"starter_model.{tok_emb}.weight"] = model_params.pop(
+    out_chunks["starter"][f"{base_name_starter}.{tok_emb}.weight"] = model_params.pop(
         f"{base_name_transformer}.{tok_emb}.weight"
     )
     if f"{base_name_transformer}.{tok_emb}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.{tok_emb}.bias"] = model_params.pop(
+        out_chunks["starter"][f"{base_name_starter}.{tok_emb}.bias"] = model_params.pop(
             f"{base_name_transformer}.{tok_emb}.bias"
         )
 
@@ -270,24 +272,24 @@ def split_parameters(
 
         prefix = f"{base_name_transformer}.{layer_name}.{ind_layer}."
         end = remove_prefix(k_orig, prefix)
-        new_k = f"starter_model.{layer_name}.{ind_layer_chunk}.{end}"
+        new_k = f"{base_name_starter}.{layer_name}.{ind_layer_chunk}.{end}"
         out_chunks["starter"][new_k] = model_params.pop(k_orig)
 
     # ln_f - last layernorm
-    out_chunks["starter"][f"starter_model.ln_f.weight"] = model_params.pop(
+    out_chunks["starter"][f"{base_name_starter}.ln_f.weight"] = model_params.pop(
         f"{transformer_last}.weight"
     )
     if f"{transformer_last}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.ln_f.bias"] = model_params.pop(
+        out_chunks["starter"][f"{base_name_starter}.ln_f.bias"] = model_params.pop(
             f"{transformer_last}.bias"
         )
 
-    # lm_head - final linear layers (producing PMF over tokenizer vocabulary)
-    out_chunks["starter"][f"starter_model.lm_head.weight"] = model_params.pop(
+    # lm_head - final linear layers (not in 'transformer')
+    out_chunks["starter"][f"lm_head.weight"] = model_params.pop(
         f"{output_layer}.weight"
     )
     if f"{output_layer}.bias" in model_params.keys():
-        out_chunks["starter"][f"starter_model.lm_head.bias"] = model_params.pop(
+        out_chunks["starter"][f"lm_head.bias"] = model_params.pop(
             f"{output_layer}.bias"
         )
 
@@ -315,7 +317,7 @@ def split_parameters(
 
             prefix = f"{base_name_transformer}.{layer_name}.{ind_layer}."
             end = remove_prefix(k_orig, prefix)
-            new_k = f"secondary_model.{layer_name}.{ind_layer_chunk}.{end}"
+            new_k = f"{base_name_secondary}.{layer_name}.{ind_layer_chunk}.{end}"
             curr_params[new_k] = model_params.pop(k_orig)
 
         out_chunks["secondary"].append(curr_params)
@@ -352,11 +354,19 @@ def deserialize_params(params: Dict) -> Mapping[str, Any]:
     return deserialized_params
 
 
-def count_transformer_blocks(state_dict: Dict[str, Any]) -> int:
+def count_transformer_blocks(
+    state_dict: Dict[str, Any], base_name_transformer: Optional[str] = "transformer"
+) -> int:
     """
-    Given a state dict, return the number of detected transformer blocks
+    Given a state dict, return the number of detected transformer blocks.
+    The default name for the transformer blocks is `transformer`, but can be overridden
+    to support a different naming convention.
+
+    Args:
+        state_dict: dict containing the model parameters.
+        base_name_transformer: base name of the transformer block, i.e., first "key" in 
+            the dict.
     """
-    base_name_transformer = "transformer"
     layer_name = "h"
 
     # Count the number of detected transformer layers
