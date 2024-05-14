@@ -15,10 +15,11 @@ from pathlib import Path
 import torch
 from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
-from sub.prompts import has_prompt_style, load_prompt_style
+from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 from sub.utils import find_eot, plot_tokens_per_time, load_from_pt
 
 script_dir = Path(os.path.dirname(__file__))
+model_type = "llama"
 
 
 def main(args):
@@ -33,11 +34,7 @@ def main(args):
         profiler = cProfile.Profile()
         profiler.enable()
 
-    if args.prompt.startswith("FILE:"):
-        with open(args.prompt[5:], "r") as f:
-            start = f.read()
-    else:
-        start = args.prompt
+    start = get_user_prompt(args.start)
 
     BATCH_SIZE = args.n_samples  # number of samples to draw
 
@@ -126,7 +123,7 @@ def main(args):
         t_start = time.time()
         for k in range(BATCH_SIZE):
             # TODO: fix support for one prompt per sample
-            prompt = prompt_style.apply(start)
+            prompt = prompt_style.apply(start[k])
             if VERB:
                 print(prompt)
             start_ids = tokenizer.encode(prompt, device=torch_device)
