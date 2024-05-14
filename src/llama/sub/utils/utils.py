@@ -369,7 +369,9 @@ def count_transformer_blocks(state_dict: Dict[str, Any]) -> int:
     return len(layers_unique)
 
 
-def load_sd(model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"):
+def load_sd(
+    model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"
+) -> Dict[str, Any]:
     """
     Load a state dictionary (model parameters).
 
