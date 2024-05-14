@@ -62,8 +62,8 @@ class NodePrototype(nn.Module):
         # override
         elif value != self.cos.size(0):
             self.cos, self.sin = self.rope_cache(device=self.cos.device)
-        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
-        # if the kv cache is expected
+        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot
+        # update it here because we don't know if the kv cache is expected
 
     def reset_parameters(self) -> None:
         # Trigger resetting the rope-cache
@@ -89,7 +89,6 @@ class NodePrototype(nn.Module):
     ) -> None:
         """
         Initialize KV cache to allow for faster inference.
-
         """
         if rope_cache_length is None:
             rope_cache_length = self.cos.size(-1)

@@ -296,8 +296,12 @@ class GPT(nn.Module):
     @max_seq_length.setter
     def max_seq_length(self, value: int) -> None:
         """
+        Set the maximum sequence length for the model.
+        When called for the first time, this method will also initialize the RoPE cache
+        and create the buffers for `cos` and `sin` used for positional embedding.
+
         When doing inference, the sequences used might be shorter than the model's context length.
-        This allows setting a smaller number to avoid allocating unused memory
+        This allows setting a smaller number to avoid allocating unused memory.
         """
         if value > self.config.block_size:
             raise ValueError(
@@ -309,11 +313,11 @@ class GPT(nn.Module):
             cos, sin = self.rope_cache()
             self.register_buffer("cos", cos, persistent=False)
             self.register_buffer("sin", sin, persistent=False)
-        # override
+        # override if sequence length is updated
         elif value != self.cos.size(0):
             self.cos, self.sin = self.rope_cache(device=self.cos.device)
-        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot update it here because we don't know
-        # if the kv cache is expected
+        # the mask and kv cache size will get updated on `set_kv_cache`. we cannot
+        # update it here because we don't know if the kv cache is expected
 
     def reset_parameters(self) -> None:
         # Trigger resetting the rope-cache
@@ -344,18 +348,23 @@ class GPT(nn.Module):
                 f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}."
             )
 
-        if input_pos is not None:  # use the kv cache
+        # Extract parameters from KV cache
+        if input_pos is not None:
+            # Isolate the `input_pos` (0 to T-1, typically) rows of cos and sin
             cos = self.cos.index_select(0, input_pos)
             sin = self.sin.index_select(0, input_pos)
             if self.mask_cache is None:
                 raise TypeError("You need to call `gpt.set_kv_cache()`")
+            # !: take the `input_pos` elements along dim 2 of mask_cache
             mask = self.mask_cache.index_select(2, input_pos)
         else:
-            cos = self.cos[:T]
+            cos = self.cos[:T]  # Actually, this should be the same as abover
             sin = self.sin[:T]
+            # No mask! (will default)
             mask = None
 
-        x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        # Actual forward pass
+        x = self.transformer.wte(idx)  # Get token embeddings of shape (B, T, n_embd)
         if self.config.scale_embeddings:
             x = x * (self.config.n_embd**0.5)
 
@@ -371,6 +380,7 @@ class GPT(nn.Module):
     def rope_cache(
         self, device: Optional[torch.device] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Create the RoPE cache and return the default values of sin `and` `cos`"""
         return build_rope_cache(
             seq_len=self.max_seq_length,
             n_elem=self.config.rope_n_elem,
@@ -386,6 +396,10 @@ class GPT(nn.Module):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
+        """
+        Trigger the initialization of the KV cache in the self-attention layers and of 
+        the triangular mask.
+        """
         if rope_cache_length is None:
             rope_cache_length = self.cos.size(-1)
         max_seq_length = self.max_seq_length
@@ -462,8 +476,9 @@ class GPT(nn.Module):
             next = sample(logits, temperature=temperature, top_k=top_k)
             token = next.to(dtype=token.dtype).view(1, -1)
             tokens = torch.cat((tokens, token), dim=1)
-            input_pos = input_pos[-1:].add_(1)
-
+            input_pos = input_pos[-1:].add_(1)  # Returns a tensor of dim. (1,)
+            # From now on, only 1 element will be passed to the forward, as the cache
+            # has been built
         return tokens
 
 
@@ -525,7 +540,9 @@ class Block(nn.Module):
 
 class CausalSelfAttention(nn.Module):
     """
-    Causal Self-Attention module implementing Grouped-Query Attention (GQA)
+    Causal Self-Attention module implementing Grouped-Query Attention (GQA) and Rotary
+    Positional Embeddings (RoPE).
+    Optionally, it can also support KV Caching.
     """
 
     def __init__(self, config: Config) -> None:
@@ -537,7 +554,7 @@ class CausalSelfAttention(nn.Module):
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.bias)
         # Output projection
-        # if `head_size` is explicitly specified in the config, `n_emd` might not be
+        # if `head_size` is explicitly specified in the config, `n_embd` might not be
         # equal to `head_size * n_head`
         self.proj = nn.Linear(
             config.head_size * config.n_head, config.n_embd, bias=config.bias
@@ -558,19 +575,21 @@ class CausalSelfAttention(nn.Module):
         # batch size, sequence length, embedding dimensionality (n_embd)
         B, T, C = x.size()
         assert C == self.config.n_embd
+        assert self.config.n_query_groups is not None
 
         qkv = self.attn(x)
 
-        # assemble into a number of query groups to support MHA, MQA and GQA together
+        # Assemble into a number of query groups to support MHA, MQA and GQA together
         # (see `config.n_query_groups`)
         q_per_kv = self.config.n_head // self.config.n_query_groups
         total_qkv = q_per_kv + 2  # each group has 1+ queries, 1 key, and 1 value
+        # Change Tensor view to separate the query groups and "transpose"
         qkv = qkv.view(
             B, T, self.config.n_query_groups, total_qkv, self.config.head_size
         )
         qkv = qkv.permute(0, 2, 3, 1, 4)  # (B, n_query_groups, total_qkv, T, hs)
 
-        # split batched computation into three
+        # Split batched computation into the three elements q, k, v
         q, k, v = qkv.split((q_per_kv, 1, 1), dim=2)
 
         # Maybe repeat k and v if for the non multi-head attention cases
@@ -579,7 +598,9 @@ class CausalSelfAttention(nn.Module):
         if self.config.n_query_groups != self.config.n_head and (
             input_pos is None or self.config.n_query_groups != 1
         ):
-            k = k.expand(
+            # If here: we are using GQA (n_query_groups != n_head) && either 'input_pos'
+            # is None (no arange [0, T-1]) or no Single Query Attn. (n_query_groups !=1)
+            k = k.expand(  # changes size of each dim to these:
                 B, self.config.n_query_groups, q_per_kv, T, self.config.head_size
             )
             v = v.expand(
@@ -590,6 +611,7 @@ class CausalSelfAttention(nn.Module):
         k = k.reshape(B, -1, T, self.config.head_size)  # (B, nh_k, T, hs)
         v = v.reshape(B, -1, T, self.config.head_size)  # (B, nh_v, T, hs)
 
+        # RoPE
         q_roped = apply_rope(q[..., : self.config.rope_n_elem], cos, sin)
         k_roped = apply_rope(k[..., : self.config.rope_n_elem], cos, sin)
         q = torch.cat((q_roped, q[..., self.config.rope_n_elem :]), dim=-1)
@@ -615,6 +637,8 @@ class CausalSelfAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         # scale = 1.0 / math.sqrt(self.config.head_size)
+        # NOTE: removed scale to add support for older Torch versions (1.12)
+        # This is not a problem in llama models
         y = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=mask is None
         )
@@ -628,6 +652,9 @@ class CausalSelfAttention(nn.Module):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> "KVCache":
+        """
+        Creates a KVCache object that can be used to cache previous K and V values.
+        """
         heads = 1 if self.config.n_query_groups == 1 else self.config.n_head
         v_shape = (batch_size, heads, max_seq_length, self.config.head_size)
         if rope_cache_length is None:
@@ -746,6 +773,10 @@ def build_rope_cache(
 
 
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """
+    Given an input tensor of size (B, n_head, T, head_size), apply Rotary Positional
+    Embeddings (RoPE).
+    """
     head_size = x.size(-1)
     x1 = x[..., : head_size // 2]  # (B, nh, T, hs/2)
     x2 = x[..., head_size // 2 :]  # (B, nh, T, hs/2)
@@ -803,6 +834,9 @@ class KVCache(nn.Module):
 def build_mask_cache(
     max_seq_length: int, device: Optional[torch.device] = None
 ) -> torch.Tensor:
+    """
+    Allocates the cache for the triangular mask used to implement causal self-attention.
+    """
     ones = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
     return torch.tril(ones).unsqueeze(0).unsqueeze(0)
 
