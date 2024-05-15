@@ -34,10 +34,11 @@ class NodePrototype(nn.Module):
     This class contains the common methods for all nodes.
     """
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
         self.transformer = nn.ModuleDict()
         self.mask_cache: Optional[torch.Tensor] = None
+        self.verb = True if "verb" in kwargs and kwargs["verb"] else False
 
     @property
     def max_seq_length(self) -> int:
@@ -125,11 +126,9 @@ class StarterNode(NodePrototype):
         n_transf_layers: int,
         **kwargs,
     ):
-        super().__init__()
+        super().__init__(**kwargs)
         assert config.padded_vocab_size is not None
         self.config = config
-
-        self.verb = True if "VERB" in kwargs and kwargs["VERB"] else False
 
         self.transformer = nn.ModuleDict(
             dict(
@@ -140,14 +139,16 @@ class StarterNode(NodePrototype):
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
-        self.lm_head=nn.Linear(config.n_embd, config.vocab_size, bias=False),
+        self.lm_head = nn.Linear(
+            config.n_embd, config.vocab_size, bias=config.lm_head_bias
+        )
         self.max_seq_length = self.config.block_size
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load sub-model weights"""
         self.load_state_dict(params)
         self.params_init = True
-        if self.VERB:
+        if self.verb:
             print(f"Weights loaded!")
         return 1
 
@@ -227,11 +228,9 @@ class SecondaryNode(NodePrototype):
             n_transf_layers: number of local transformer layers
             [**kwargs]
         """
-        super().__init__()
+        super().__init__(**kwargs)
         assert config.vocab_size is not None
         self.config = config
-
-        self.verb = True if "VERB" in kwargs and kwargs["VERB"] else False
 
         # Follow naming convention
         self.transformer = nn.ModuleDict(
@@ -242,7 +241,7 @@ class SecondaryNode(NodePrototype):
         """Load weights"""
         self.load_state_dict(params)
         self.params_init = True
-        if self.VERB:
+        if self.verb:
             print(f"Weights loaded!")
         return 1
 
