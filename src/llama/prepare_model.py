@@ -7,6 +7,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import torch
+from llama.sub.utils.utils import split_and_store
 from sub import Config
 from sub.utils import count_transformer_blocks, split_parameters, download_from_hub, load_from_hf, load_from_pt
 
@@ -54,32 +55,9 @@ def main(args):
     # Split the model
     if not args.n_nodes:
         return
-    chunks, layer_info = split_parameters(state_dict, args.n_nodes)
-    if len(state_dict) > 0:
-        warnings.warn(f"{len(state_dict)} elements have not been used")
-    del state_dict
-    gc.collect()
 
-    # Print result of chunk partition
-    n_secondary = args.n_nodes - 1
-    print("Using the following split:")
-    print(f"- Starter node: {layer_info['N_LAYERS_START']} layers")
-    print(
-        f"- {n_secondary} secondary node{'s' if n_secondary - 1 else ''}: {layer_info['N_LAYERS_SECONDARY']} layers"
-    )
-
-    # FIXME: understand what and how to store chunks properly
-    chunks_subfolder = model_path / "chunks" / f"{args.n_nodes}nodes"
-    os.makedirs(chunks_subfolder, exist_ok=True)
-
-    # Starter
-    starter_file = chunks_subfolder / "model_starter.pth"
-    torch.save(chunks["starter"], starter_file)
-
-    # Secondary (NOTE: zero-indexing in file name)
-    for i in range(n_secondary):
-        current_file = chunks_subfolder / f"model_secondary{i}.pth"
-        torch.save(chunks["secondary"][i], current_file)
+    assert state_dict is not None
+    chunks_subfolder = split_and_store(state_dict, args.n_nodes, model_path, verb=True)
 
     print(f"Done! The chunks have been written to {chunks_subfolder}")
 

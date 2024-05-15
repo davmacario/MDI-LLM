@@ -2,6 +2,7 @@
 
 import gc
 import math
+import os
 import sys
 import warnings
 from contextlib import nullcontext
@@ -325,6 +326,56 @@ def split_parameters(
     return out_chunks, layers_info
 
 
+def split_and_store(
+    model_params: Dict[str, Any], n_nodes: int, ckpt_dir: Union[Path, str], **kwargs,
+) -> Path:
+    """
+    Given a state dict, split it among a number of nodes following the configuration.
+
+    Args:
+        model_params: state dict
+        n_nodes: number of nodes among which to split the model
+        ckpt_dir: checkpoint directory of the model
+
+    Returns:
+        path of the chunks subdirectory (ckpt_dir/chunks/<n>nodes/)
+    """
+    if isinstance(ckpt_dir, str):
+        ckpt_dir = Path(ckpt_dir)
+
+    verb = False if "verb" not in kwargs else kwargs["verb"]
+
+    chunks, layer_info = split_parameters(model_params, n_nodes)
+    if len(model_params):
+        warnings.warn(f"{len(model_params)} elements have not been used")
+    del model_params
+    gc.collect()
+
+    n_secondary = n_nodes - 1
+
+    if verb:
+        print("Using the following split:")
+        print(f"- Starter node: {layer_info['N_LAYERS_START']} layers")
+        print(
+            f"- {n_secondary} secondary node{'s' if n_secondary - 1 else ''}: "
+            f"{layer_info['N_LAYERS_SECONDARY']} layers"
+        )
+
+    chunks_subfolder = ckpt_dir / "chunks" / f"{n_nodes}nodes"
+    os.makedirs(chunks_subfolder, exist_ok=True)
+
+    # Starter
+    starter_file = chunks_subfolder / "model_starter.pth"
+    torch.save(chunks["starter"], starter_file)
+
+    # Secondary (NOTE: zero-indexing in file name)
+    for i in range(n_secondary):
+        current_file = chunks_subfolder / f"model_secondary{i}.pth"
+        torch.save(chunks["secondary"][i], current_file)
+
+    return chunks_subfolder
+
+
 def serialize_params(params: Mapping[str, Any]) -> Dict[str, Any]:
     """
     Serialize a mapping, specifically a state dict, to allow it to be read as a
@@ -364,7 +415,7 @@ def count_transformer_blocks(
 
     Args:
         state_dict: dict containing the model parameters.
-        base_name_transformer: base name of the transformer block, i.e., first "key" in 
+        base_name_transformer: base name of the transformer block, i.e., first "key" in
             the dict.
     """
     layer_name = "h"
