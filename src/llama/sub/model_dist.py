@@ -38,16 +38,14 @@ import tiktoken
 import torch
 import torch.nn as nn
 from sub.config import DTYPE, HEADERLENGTH, TEMPERATURE, TOP_K
+from sub.gptserver import GPTServer
 from sub.model import GPT, Block, Config, build_mask_cache, build_rope_cache
 from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.typing import FileType
 from sub.utils import (load_from_hf, load_from_pt, plot_tokens_per_time,
-                       split_parameters)
+                       split_and_store, split_parameters)
 from torch.nn import functional as F
-
-from llama.sub.gptserver import GPTServer
-from llama.sub.utils.utils import split_and_store
 
 docstring = """
 """
@@ -57,7 +55,6 @@ script_dir = os.path.dirname(__file__)
 logger_wp = logging.getLogger("model_dist")
 logger_wp.setLevel(logging.ERROR)
 
-# FIXME: remove globals if possible
 MODEL_TYPE = ""
 CTX = nullcontext()
 
@@ -164,9 +161,8 @@ class GPTDistributed:
             if (
                 node_chunks_dir.is_dir()
                 and len(list(node_chunks_dir.iterdir())) == self.n_nodes
-                and not self.chunk_path
-            ):
-                # Chunks found
+            ) or self.chunk_path:
+                # Model was already split if either the chunks are found or chunk path is passed
                 self.model_was_split = True
             else:
                 self.model_was_split = False
@@ -240,5 +236,5 @@ class GPTDistributed:
                 node_type=self.node_type,
                 model_config=self.model_config,
                 chunk_path=self.chunk_path,
-                model_device=self.torch_device
+                model_device=self.torch_device,
             )
