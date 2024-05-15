@@ -16,9 +16,13 @@ import cherrypy as cp
 import torch
 import torch.nn.functional as F
 from sub import Config, Tokenizer, get_user_prompt
-from sub.config import HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
 from sub.submodels import SecondaryNode, StarterNode
-from sub.utils import load_sd, loading_bar, plot_tokens_per_time
+from sub.typing import FileType
+from sub.utils import (count_transformer_blocks, load_sd, loading_bar,
+                       plot_tokens_per_time)
+
+from llama.sub.prompts import PromptStyle, has_prompt_style, load_prompt_style
 
 # -------------------------------------------------------------------------------------
 
@@ -79,8 +83,9 @@ class GPTServer:
         node_type: str,
         *,
         model_config: Optional[Config] = None,
-        chunk_path: Optional[Union[str, Path]] = None,
-        model_device: Optional[Union[str, torch.device]] = "cpu",
+        chunk_path: Optional[FileType] = None,
+        tokenizer_dir: Optional[FileType] = None,
+        model_device: Optional[str] = "cpu",
         **kwargs,
     ):
         """
@@ -94,22 +99,18 @@ class GPTServer:
 
         Args:
             node_config: node configuration information (from .json file)
-            node_type: string indicating the node type - to indicate a specific
-                secondary node, the node type should be "secondary:n" where n is the
-                zero-based index
+            node_type: string indicating the node type/role ("starter" or "secondary")
+                - to indicate a specific secondary node, the node type should be
+                "secondary:n" where n is the zero-based index
             *
             model_config: Config object
-            starter_config: extra arguments required for the starter node; expected
-                keys:
-                - params: model parameters (state dict) for starter node
-                - model_config: GPTConfig object
-                - next_node: info about next node
-                - prev_node: info about previous node
-                - tok_metadata_path: path of the tokenizer metadata (for
-                    CharacterTokenizer)
-            chunk_path: path of the model (chunk) - for the starter node, it should be
+            chunk_path: path of the model chunk - for the starter node, it should be
                 provided always [this assumes the model has been partitioned already by
                 the wrapper class GPTDistr]
+            tokenizer_dir: directory containing the tokenizer config files
+            model_device: device where to load the model chunk; can be omitted if
+                specified in the node_config (key "device")
+            [**kwargs: support for 'verb' and 'plots' bool values]
         """
         # NOTE: this implementation supports running 1 node only
         # Override global constants with kwargs
@@ -126,8 +127,9 @@ class GPTServer:
         self.node_config = node_config
 
         if "starter" in node_type:
-            assert chunk_path is not None
-            assert model_config is not None
+            assert chunk_path is not None, "Missing path to the model chunk"
+            assert model_config is not None, "Missing model Config"
+            assert tokenizer_dir is not None, "Missing tokenizer directory"
 
             if isinstance(chunk_path, str):
                 self.model_path = Path(chunk_path)
@@ -166,12 +168,26 @@ class GPTServer:
             )
             # Load chunk
             model_params = load_sd(self.model_path)
-            # TODO: check n. of detected parameters are consistent with chunk
-            # Will empty "model_params"
+            # Check n. of detected parameters are consistent with chunk (count_transformer_blocks)
+            n_layers_detect = count_transformer_blocks(model_params)
+            if self.n_layers_local != n_layers_detect:
+                raise ValueError(
+                    f"The number of detected transformer blocks ({n_layers_detect}) is "
+                    f"different from the expected one {self.n_layers_local}; please "
+                    "re-run the model partition or check the configuration!"
+                )
             self._init_model(model_params, self.n_layers_local)
+            # Clear memory of model_params
+            del model_params
+            model_params = None
+            gc.collect()
+
+            # Initialize tokenizer
+            self._load_tokenizer(tokenizer_dir)
+
         else:
             # model_config and chunk_path may be absent!
-            self.model_config = model_config
+            self.model_config = model_config  # Should be None
             if isinstance(chunk_path, str):
                 self.model_path = Path(chunk_path)
             else:
@@ -219,7 +235,13 @@ class GPTServer:
         self.inference_port_in = self.own_config["inference"]["port_in"]
         self.inference_port_out = self.own_config["inference"]["port_out"]
 
-        # Launch web server
+        self.start_webserv()
+
+    # ---------------------------------------------------------------------------------
+    def start_webserv(self):
+        """
+        Launch the web server.
+        """
         self.webserv_config = {
             "/": {
                 "request.dispatch": cp.dispatch.MethodDispatcher(),
@@ -240,17 +262,46 @@ class GPTServer:
         )
         cp.engine.start()
 
+    def stop_webserv(self):
+        cp.engine.stop()
+
     # ---------------------------------------------------------------------------------
 
-    def start(
+    def launch_starter(
+        self, n_samples: int, max_tokens: int, prompt: str
+    ) -> Tuple[Any, Any]:
+        """
+        Launch processing thread in starter node.
+
+        This method should be called once all the nodes in the network have been
+        initialized.
+
+        Args:
+            n_samples: number of produced samples (pieces of text)
+            max_tokens: max. number of tokens per sample
+        """
+        metrics_dict = {}
+        self.inference_thread = threading.Thread(
+            target=self.start_inference,
+            args=(n_samples, max_tokens, prompt, metrics_dict),
+        )
+        self.inference_thread.start()
+        self.inference_thread.join()
+        return metrics_dict["gen_text"], metrics_dict["gen_time"]
+
+    def start_inference(
         self,
+        *,
         n_samples: Union[None, int] = None,
         max_new_tokens: Union[None, int] = None,
         prompt: Union[None, str] = None,
-    ) -> Union[None, Tuple[List[str], float]]:
+        metrics: Optional[Dict] = None,
+    ):
         """
+        This method is meant to be ran as an independent thread.
+
         Perform normal operation (open sockets, wait for communication from previous
-        node and forward activations to next one)
+        node and forward activations to next one).
 
         In starter nodes, the function launches the operation by creating sockets to the
         nodes and initializing the sample vectors.
@@ -258,29 +309,28 @@ class GPTServer:
         The loop, for starter nodes, is not infinite, as they should know how many
         tokens to generate.
 
-        This function launches an infinite loop on a separate thread in non-starter
+        This function launches an infinite loop on a separate thread in secondary
         nodes, interrupted by the receival of a special message (PUT) over the
         communication channel that triggers a change in a class attribute.
-        Non-starter node do not know how long the generation will take, hence they need
+        Non-starter nodes do not know how long the generation will take, hence they need
         to be stopped "externally" by the starter node once the generation is complete.
 
         Args:
             n_samples: number of samples to be generated (i.e., independent pieces of
                 text)
-            max_new_tokens: ONLY FOR STARTER - maximum number of tokens per generated
+            max_new_tokens (starter only): maximum number of tokens per generated
                 sample
-            prompt: (STARTER ONLY) - string containing the prompt or
+            prompt (starter only): string containing the prompt or
                 "FILE:<filename.txt>"
-
-        Returns:
-            if starter node, return the list of produced samples, else nothing
+            metrics (starter only): dict where the metrics will be inserted (keys:
+                "gen_text" and "gen_time")
         """
         assert self.sock_to_prev is None and self.sock_to_next is None
         assert self.next_node is not None and self.prev_node is not None
         assert self.model_config is not None and self.model is not None
 
         # Configuration for all nodes
-        self.create_sockets()
+        self._create_sockets()
 
         assert self.sock_to_prev is not None and self.sock_to_next is not None
 
@@ -289,32 +339,8 @@ class GPTServer:
             assert max_new_tokens is not None and n_samples is not None
 
             self.n_samples = n_samples
-
-            self._load_tokenizer()
-            if isinstance(self.tok, tiktoken.Encoding):
-                self.tok_encode = lambda s: self.tok.encode(
-                    s, allowed_special={"<|endoftext|>"}
-                )
-            else:
-                self.tok_encode = self.tok.encode
-            self.tok_decode = self.tok.decode
-
-            if VERB:
-                print("[INFO] Tokenizer loaded!")
-                print("[INFO] Starting queue thread")
-            logger_wp.info("Tokenizer loaded!")
-            logger_wp.info("Starting queue thread")
-
-            # Input queue
-            self.in_queue_thread = threading.Thread(
-                target=self._fill_input_queue, daemon=True
-            )
-            self.in_queue_thread.start()
-            # Output queue
-            self.out_queue_thread = threading.Thread(
-                target=self._empty_output_queue, daemon=True
-            )
-            self.out_queue_thread.start()
+            self.running = True
+            self._launch_queue_threads()
 
             if VERB:
                 print(
@@ -324,40 +350,34 @@ class GPTServer:
 
             out_text, gen_time = self._starter_loop(n_samples, max_new_tokens, prompt)
 
-            return out_text, gen_time
+            if metrics is not None:
+                # NOTE: this allows to return values even if this method is on a
+                # separate thread! Just read from this object after `join`
+                metrics["gen_text"] = out_text
+                metrics["gen_time"] = gen_time
         else:
+            # Secondary node
             self.running = True
-            if VERB:
-                print("[INFO] Starting queue thread")
-            logger_wp.info("Starting queue thread")
-            self.in_queue_thread = threading.Thread(
-                target=self._fill_input_queue, daemon=True
-            )
-            self.in_queue_thread.start()
-
-            self.out_queue_thread = threading.Thread(
-                target=self._empty_output_queue, daemon=True
-            )
-            self.out_queue_thread.start()
+            self._launch_queue_threads()
 
             if VERB:
                 print("[INFO] Starting generation loop")
             logger_wp.info("Starting generation loop")
-            self._node_loop()
+            self._secondary_loop()
 
     def shutdown(self) -> int:
         """
         Turn off the node - stop server, close sockets and stop thread.
 
         Returns:
-            1 upon success, 0 otherwise
+            1 upon success, 0 otherwise (exception gets raised)
         """
         if VERB:
             print("[INFO] Shutting down")
 
         try:
             time.sleep(2)
-            self.running = False  # Redundant
+            self.running = False  # Redundant, but ok
             if self.node_type != "starter":
                 if VERB:
                     print("Stopping main thread")
@@ -375,7 +395,7 @@ class GPTServer:
             self.sock_to_next.close()
             if VERB:
                 print("Stopping HTTP server")
-            cp.engine.exit()
+            self.stop_webserv()
             if VERB:
                 print("Closing application")
             return 1
@@ -383,12 +403,29 @@ class GPTServer:
             return 0
 
     # ----- Inference message transmission --------------------------------------------
+    def _launch_queue_threads(self):
+        """
+        Launch the input and output queue threads;
+        This method is called by `start_inference()`.
+        """
+        if VERB:
+            print("[INFO] Starting queue threads")
+        logger_wp.info("Starting queue threads")
+        self.in_queue_thread = threading.Thread(
+            target=self._fill_input_queue, daemon=True
+        )
+        self.in_queue_thread.start()
+
+        self.out_queue_thread = threading.Thread(
+            target=self._empty_output_queue, daemon=True
+        )
+        self.out_queue_thread.start()
 
     def _recv_from_prev(self, size: int) -> bytes:
         """
         Receive a message of the specified size from the previous node.
 
-        Remark: the size specified in socket.recv(<>) is the MAX size that will be read
+        Remark: the size specified in socket.recv(...) is the MAX size that will be read
         from the receiver buffer.
 
         Args:
@@ -465,7 +502,7 @@ class GPTServer:
         assert self.sock_to_prev is not None
         if VERB:
             print(
-                f"[INFO] Started listening on port {self.node_config['inference']['port_in']}"
+                f"[INFO] Started listening on port {self.own_config['inference']['port_in']}"
             )
         self.sock_to_prev.listen(1)
 
@@ -474,7 +511,6 @@ class GPTServer:
 
         if VERB:
             print("-> Done!                     ")
-        self.running = True
 
         if self.node_type != "starter":
             # Open server towards next node
@@ -503,8 +539,8 @@ class GPTServer:
             try:
                 self.sock_to_prev.bind(
                     (
-                        self.node_config["addr"],
-                        self.node_config["inference"]["port_in"],
+                        self.own_config["addr"],
+                        self.own_config["inference"]["port_in"],
                     )
                 )
             except:
@@ -517,7 +553,7 @@ class GPTServer:
 
         if failed:
             raise ConnectionError(
-                f"Unable to bind to ({self.node_config['addr']}, {self.node_config['inference']['port_out']})"
+                f"Unable to bind to ({self.own_config['addr']}, {self.own_config['inference']['port_out']})"
             )
         # Will listen and accept afterwards
 
@@ -534,8 +570,8 @@ class GPTServer:
                 # Bind should work even after some fails
                 self.sock_to_next.bind(
                     (
-                        self.node_config["addr"],
-                        self.node_config["inference"]["port_out"],
+                        self.own_config["addr"],
+                        self.own_config["inference"]["port_out"],
                     )
                 )
                 self.sock_to_next.connect(
@@ -557,7 +593,7 @@ class GPTServer:
 
         if not conn:
             raise ConnectionError(
-                f"Unable to create client socket at ({self.node_config['addr']}, {self.node_config['inference']['port_in']})"
+                f"Unable to create client socket at ({self.own_config['addr']}, {self.own_config['inference']['port_in']})"
             )
 
     def _fill_input_queue(self):
@@ -581,14 +617,14 @@ class GPTServer:
         _n_recv_msg = 0
         while self.running:
             # Receive information from the new socket (exact length)
-            msg = self.recv_from_prev(HEADERLENGTH)
+            msg = self._recv_from_prev(HEADERLENGTH)
 
             # Extract message length from the header
             msg_len = int(msg[:HEADERLENGTH])
             _n_recv_msg += 1
 
             # Read payload (exact size - this is important)
-            msg_payload = self.recv_from_prev(msg_len)
+            msg_payload = self._recv_from_prev(msg_len)
             data = pickle.loads(msg_payload)
             logger_wp.debug(f"Received full message {_n_recv_msg} of length {msg_len}")
 
@@ -627,11 +663,11 @@ class GPTServer:
                 self.out_queue_not_empty.clear()
 
             if "stop" in tx_msg and tx_msg["stop"]:
-                self.send_to_next(tx_msg)
+                self._send_to_next(tx_msg)
                 self.running = False
                 break
 
-            self.send_to_next(tx_msg)
+            self._send_to_next(tx_msg)
 
         if VERB:
             print("Output queue thread stopped")
@@ -664,57 +700,47 @@ class GPTServer:
         """
         assert self.model_config is not None, "No model configuration was found!"
         assert self.model is None, "The model was already initialized!"
+        assert self.model_device is not None, "No device was specified"
 
-        if "starter" in self.node_type:
-            self.model = StarterNode(self.model_config, n_transf_layers)
-        elif "secondary" in self.node_type:
-            self.model = SecondaryNode(self.model_config, n_transf_layers)
-        else:
-            raise ValueError(f"Unrecognized node type {self.node_type}")
+        model_device_torch = torch.device(self.model_device)
 
+        if VERB:
+            print("Initializing local model")
+
+        Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
+        self.model = Model_class(self.model_config, n_transf_layers)
         self.model.load_weights(model_parameters)
-        self.model = self.model.to(self.model_device)
+        self.model = self.model.to(model_device_torch)
+        # NOTE: need to init_kv_cache once the number of samples (batch size) is known
 
-        # Clear memory of model_params
-        del self.model_params
-        self.model_params = None
-        gc.collect()
-
-    def _load_tokenizer(
-        self,
-    ) -> Tokenizer:
+    def _load_tokenizer(self, tokenizer_dir: FileType):
         """
-        Load the tokenizer information from the path specified in class attribute
-        `self.tok_meta_path`.
-        The tokenizer object will be stored in `self.tok`.
+        Load the tokenizer information and prompt style definition from the specified
+        path.
+        The tokenizer object will be stored in `self.tok`, while the prompt style will
+        be stored in `self.prompt_style`.
 
+        Args:
+            tokenizer_dir: path to the directory containing the tokenizer config files
         Returns:
-            the tokenizer object
+            True if the operation was successful
         """
-        if self.tok_meta_path is not None:
-            logger_wp.info(f"Loading tokenizer metadata from {self.tok_meta_path}")
-            if VERB:
-                print(f"[INFO] Loading tokenizer metadata from {self.tok_meta_path}")
+        if VERB:
+            print("Loading tokenizer", end="")
+        self.tok = Tokenizer(tokenizer_dir)
+        tok_dir_path = (
+            Path(tokenizer_dir) if isinstance(tokenizer_dir, str) else tokenizer_dir
+        )
+        if not has_prompt_style(tok_dir_path):
+            assert self.model_config is not None
+            self.prompt_style = PromptStyle.from_config(self.model_config)
         else:
-            logger_wp.info("Loading GPT-2 tokenizer (50k)")
-            if VERB:
-                print("[INFO]: loading GPT-2 tokenizer")
-
-        if self.tok_meta_path.endswith(".pkl"):
-            with open(self.tok_meta_path, "rb") as f:
-                meta = pickle.load(f)
-            self.tok = CharacterTokenizer(meta["stoi"], meta["itos"])
-        elif os.path.isdir(self.tok_meta_path):
-            vocab_path = os.path.join(self.tok_meta_path, "encoder.json")
-            merges_path = os.path.join(self.tok_meta_path, "merges.bpe")
-            self.tok = BPETokenizer(vocab_path, merges_path)
-        else:
-            self.tok = tiktoken.get_encoding("gpt2")  # Class: tiktoken.Encoding
-
-        return self.tok
+            self.prompt_style = load_prompt_style(tok_dir_path)
+        if VERB:
+            print("Tokenizer and prompt style have been loaded!")
 
     def _starter_loop(
-        self, n_samples: int, max_new_tokens: int, prompt: Union[str, None] = None
+        self, n_samples: int, max_new_tokens: int, prompt: Optional[str] = None
     ) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
@@ -732,19 +758,27 @@ class GPTServer:
             total generation time in seconds
         """
         assert self.model_config is not None and self.model is not None
+        assert self.model_device is not None
 
-        if n_samples is None:
-            n_samples = self.n_nodes
-        elif n_samples < 1:
+        if n_samples < 1:
             raise ValueError("Cannot generate less than 1 sample!")
         elif n_samples < self.n_nodes:
             warnings.warn(
                 f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
             )
 
-        if "cuda" in self.device:
+        torch_model_device = torch.model(self.model_device)
+        if VERB:
+            print("Initializing model cache")
+        self.model.set_kv_cache(batch_size=n_samples, device=torch_model_device)
+        self.model.eval()
+
+        # TODO: figure out KV cache usage - it is initialized to the batch size, but we
+        # need to use only a specific one of the n_samples dimensions for each sample
+
+        if "cuda" in self.model_device:
             device_type = "cuda"
-        elif "mps" in self.device:
+        elif "mps" in self.model_device:
             device_type = "mps"
         else:
             device_type = "cpu"
@@ -765,14 +799,15 @@ class GPTServer:
         else:
             start = get_user_prompt(prompt, n_samples, verb=VERB)
 
+        start_styled = [self.prompt_style.apply(s) for s in start]
+
         assert len(start) == n_samples
 
-        start_ids = [self.tok_encode(txt) for txt in start]
         idx = [
-            torch.tensor(start_txt, dtype=torch.long, device=self.device)[None, ...]
-            for start_txt in start_ids
+            self.tok.encode(txt, device=torch.device(self.model_device))
+            for txt in start_styled
         ]
-
+        # TODO: make prompt_size and input_pos a list of n_samples elements
         self.model.eval()
         start_time = time.time()
         if PLOTS:
@@ -807,8 +842,13 @@ class GPTServer:
                             sample_in == sample_id
                         ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
 
-                        idx_from_fin = in_msg["data"].to(self.device)
-                        logits = self.model.forward_last(idx_from_fin)
+                        idx_from_fin = in_msg["data"].to(self.model_device)
+
+                        # TODO: store one input_pos for sample used
+                        T = idx_from_fin.size(1)  # FIXME: dimension
+                        input_pos = torch.arange(0, T, device=self.model_device)
+                        logits = self.model(idx_from_fin, input_pos, first_pass=False)
+
                         logits = logits[:, -1, :] / self.temperature
                         if self.top_k is not None:
                             v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
@@ -873,7 +913,7 @@ class GPTServer:
 
         return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
 
-    def _node_loop(self):
+    def _secondary_loop(self):
         """
         Execution loop for non-starter nodes. This method must be used as the target of
         a thread that is launched once the node has been correctly initialized.
@@ -901,6 +941,8 @@ class GPTServer:
             if device_type == "mps"
             else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
+
+        # NOTE: can only initialize cache when the first samples are received!
 
         self.model.eval()
         loopsigns = ["|", "/", "-", "\\"]
@@ -966,57 +1008,77 @@ class GPTServer:
             previous and next, then start generation, i.e., wait for incoming data
             through the sockets to be passed through the local model chunk.
         """
-        if self.node_type is None and self.model is None:  # Only for non-init nodes
+        if (
+            self.node_type is None or "secondary" in self.node_type
+        ) and self.model is None:  # Only for non-init nodes
             if len(path) > 0 and path[0] == "init":
                 assert not self.running
                 init_msg = pickle.loads(cp.request.body.read())
-                self.node_type = init_msg["role"]
+                if self.node_type is None:
+                    self.node_type = init_msg["role"]
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
-                self.model_config = GPTConfig(**init_msg["model_config"])
+                # Assume model config is not initialized
+                self.model_config = Config(**init_msg["model_config"])
+                self.n_nodes = init_msg["n_nodes"]
+                self.n_layers_local = N_LAYERS_NODES[self.n_nodes][
+                    self.model_config.n_layer
+                ]["N_LAYERS_SECONDARY"]
+
                 if "params" in init_msg:
                     if VERB:
                         print("Received parameters from starter")
-                    self.model_params = init_msg["params"]
+                    chunk_sd = init_msg["params"]
                 else:
-                    assert self.chunk_path is not None
+                    if self.model_path is None:
+                        raise RuntimeError(
+                            "The received message did not contain the model parameters "
+                            "- please specify a model chunk path when initializing "
+                            "GPTServer object"
+                        )
                     if VERB:
                         print("Loading parameters from disk")
-                    chunk_cont = torch.load(self.chunk_path)
-                    # Check compatibility (all keys of chunk_cont should be in init_msg)
-                    assert all(
-                        [
-                            k in init_msg["model_config"]
-                            for k in chunk_cont["model_args"]
-                        ]
-                    ), f"Different settings:\n{chunk_cont['model_args']}\n\n{init_msg['model_config']}"
-                    self.model_params = chunk_cont["model"]
-                    del chunk_cont
-                    gc.collect()
-                self.n_nodes = init_msg["n_nodes"]
+
+                    chunk_sd = load_sd(self.model_path)
+
+                # Check
+                n_layers_detect = count_transformer_blocks(chunk_sd)
+                if self.n_layers_local != n_layers_detect:
+                    raise ValueError(
+                        f"The number of detected transformer blocks ({n_layers_detect}) is "
+                        f"different from the expected one {self.n_layers_local}; please "
+                        "re-run the model partition or check the configuration!"
+                    )
+
+                self._init_model(chunk_sd, self.n_layers_local)
+                # Clear memory of model_params
+                del chunk_sd
+                chunk_sd = None
+                gc.collect()
+
                 self.n_samples = init_msg["n_samples"]
+
                 if VERB:
                     print(f"{self.n_nodes} Nodes, generating {self.n_samples} samples")
 
-                # Set up the node
-                self.init_model(init_msg["n_layers"])
-                assert (
-                    self.model_params is None
-                ), "The model parameters were not flushed!"
-
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
+                # FIXME: review threads
                 logger_wp.info("Received initialization information!")
-                self._running_thread = threading.Thread(target=self.start, daemon=True)
+                self._running_thread = threading.Thread(
+                    target=self.start_inference, daemon=True
+                )
                 self._running_thread.start()
                 cp.response.status = 200
             else:
                 raise cp.HTTPError(404, "Not found")
-        elif self.model is None:
+        elif self.model is not None:
             raise cp.HTTPError(
                 403,
                 f"Failed to configure node - the model was already initialized: {self.node_type}",
             )
+        else:
+            raise cp.HTTPError(403, "Unable to initialize node!")
 
     def PUT(self, *path):
         """
