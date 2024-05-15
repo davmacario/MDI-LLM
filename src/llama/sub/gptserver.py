@@ -272,7 +272,7 @@ class GPTServer:
 
     def launch_starter(
         self, n_samples: int, max_tokens: int, prompt: str
-    ) -> Tuple[Any, Any]:
+    ) -> Tuple[List[str], int]:
         """
         Launch processing thread in starter node.
 
@@ -282,11 +282,23 @@ class GPTServer:
         Args:
             n_samples: number of produced samples (pieces of text)
             max_tokens: max. number of tokens per sample
+            prompt: prompt from command line argument (can be prompt itself or FILE:...)
+
+        Returns:
+            generated text samples (list of strings)
+            generation time (total)
         """
+        if self.role != "starter":
+            raise ValueError(f"Cannot run `launch_starter` for node type {self.role}")
         metrics_dict = {}
         self.inference_thread = threading.Thread(
             target=self.start_inference,
-            args=(n_samples, max_tokens, prompt, metrics_dict),
+            args=(n_samples,),
+            kwargs={
+                "max_new_tokens": max_tokens,
+                "prompt": prompt,
+                "metrics": metrics_dict,
+            },
         )
         self.inference_thread.start()
         self.inference_thread.join()
@@ -294,10 +306,10 @@ class GPTServer:
 
     def start_inference(
         self,
+        n_samples: int,
         *,
-        n_samples: Union[None, int] = None,
-        max_new_tokens: Union[None, int] = None,
-        prompt: Union[None, str] = None,
+        max_new_tokens: Optional[int] = None,
+        prompt: Optional[str] = None,
         metrics: Optional[Dict] = None,
     ):
         """
@@ -323,8 +335,7 @@ class GPTServer:
                 text)
             max_new_tokens (starter only): maximum number of tokens per generated
                 sample
-            prompt (starter only): string containing the prompt or
-                "FILE:<filename.txt>"
+            prompt (starter only): string containing the prompt or "FILE:<filename.txt>"
             metrics (starter only): dict where the metrics will be inserted (keys:
                 "gen_text" and "gen_time")
         """
@@ -334,12 +345,11 @@ class GPTServer:
 
         # Configuration for all nodes
         self._create_sockets()
-
         assert self.sock_to_prev is not None and self.sock_to_next is not None
 
         # Differentiate between different types
         if self.node_type == "starter":
-            assert max_new_tokens is not None and n_samples is not None
+            assert max_new_tokens is not None
 
             self.n_samples = n_samples
             self.running = True
@@ -1088,6 +1098,14 @@ class GPTServer:
             Receive configuration info from the starter node and start connection with
             previous and next, then start generation, i.e., wait for incoming data
             through the sockets to be passed through the local model chunk.
+            Message fields:
+                role ("secondary:n" - does NOT overwrite the previous node given at init)
+                prev_node (as in configuration json file)
+                next_node (as in configuration json file)
+                model_config (serialized with Config.asdict())
+                n_nodes (number of total network nodes)
+                [params] (model parameters - needed if no chunk path was passed)
+                n_samples (number of produced samples)
         """
         if (
             self.node_type is None or "secondary" in self.node_type
@@ -1119,7 +1137,6 @@ class GPTServer:
                         )
                     if VERB:
                         print("Loading parameters from disk")
-
                     chunk_sd = load_sd(self.model_path)
 
                 # Check
