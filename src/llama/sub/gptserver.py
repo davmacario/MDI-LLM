@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from sub import Config, Tokenizer, get_user_prompt
 from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.model import KVCache, sample
 from sub.submodels import SecondaryNode, StarterNode
 from sub.typing import FileType
 from sub.utils import (count_transformer_blocks, load_sd, loading_bar,
@@ -153,6 +154,7 @@ class GPTServer:
                     "Missing model device information - either specify it in `node_config`"
                     " or pass argument `model_device` to this function"
                 )
+            self.torch_model_device = torch.device(self.model_device)
             self.n_nodes = 1 + len(node_config["secondary"])
             self.next_node = None if self.n_nodes == 1 else node_config["secondary"][0]
             self.prev_node = None if self.n_nodes == 1 else node_config["secondary"][-1]
@@ -225,6 +227,7 @@ class GPTServer:
                     "Missing model device information - either specify it in `node_config`"
                     " or pass argument `model_device` to this function"
                 )
+            self.torch_model_device = torch.device(self.model_device)
 
             self._running_thread = threading.Thread()  # Placeholder FIXME
             # NOTE: the model will be initialized once config info is received (POST)
@@ -702,15 +705,13 @@ class GPTServer:
         assert self.model is None, "The model was already initialized!"
         assert self.model_device is not None, "No device was specified"
 
-        model_device_torch = torch.device(self.model_device)
-
         if VERB:
             print("Initializing local model")
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         self.model = Model_class(self.model_config, n_transf_layers)
         self.model.load_weights(model_parameters)
-        self.model = self.model.to(model_device_torch)
+        self.model = self.model.to(self.torch_model_device)
         # NOTE: need to init_kv_cache once the number of samples (batch size) is known
 
     def _load_tokenizer(self, tokenizer_dir: FileType):
@@ -766,13 +767,10 @@ class GPTServer:
             warnings.warn(
                 f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
             )
+        self.n_samples = n_samples
 
-        torch_model_device = torch.model(self.model_device)
         if VERB:
             print("Initializing model cache")
-        self.model.set_kv_cache(batch_size=n_samples, device=torch_model_device)
-        self.model.eval()
-
         # TODO: figure out KV cache usage - it is initialized to the batch size, but we
         # need to use only a specific one of the n_samples dimensions for each sample
 
@@ -804,11 +802,43 @@ class GPTServer:
         assert len(start) == n_samples
 
         idx = [
-            self.tok.encode(txt, device=torch.device(self.model_device))
+            self.tok.encode(txt, device=self.torch_model_device).view(1, -1)
             for txt in start_styled
         ]
-        # TODO: make prompt_size and input_pos a list of n_samples elements
+
+        # IDEA: use set_kv_cache for 1st sample, others are init directly
+        # This is needed because set_kv_cache also initializes the mask, which is the
+        # same regardless of samples (matrix of 1s and 0s)
+        self.model.set_kv_cache(batch_size=1, device=self.torch_model_device)
+        # Prompt size T and input_pos are now lists of n_samples elements
+        T_i: List[int] = []  # Contains size of context of each prompt
+        input_pos: List[torch.Tensor] = []  # Will contain the input pos. of all samples
+        kvcaches: List[List[KVCache]] = []
+        for i in range(n_samples):
+            T_i.append(idx[i].size(1))
+            input_pos.append(torch.arange(0, T_i[i], device=self.torch_model_device))
+
+            kvc_sublist: List[KVCache] = []
+            for block in self.model.transformer.h:
+                # Build kv cache individually for each attn layer
+                if i == 0:
+                    # Copy the already init KVCaches of the blocks
+                    kvc_sublist.append(block.attn.kv_cache)
+                else:
+                    # Create caches with block.attn.build_kv_cache()
+                    kvc_sublist.append(
+                        block.attn.build_kv_cache(
+                            batch_size=1,
+                            max_seq_length=self.model.max_seq_length,
+                            rope_cache_length=self.model.cos.size(-1),
+                            device=self.torch_model_device,
+                            dtype=DTYPE,
+                        )
+                    )
+            kvcaches.append(kvc_sublist)
+
         self.model.eval()
+
         start_time = time.time()
         if PLOTS:
             self.tok_time.append((0, 0))
@@ -823,7 +853,8 @@ class GPTServer:
                     )
                     if PLOTS:
                         self.tok_time.append((k, time.time() - start_time))
-                    sample_id = k % n_samples  # Identify sample
+                    # Identify sample
+                    sample_id = k % n_samples
 
                     if k >= n_samples:
                         # We are not in the first iteration (k starts from 0)
@@ -844,18 +875,13 @@ class GPTServer:
 
                         idx_from_fin = in_msg["data"].to(self.model_device)
 
-                        # TODO: store one input_pos for sample used
-                        T = idx_from_fin.size(1)  # FIXME: dimension
-                        input_pos = torch.arange(0, T, device=self.model_device)
-                        logits = self.model(idx_from_fin, input_pos, first_pass=False)
-
-                        logits = logits[:, -1, :] / self.temperature
-                        if self.top_k is not None:
-                            v, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
-                            logits[logits < v[:, [-1]]] = -float("Inf")
-                        probs = F.softmax(logits, dim=1)
-                        idx_next = torch.multinomial(probs, num_samples=1)
+                        # NOTE: no KV caching here - no need to pass input_pos
+                        logits = self.model(idx_from_fin, first_pass=False)
+                        idx_next = sample(
+                            logits, temperature=self.temperature, top_k=self.top_k
+                        )
                         idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
+                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
 
                     # Send to next iff not at the last token
                     if k < (n_samples * (max_new_tokens - 1)):
@@ -865,12 +891,16 @@ class GPTServer:
                             if idx[sample_id].size(1) <= self.model_config.block_size
                             else idx[sample_id][:, -self.model_config.block_size :]
                         )
-                        # Forward in local model
-                        idx_cond = self.model(idx_cond)
+                        # NOTE: Swap KVCache for correct sample
+                        curr_kvcache = kvcaches[sample_id]
+                        for ind_b, block in enumerate(self.model.transformer.h):
+                            block.attn.kv_cache = curr_kvcache[ind_b]
 
-                        # Build message
+                        # Forward in local model (first piece)
+                        idx_cond = self.model(idx_cond, input_pos[sample_id])
+
+                        # Send message
                         out_msg = self._build_msg(idx_cond, sample_id)
-
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
 
@@ -923,11 +953,12 @@ class GPTServer:
         assert self.sock_to_prev is not None and self.sock_to_next is not None
         assert self.model is not None and self.model_config is not None
         assert self.n_samples is not None
+        assert self.model_device is not None
 
         # Should be overrided by kwargs
-        if "cuda" in self.device:
+        if "cuda" in self.model_device:
             device_type = "cuda"
-        elif "mps" in self.device:
+        elif "mps" in self.model_device:
             device_type = "mps"
         else:
             device_type = "cpu"
@@ -942,12 +973,42 @@ class GPTServer:
             else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
-        # NOTE: can only initialize cache when the first samples are received!
+        # IDEA: use set_kv_cache for 1st sample, others are init directly
+        # This is needed because set_kv_cache also initializes the mask, which is the
+        # same regardless of samples (matrix of 1s and 0s)
+        self.model.set_kv_cache(batch_size=1, device=self.torch_model_device)
+        kvcaches: List[List[KVCache]] = []
+        for i in range(self.n_samples):
+            kvc_sublist: List[KVCache] = []
+            for block in self.model.transformer.h:
+                # Build kv cache individually for each attn layer
+                if i == 0:
+                    # Copy the already init KVCaches of the blocks
+                    kvc_sublist.append(block.attn.kv_cache)
+                else:
+                    # Create caches with block.attn.build_kv_cache()
+                    kvc_sublist.append(
+                        block.attn.build_kv_cache(
+                            batch_size=1,
+                            max_seq_length=self.model.max_seq_length,
+                            rope_cache_length=self.model.cos.size(-1),
+                            device=self.torch_model_device,
+                            dtype=DTYPE,
+                        )
+                    )
+            kvcaches.append(kvc_sublist)
 
         self.model.eval()
+
+        # Prompt size T and input_pos are now lists of n_samples elements - will be init
+        # once the generation starts
+        T_i: List[int] = []  # Contains size of context of each prompt
+        input_pos: List[torch.Tensor] = []  # Will contain the input pos. of all samples
+
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
+        is_first_iter = True  # True for the first n_samples iters
         with torch.no_grad():
             with ctx:
                 while self.running:
@@ -961,24 +1022,44 @@ class GPTServer:
                         self.in_queue_not_empty.clear()
 
                     if "stop" in in_msg:
-                        print("[DEBUG] HERE")
+                        print("[DEBUG] Received stopping message over socket")
 
                     if self.running:
-                        samp_ind = in_msg["sample_index"]
+                        sample_id = in_msg["sample_index"]
                         assert (
-                            exp_ind == samp_ind
-                        ), f"Expected sample index {exp_ind}, received {samp_ind}"
-                        exp_ind = (samp_ind + 1) % self.n_samples
+                            exp_ind == sample_id
+                        ), f"Expected sample index {exp_ind}, received {sample_id}"
+                        exp_ind = (sample_id + 1) % self.n_samples
 
-                        ins = in_msg["data"].to(self.device)
+                        if iter >= self.n_samples:
+                            is_first_iter = False
+
+                        idx = in_msg["data"].to(self.torch_model_device)
+                        if is_first_iter:
+                            # Initialization of the input_pos
+                            T_i.append(idx.size(1))
+                            input_pos.append(
+                                torch.arange(
+                                    0, T_i[sample_id], device=self.torch_model_device
+                                )
+                            )
+
                         print(f"> Generating {loopsigns[iter % 4]}", end="\r")
+                        # Swap KVCache
+                        curr_kvcache = kvcaches[sample_id]
+                        for ind_b, block in enumerate(self.model.transformer.h):
+                            block.attn.kv_cache = curr_kvcache[ind_b]
+
                         # Forward pass
-                        outs = self.model(ins)
+                        outs = self.model(idx, input_pos=input_pos[sample_id])
+
                         # Build msg
-                        out_msg = self._build_msg(outs, samp_ind)
+                        out_msg = self._build_msg(outs, sample_id)
                         # Send to next
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
+
+                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
                         iter += 1
                     else:
                         print("> Generation completed!")
