@@ -202,18 +202,24 @@ class GPTServer:
                     raise ValueError(
                         "Need to specify which of the secondary nodes this is"
                     )
-                elif len(node_config["secondary"]) == 1:
+                elif "secondary" in node_config and len(node_config["secondary"]) == 1:
                     self.role = "secondary:0"
                     secondary_index = 0
                 else:
                     raise RuntimeError(
-                        "No secondary nodes have been specified in the configuration file!"
+                        "Unable to infer which secondary node this is - please specify "
+                        "the role as 'secondary:n' where 'n' is the index"
                     )
             else:
                 secondary_index = int(split_node_type[1])
                 self.role = f"secondary:{secondary_index}"
 
-            self.own_config = node_config["secondary"][secondary_index]
+            # For secondary nodes, `node_config` can also be just the specific node
+            self.own_config = (
+                node_config
+                if "secondary" not in node_config
+                else node_config["secondary"][secondary_index]
+            )
             self.starter_addr = self.own_config["communication"]["starter_addr"]
             # Possibly get device info if found in config file
             try:
