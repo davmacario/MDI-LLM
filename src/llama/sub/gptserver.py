@@ -15,15 +15,15 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cherrypy as cp
 import torch
 import torch.nn.functional as F
-from sub import Config, Tokenizer, get_user_prompt
 from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
-from sub.model import KVCache, sample
+from sub.model import Config, KVCache, sample
+from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
+                         load_prompt_style)
 from sub.submodels import SecondaryNode, StarterNode
+from sub.tokenizer import Tokenizer
 from sub.typing import FileType
 from sub.utils import (count_transformer_blocks, load_sd, loading_bar,
                        plot_tokens_per_time)
-
-from llama.sub.prompts import PromptStyle, has_prompt_style, load_prompt_style
 
 # -------------------------------------------------------------------------------------
 
