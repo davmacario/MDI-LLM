@@ -101,7 +101,7 @@ class GPTServer:
         Args:
             node_config: node configuration information (from .json file)
             node_type: string indicating the node type/role ("starter" or "secondary")
-                - to indicate a specific secondary node, the node type should be
+                to indicate a specific secondary node, the node type should be
                 "secondary:n" where n is the zero-based index
             *
             model_config: Config object
@@ -110,7 +110,7 @@ class GPTServer:
                 the wrapper class GPTDistr]
             tokenizer_dir: directory containing the tokenizer config files
             model_device: device where to load the model chunk; can be omitted if
-                specified in the node_config (key "device")
+                specified in the node_config (key "device" - will override arg!)
             [**kwargs: support for 'verb' and 'plots' bool values]
         """
         # NOTE: this implementation supports running 1 node only
@@ -140,7 +140,7 @@ class GPTServer:
             # The node_config for the starter is the whole json! It should know the
             # other nodes in the network to initialize them
             self.role = "starter"
-            self.own_config = node_config["starter"]
+            self.own_config = node_config["nodes"]["starter"]
 
             # Possibly get device info if found in config file
             try:
@@ -155,9 +155,13 @@ class GPTServer:
                     " or pass argument `model_device` to this function"
                 )
             self.torch_model_device = torch.device(self.model_device)
-            self.n_nodes = 1 + len(node_config["secondary"])
-            self.next_node = None if self.n_nodes == 1 else node_config["secondary"][0]
-            self.prev_node = None if self.n_nodes == 1 else node_config["secondary"][-1]
+            self.n_nodes = 1 + len(node_config["nodes"]["secondary"])
+            self.next_node = (
+                None if self.n_nodes == 1 else node_config["nodes"]["secondary"][0]
+            )
+            self.prev_node = (
+                None if self.n_nodes == 1 else node_config["nodes"]["secondary"][-1]
+            )
 
             # Extract model params (to cpu)
             self.model_config = model_config
@@ -198,11 +202,14 @@ class GPTServer:
             # Parse role name to get right node config
             split_node_type = node_type.split(":")
             if len(split_node_type) == 1:
-                if len(node_config["secondary"]) > 1:
+                if len(node_config["nodes"]["secondary"]) > 1:
                     raise ValueError(
                         "Need to specify which of the secondary nodes this is"
                     )
-                elif "secondary" in node_config and len(node_config["secondary"]) == 1:
+                elif (
+                    "secondary" in node_config["nodes"]
+                    and len(node_config["nodes"]["secondary"]) == 1
+                ):
                     self.role = "secondary:0"
                     secondary_index = 0
                 else:
@@ -218,7 +225,7 @@ class GPTServer:
             self.own_config = (
                 node_config
                 if "secondary" not in node_config
-                else node_config["secondary"][secondary_index]
+                else node_config["nodes"]["secondary"][secondary_index]
             )
             self.starter_addr = self.own_config["communication"]["starter_addr"]
             # Possibly get device info if found in config file
