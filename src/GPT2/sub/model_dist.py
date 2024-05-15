@@ -1255,7 +1255,6 @@ class GPTDistributed:
 
         with open(settings_path, "r") as f:
             self.nodes_info = json.load(f)
-            f.close()
 
         logger_wp.info("Loaded nodes information JSON file!")
 
