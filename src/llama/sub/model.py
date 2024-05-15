@@ -286,7 +286,7 @@ class GPT(nn.Module):
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
-        self.max_seq_length = self.config.block_size
+        self.max_seq_length = self.config.block_size  # Calls the setter (7j)
         self.mask_cache: Optional[torch.Tensor] = None
 
     @property
@@ -401,7 +401,7 @@ class GPT(nn.Module):
         the triangular mask.
         """
         if rope_cache_length is None:
-            rope_cache_length = self.cos.size(-1)
+            rope_cache_length = self.cos.size(-1)  # Should be self._max_seq_length
         max_seq_length = self.max_seq_length
 
         # initialize the kv cache for all blocks
@@ -559,7 +559,7 @@ class CausalSelfAttention(nn.Module):
         self.proj = nn.Linear(
             config.head_size * config.n_head, config.n_embd, bias=config.bias
         )
-        # disabled by default
+        # Disabled by default
         self.kv_cache: Optional[KVCache] = None
 
         self.config = config
@@ -570,7 +570,7 @@ class CausalSelfAttention(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        input_pos: Optional[torch.Tensor] = None,
+        input_pos: Optional[torch.Tensor] = None,  # sample_index_batch (add support for only working on one element of the batch to handle MDI)
     ) -> torch.Tensor:
         # batch size, sequence length, embedding dimensionality (n_embd)
         B, T, C = x.size()
