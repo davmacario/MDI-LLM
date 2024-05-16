@@ -140,7 +140,7 @@ class StarterNode(NodePrototype):
             )
         )
         self.lm_head = nn.Linear(
-            config.n_embd, config.vocab_size, bias=config.lm_head_bias
+            config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias
         )
         self.max_seq_length = self.config.block_size
 
