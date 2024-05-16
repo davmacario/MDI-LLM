@@ -50,6 +50,7 @@ class GPTServer:
     prev_node: Optional[Dict] = None
     model_params: Optional[Dict] = None
     model_config: Optional[Config] = None
+    n_samples: Optional[int] = None
 
     # True iff the model has been initialized and it is ready to perform inference.
     running: bool = False
@@ -58,9 +59,6 @@ class GPTServer:
     sock_to_prev_prop: Tuple = ()  # NOTE: used now
     sock_to_next: Optional[socket.socket] = None
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
-
-    n_samples: Optional[int] = None
-
     stop_msg = {"stop": True}
 
     # Input message queue
@@ -78,6 +76,11 @@ class GPTServer:
 
     # Stats - n. tokens/time (tuples)
     tok_time: List = []
+
+    # Threads
+    inference_thread = threading.Thread()
+    in_queue_thread = threading.Thread()
+    out_queue_thread = threading.Thread()
 
     def __init__(
         self,
@@ -281,6 +284,7 @@ class GPTServer:
 
     def stop_webserv(self):
         cp.engine.stop()
+        cp.engine.exit()
 
     # ---------------------------------------------------------------------------------
 
@@ -317,6 +321,7 @@ class GPTServer:
         )
         self.inference_thread.start()  # Wait for the loop to conclude!!
         self.inference_thread.join()
+        self.shutdown()
         return metrics_dict["gen_text"], metrics_dict["gen_time"]
 
     def start_inference(
@@ -387,11 +392,37 @@ class GPTServer:
             # Secondary node
             self.running = True
             self._launch_queue_threads()
-
             if VERB:
                 print("[INFO] Starting generation loop")
             logger_wp.info("Starting generation loop")
             self._secondary_loop()
+
+
+    def stop_generation(self) -> int:
+
+        try:
+            time.sleep(2)
+            self.running = False  # Redundant, but ok
+            if "starter" not in self.role:
+                if VERB:
+                    print("Stopping main thread")
+                self.inference_thread.join()
+            if VERB:
+                print("Stopping input queue thread")
+            self.in_queue_thread.join()
+            if VERB:
+                print("Stopping output queue thread")
+            self.out_queue_thread.join()
+            if VERB:
+                print("Stopping input and output sockets")
+            self.sock_to_prev_prop[0].close()
+            self.sock_to_prev.close()
+            self.sock_to_next.close()
+            return 1
+        except:
+            return 0
+
+
 
     def shutdown(self) -> int:
         """
@@ -404,23 +435,7 @@ class GPTServer:
             print("[INFO] Shutting down")
 
         try:
-            time.sleep(2)
-            self.running = False  # Redundant, but ok
-            if self.node_type != "starter":
-                if VERB:
-                    print("Stopping main thread")
-                self._running_thread.join()
-            if VERB:
-                print("Stopping input queue thread")
-            self.in_queue_thread.join()
-            if VERB:
-                print("Stopping output queue thread")
-            self.out_queue_thread.join()
-            if VERB:
-                print("Stopping input and output sockets")
-            self.sock_to_prev_prop[0].close()
-            self.sock_to_prev.close()
-            self.sock_to_next.close()
+            assert self.stop_generation()
             if VERB:
                 print("Stopping HTTP server")
             self.stop_webserv()
@@ -693,9 +708,8 @@ class GPTServer:
             if "stop" in tx_msg and tx_msg["stop"]:
                 self._send_to_next(tx_msg)
                 self.running = False
-                break
-
-            self._send_to_next(tx_msg)
+            else:
+                self._send_to_next(tx_msg)
 
         if VERB:
             print("Output queue thread stopped")
@@ -796,8 +810,6 @@ class GPTServer:
 
         if VERB:
             print("Initializing model cache")
-        # TODO: figure out KV cache usage - it is initialized to the batch size, but we
-        # need to use only a specific one of the n_samples dimensions for each sample
 
         if "cuda" in self.model_device:
             device_type = "cuda"
@@ -844,9 +856,9 @@ class GPTServer:
             input_pos.append(torch.arange(0, T_i[i], device=self.torch_model_device))
 
             kvc_sublist: List[KVCache] = []
-            for i, block in enumerate(self.model.transformer.h):
-                if VERB:
-                    print(f"Initializing KV cache {i}")
+            if VERB:
+                print(f"Initializing KV cache for sample {i}")
+            for j, block in enumerate(self.model.transformer.h):
                 # Build kv cache individually for each attn layer
                 if i == 0:
                     # Copy the already init KVCaches of the blocks
@@ -963,14 +975,14 @@ class GPTServer:
             )
 
         # Send stop message to the next (no queue used)
-        self.running = False
         if VERB:
             print("[INFO] Sending stopping message over socket  ")
         self.out_message_queue.append(self.stop_msg)
         self.out_queue_not_empty.set()
-        logger_wp.info("Generation completed")
+        self.running = False
         if VERB:
             print("[INFO] Generation completed!                          ")
+        logger_wp.info("Generation completed")
 
         print(f"Size of produced tensors: {idx[0].size()}")
 
@@ -1013,6 +1025,8 @@ class GPTServer:
         kvcaches: List[List[KVCache]] = []
         for i in range(self.n_samples):
             kvc_sublist: List[KVCache] = []
+            if VERB:
+                print(f"Initializing KV cache for sample {i}")
             for block in self.model.transformer.h:
                 # Build kv cache individually for each attn layer
                 if i == 0:
@@ -1041,7 +1055,7 @@ class GPTServer:
         loopsigns = ["|", "/", "-", "\\"]
         iter = 0
         exp_ind = 0  # Expected sample index from previous
-        is_first_iter = True  # True for the first n_samples iters
+        first_glob_iter = True  # True for the first n_samples iters
         with torch.no_grad():
             with ctx:
                 while self.running:
@@ -1056,6 +1070,7 @@ class GPTServer:
 
                     if "stop" in in_msg:
                         print("[DEBUG] Received stopping message over socket")
+                        self.running = False  # Redundant
 
                     if self.running:
                         sample_id = in_msg["sample_index"]
@@ -1065,10 +1080,10 @@ class GPTServer:
                         exp_ind = (sample_id + 1) % self.n_samples
 
                         if iter >= self.n_samples:
-                            is_first_iter = False
+                            first_glob_iter = False
 
                         idx = in_msg["data"].to(self.torch_model_device)
-                        if is_first_iter:
+                        if first_glob_iter:
                             # Initialization of the input_pos
                             T_i.append(idx.size(1))
                             input_pos.append(
@@ -1101,7 +1116,7 @@ class GPTServer:
                         self.running = False
 
         if VERB:
-            print("Node loop stopped")
+            print("Node inference loop stopped")
 
     # ----- REST API ------------------------------------------------------------------
 
@@ -1185,10 +1200,10 @@ class GPTServer:
                     print(f"[INFO] Starting operation - {self.node_type} node")
                 # FIXME: review threads
                 logger_wp.info("Received initialization information!")
-                self._running_thread = threading.Thread(
+                self.inference_thread = threading.Thread(
                     target=self.start_inference, daemon=True, args=(self.n_samples,)
                 )
-                self._running_thread.start()
+                self.inference_thread.start()
                 cp.response.status = 200
             else:
                 raise cp.HTTPError(404, "Not found")
@@ -1204,11 +1219,11 @@ class GPTServer:
         """
         Used by the starter to stop running nodes at the end of the generation.
         """
-        if self.node_type != "secondary":
+        if "secondary" not in self.node_type:
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
             if len(path) > 0 and path[0] == "stop":
-                self._end_thr = threading.Thread(target=self.shutdown, daemon=True)
+                self._end_thr = threading.Thread(target=self.shutdown)
                 self._end_thr.start()
                 # self._end_thr.join()  # cannot wait, since thread stops server
                 if VERB:

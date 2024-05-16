@@ -291,14 +291,17 @@ class GPTDistributed:
                     print(smpl, "\n")  # [: find_eot(smpl)], "\n")
                 print("-------------------------------------------------")
                 print(f"Total generation time: {time_gen}")
+
+                self.stop_nodes()
+
             except KeyboardInterrupt:
-                # TODO: shutdown
+                self.gpt_serv.shutdown()
                 print("Node was stopped!")
         else:
             try:
                 cp.engine.block()  # Same as while True: time.sleep(...)
             except KeyboardInterrupt:
-                # TODO: Shutdown
+                self.gpt_serv.shutdown()
                 print("Node was stopped!")
 
     # ---------------------------------------------------------------------------------
@@ -386,6 +389,20 @@ class GPTDistributed:
             logger_wp.info(f"Secondary node {i} was initialized successfully")
 
         return out
+
+    def stop_nodes(self) -> int:
+        """
+        Send a PUT request to all nodes triggering the application interruption.
+        """
+        out = 1
+        for sec_node in self.node_config["nodes"]["secondary"]:
+            target_addr = sec_node["addr"]
+            target_port = sec_node["communication"]["port"]
+
+            addr = f"http://{target_addr}:{target_port}/stop"
+            out *= self._request_to_node("put", addr, "")
+        return out
+
 
     def _request_to_node(
         self, req_type: str, addr: str, content: Any, max_n_requests: int = 100
