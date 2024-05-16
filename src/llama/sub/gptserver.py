@@ -35,6 +35,7 @@ logger_wp.setLevel(logging.ERROR)
 
 MODEL_TYPE = ""
 VERB = False
+PLOTS = False
 
 
 class GPTServer:
@@ -284,7 +285,7 @@ class GPTServer:
     # ---------------------------------------------------------------------------------
 
     def launch_starter(
-        self, n_samples: int, max_tokens: int, prompt: str
+        self, n_samples: int, max_tokens: int, prompt: Optional[str] = None
     ) -> Tuple[List[str], int]:
         """
         Launch processing thread in starter node.
@@ -304,6 +305,7 @@ class GPTServer:
         if self.role != "starter":
             raise ValueError(f"Cannot run `launch_starter` for node type {self.role}")
         metrics_dict = {}
+        self.n_samples = n_samples
         self.inference_thread = threading.Thread(
             target=self.start_inference,
             args=(n_samples,),
@@ -313,7 +315,7 @@ class GPTServer:
                 "metrics": metrics_dict,
             },
         )
-        self.inference_thread.start()
+        self.inference_thread.start()  # Wait for the loop to conclude!!
         self.inference_thread.join()
         return metrics_dict["gen_text"], metrics_dict["gen_time"]
 
@@ -842,7 +844,9 @@ class GPTServer:
             input_pos.append(torch.arange(0, T_i[i], device=self.torch_model_device))
 
             kvc_sublist: List[KVCache] = []
-            for block in self.model.transformer.h:
+            for i, block in enumerate(self.model.transformer.h):
+                if VERB:
+                    print(f"Initializing KV cache {i}")
                 # Build kv cache individually for each attn layer
                 if i == 0:
                     # Copy the already init KVCaches of the blocks
@@ -855,7 +859,7 @@ class GPTServer:
                             max_seq_length=self.model.max_seq_length,
                             rope_cache_length=self.model.cos.size(-1),
                             device=self.torch_model_device,
-                            dtype=DTYPE,
+                            dtype=ptdtype,
                         )
                     )
             kvcaches.append(kvc_sublist)
@@ -868,6 +872,7 @@ class GPTServer:
         with torch.no_grad():
             with ctx:
                 total_iters = max_new_tokens * n_samples
+                first_glob_iter = True
                 for k in range(total_iters):
                     logger_wp.info(f"Iter {k}")
                     print(
@@ -880,6 +885,7 @@ class GPTServer:
                     sample_id = k % n_samples
 
                     if k >= n_samples:
+                        first_glob_iter = False
                         # We are not in the first iteration (k starts from 0)
                         # can start processing messages from last secondary node
 
@@ -903,17 +909,20 @@ class GPTServer:
                         idx_next = sample(
                             logits, temperature=self.temperature, top_k=self.top_k
                         )
+                        idx_next = idx_next.view(1, -1)
                         idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
                         input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
 
                     # Send to next iff not at the last token
                     if k < (n_samples * (max_new_tokens - 1)):
-                        # Crop to block size
+                        # NOTE: no support for ctx > block_size
+                        # idx_cond should be equal to idx_next if after 1st global iter
                         idx_cond = (
                             idx[sample_id]
-                            if idx[sample_id].size(1) <= self.model_config.block_size
-                            else idx[sample_id][:, -self.model_config.block_size :]
+                            if first_glob_iter
+                            else idx[sample_id][:, -1].view(1, -1)
                         )
+
                         # NOTE: Swap KVCache for correct sample
                         curr_kvcache = kvcaches[sample_id]
                         for ind_b, block in enumerate(self.model.transformer.h):
@@ -962,9 +971,10 @@ class GPTServer:
         logger_wp.info("Generation completed")
         if VERB:
             print("[INFO] Generation completed!                          ")
-            print(f"> Total time for generation: {tot_time} s")
 
-        return [self.tok_decode(smp[0].tolist()) for smp in idx], tot_time
+        print(f"Size of produced tensors: {idx[0].size()}")
+
+        return [self.tok.decode(smp) for smp in idx], tot_time
 
     def _secondary_loop(self):
         """
@@ -1016,7 +1026,7 @@ class GPTServer:
                             max_seq_length=self.model.max_seq_length,
                             rope_cache_length=self.model.cos.size(-1),
                             device=self.torch_model_device,
-                            dtype=DTYPE,
+                            dtype=ptdtype,
                         )
                     )
             kvcaches.append(kvc_sublist)
@@ -1107,7 +1117,7 @@ class GPTServer:
     def POST(self, *path, **params):
         """
         Functions:
-        - Non-starters:
+        - Secondary nodes:
             Receive configuration info from the starter node and start connection with
             previous and next, then start generation, i.e., wait for incoming data
             through the sockets to be passed through the local model chunk.
@@ -1117,6 +1127,7 @@ class GPTServer:
                 next_node (as in configuration json file)
                 model_config (serialized with Config.asdict())
                 n_nodes (number of total network nodes)
+                n_local_layers (n. of chunk layers - prevent issues due to different config)
                 [params] (model parameters - needed if no chunk path was passed)
                 n_samples (number of produced samples)
         """
@@ -1133,9 +1144,7 @@ class GPTServer:
                 # Assume model config is not initialized
                 self.model_config = Config(**init_msg["model_config"])
                 self.n_nodes = init_msg["n_nodes"]
-                self.n_layers_local = N_LAYERS_NODES[self.n_nodes][
-                    self.model_config.n_layer
-                ]["N_LAYERS_SECONDARY"]
+                self.n_layers_local = init_msg["n_local_layers"]
 
                 if "params" in init_msg:
                     if VERB:
@@ -1177,7 +1186,7 @@ class GPTServer:
                 # FIXME: review threads
                 logger_wp.info("Received initialization information!")
                 self._running_thread = threading.Thread(
-                    target=self.start_inference, daemon=True
+                    target=self.start_inference, daemon=True, args=(self.n_samples,)
                 )
                 self._running_thread.start()
                 cp.response.status = 200
