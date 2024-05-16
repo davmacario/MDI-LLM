@@ -198,17 +198,17 @@ class StarterNode(NodePrototype):
 
             # The logits returned are the ones in row idx of the table
             # This is arranged in a tensor of size Batch x Time x Channel(=N_EMBED)
-            x = self.starter_model.wte(idx)
+            x = self.transformer.wte(idx)
             if self.config.scale_embeddings:
                 x = x * (self.config.n_embd**0.5)
 
-            for block in self.starter_model.h:
+            for block in self.transformer.h:
                 x = block(x, cos, sin, mask, input_pos)
 
             return x
         else:
-            idx = self.starter_model.ln_f(idx)
-            return self.starter_model.lm_head(idx)
+            idx = self.transformer.ln_f(idx)
+            return self.lm_head(idx)
 
 
 class SecondaryNode(NodePrototype):
@@ -236,6 +236,7 @@ class SecondaryNode(NodePrototype):
         self.transformer = nn.ModuleDict(
             dict(h=nn.ModuleList([Block(config) for _ in range(n_transf_layers)]))
         )
+        self.max_seq_length = self.config.block_size
 
     def load_weights(self, params: Mapping[str, Any]) -> int:
         """Load weights"""
