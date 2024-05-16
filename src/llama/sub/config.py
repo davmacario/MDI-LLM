@@ -61,6 +61,7 @@ N_LAYERS_NODES = {
         12: {"N_LAYERS_START": 5, "N_LAYERS_SECONDARY": 7},  # gpt2
         22: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 12},  # TinyLlama
         24: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 14},  # gpt2-medium
+        32: {"N_LAYERS_START": 14, "N_LAYERS_SECONDARY": 18},  # Llama 2
         36: {"N_LAYERS_START": 16, "N_LAYERS_SECONDARY": 20},  # gpt2-large
         48: {"N_LAYERS_START": 22, "N_LAYERS_SECONDARY": 26},  # gpt2-xl
     },
@@ -71,6 +72,7 @@ N_LAYERS_NODES = {
         12: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 5},  # gpt2
         22: {"N_LAYERS_START": 6, "N_LAYERS_SECONDARY": 8},  # TinyLlama
         24: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 10},  # gpt2-medium
+        32: {"N_LAYERS_START": 8, "N_LAYERS_SECONDARY": 12},  # Llama 2
         36: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 13},  # gpt2-large
         48: {"N_LAYERS_START": 14, "N_LAYERS_SECONDARY": 17},  # gpt2-xl
     },
