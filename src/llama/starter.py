@@ -56,36 +56,30 @@ def main(args):
         plots=args.plots,
     )
 
-    return
 
-    # Operation
-    try:
-        gen_samples, gen_time = gpt_distr.start(
-            n_samples=args.n_samples,
-            tokens_per_sample=tok_per_sample,
-            prompt=args.prompt,
-        )
-    except KeyboardInterrupt:
-        cp.engine.stop()
-        print("Starter node was stopped successfully!")
-    else:
-        # Print the stats to file (we are sure directory exists)
-        if out_stats_file is not None:
-            # Output csv
-            existed = True
-            if not os.path.exists(out_stats_file):
-                existed = False
-            with open(out_stats_file, "a") as f:
-                # Format: datetime - number of samples - model info - total time
-                curr_ts = datetime.now()
-                if not existed:
-                    # header
-                    f.write(csv_header_stats + "\n")
-                f.write(
-                    f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{len(gen_samples)},{gpt_distr.n_layers_tot},{gpt_distr.model_config.block_size},{gen_time}\n"
-                )
-                f.close()
-                print("Stats written to ", out_stats_file)
+    # Operation (start now includes loop)
+    gpt_distr.start(
+        n_samples=args.n_samples,
+        tokens_per_sample=tok_per_sample,
+        prompt=args.prompt,
+    )
+    # # Print the stats to file (we are sure directory exists)
+    # if out_stats_file is not None:
+    #     # Output csv
+    #     existed = True
+    #     if not os.path.exists(out_stats_file):
+    #         existed = False
+    #     with open(out_stats_file, "a") as f:
+    #         # Format: datetime - number of samples - model info - total time
+    #         curr_ts = datetime.now()
+    #         if not existed:
+    #             # header
+    #             f.write(csv_header_stats + "\n")
+    #         f.write(
+    #             f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{len(gen_samples)},{gpt_distr.n_layers_tot},{gpt_distr.model_config.block_size},{gen_time}\n"
+    #         )
+    #         f.close()
+    #         print("Stats written to ", out_stats_file)
 
 
 if __name__ == "__main__":

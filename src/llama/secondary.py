@@ -48,6 +48,8 @@ def main(args):
         verb=args.verb,
     )
 
+    gpt_distr.start()
+
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
