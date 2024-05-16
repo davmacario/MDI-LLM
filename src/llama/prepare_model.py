@@ -81,8 +81,8 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--ckpt-folder",
-        type=str,
-        default=os.path.join(script_dir, "checkpoints"),
+        type=Path,
+        default=Path(os.path.join(script_dir, "checkpoints")),
         help="""subfolder where the model directory will be placed; the model files
         will be found at `<ckpt_folder>/<hf_model_name>/`""",
     )
