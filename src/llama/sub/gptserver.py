@@ -224,7 +224,7 @@ class GPTServer:
             # For secondary nodes, `node_config` can also be just the specific node
             self.own_config = (
                 node_config
-                if "secondary" not in node_config
+                if "nodes" not in node_config
                 else node_config["nodes"]["secondary"][secondary_index]
             )
             self.starter_addr = self.own_config["communication"]["starter_addr"]

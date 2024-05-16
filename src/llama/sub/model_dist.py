@@ -83,6 +83,7 @@ class GPTDistributed:
         ckpt_dir: Optional[FileType] = None,
         chunk_path: Optional[FileType] = None,
         device: str = "cpu",
+        secondary_index: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -191,18 +192,23 @@ class GPTDistributed:
                 model_device=self.torch_device,
             )
         elif "secondary" in self.node_type:
+            # FIXME: secondary node may be completely agnostic of the used model and 
+            # receive the model config (and the chunk) at initialization
             assert (
                 self.ckpt_dir or self.chunk_path
             ), "Need to specify at least 1 between the chunk path and the checkpoint directory"
 
+            # Can either pass "secondary:ind" or secondary_index=ind
             split_type = self.node_type.split(":")
-            self.secondary_index = None if len(split_type) < 2 else int(split_type[1])
+            self.secondary_index = secondary_index if len(split_type) < 2 else int(split_type[1])
+            assert self.secondary_index is not None
+
+            self.node_type = f"secondary:{self.secondary_index}"
             self.n_nodes = None
             self.chunk_path = chunk_path
             # Initialize secondary node
             if "nodes" in self.node_config:
                 # Full config received
-                assert self.secondary_index, "Couldn't infer node index"
                 self.own_config = self.node_config["nodes"]["secondary"][
                     self.secondary_index
                 ]

@@ -5,60 +5,22 @@ import json
 import logging
 import os
 import warnings
+from pathlib import Path
 
 import cherrypy as cp
 import torch
-
-from sub.model_dist import GPTServer
+from sub import GPTDistributed
 
 # -----------------------------------------------------------------------------
-script_dir = os.path.dirname(__file__)
-settings_path = os.path.join(script_dir, "settings_distr")
+script_dir = Path(os.path.dirname(__file__))
+settings_path = Path(os.path.join(script_dir, "settings_distr"))
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--chunk",
-    type=str,
-    default=None,
-    help="""Optional path of the model chunk on disk - if not provided, need to ensure
-    the starter node will transmit the model chunk.""",
-)
-parser.add_argument("-v", "--verb", action="store_true", help="Enable verbose mode")
-parser.add_argument(
-    "-d",
-    "--debug",
-    default=False,
-    action="store_true",
-    help="Enable debug mode (enable profiler)",
-)
 
-# The following achieves: (--nodes-config & IND) | --secondary-config
-group = parser.add_mutually_exclusive_group(required=True)
-group.add_argument(
-    "--nodes-config",
-    type=str,
-    metavar=("CONFIG-PATH", "SECONDARY-INDEX"),
-    nargs=2,  # 2 args
-    default=[os.path.join(script_dir, "settings_distr", "configuration.json"), 0],
-    help="""Path to the JSON configuration file for the nodes followed by the positional
-    index of the intermediate node""",
-)
-group.add_argument(
-    "--secondary-config",
-    type=str,
-    default=None,
-    help="""Path of the configuration for the secondary node, alternative to
-    '--nodes-config'""",
-)
-
-if __name__ == "__main__":
-    torch.manual_seed(1337)
-    torch.cuda.manual_seed(1337)
+def main(args):
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-
-    # The only available command line option is '--debug' to launch logger
-    args = parser.parse_args()
 
     print("+---------------------------------+")
     print("| Launching secondary worker node |")
@@ -75,31 +37,56 @@ if __name__ == "__main__":
         fhdlr.setFormatter(formatter)
         log_wp.addHandler(fhdlr)
 
-    if args.secondary_config is None:
-        with open(args.nodes_config[0]) as f:
-            full_config = json.load(f)
-            n_secondary = len(full_config["nodes"]["secondary"])
-            node_ind = int(args.nodes_config[1])
-            if node_ind >= n_secondary:
-                raise ValueError(
-                    f"""Invalid index for the current node: {node_ind} - valid indices
-                    are in the range 0 - {n_secondary} for this config file"""
-                )
-            node_config = full_config["nodes"]["secondary"][node_ind]
+    role = f"secondary:{args.nodes_config[1]}"
+    config_path = Path(args.nodes_config[0])
+
+    gpt_distr = GPTDistributed(
+        node_type=role,
+        config_file=config_path,
+        chunk_path=args.chunk,
+        device=args.device,
+        verb=args.verb,
+    )
+
+
+if __name__ == "__main__":
+    if torch.cuda.is_available():
+        default_device = "cuda"
+    elif torch.backends.mps.is_available():
+        default_device = "mps"
     else:
-        with open(args.secondary_config) as f:
-            node_config = json.load(f)
+        default_device = "cpu"
 
-    if args.chunk is not None and not ("secondary" in args.chunk):
-        warnings.warn("Possibly wrong chunk file detected")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-d", "--debug", action="store_true", help="enable debug mode (profiler)"
+    )
+    parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
 
-    try:
-        setup = {"verb": args.verb}  # Override globals in other file
-        gpt_webserv = GPTServer(
-            node_config=node_config,
-            chunk_path=args.chunk,
-            **setup,
-        )
-    except KeyboardInterrupt:
-        print("Node stopped!")
-        cp.engine.stop()
+    parser.add_argument(
+        "--chunk",
+        type=Path,
+        default=None,
+        help="""optional path of the model chunk on disk - if not provided, need to ensure
+        the starter node will transmit the model chunk.""",
+    )
+    # The following achieves: (--nodes-config & IND) | --secondary-config
+    parser.add_argument(
+        "--nodes-config",
+        type=str,
+        metavar=("CONFIG-PATH", "SECONDARY-INDEX"),
+        nargs=2,  # 2 args total
+        default=[os.path.join(script_dir, "settings_distr", "configuration.json"), 0],
+        help="""path to the JSON configuration file for the nodes followed by the
+        positional index of the intermediate node""",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=default_device,
+        help="torch device where to load model and tensors",
+    )
+    parser.add_argument("--seed", type=int, default=10137, help="set random seed")
+    args = parser.parse_args()
+
+    main(args)

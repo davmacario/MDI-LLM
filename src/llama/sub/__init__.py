@@ -4,6 +4,7 @@ from . import config, model, prompts, tokenizer, utils, submodels, gptserver, ty
 from .model import GPT, Config
 from .prompts import PromptStyle, get_user_prompt
 from .tokenizer import Tokenizer
+from .model_dist import GPTDistributed
 
 __all__ = [
     "config",
@@ -19,4 +20,5 @@ __all__ = [
     "gptserver",
     "get_user_prompt",
     "typing",
+    "GPTDistributed",
 ]

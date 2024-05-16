@@ -24,9 +24,14 @@ def main(args):
     torch.cuda.manual_seed(args.seed)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+
+    print("+------------------------+")
+    print("| Launching starter node |")
+    print("+------------------------+")
     
     tok_per_sample = args.n_tokens
     if args.debug:
+        # TODO: review
         log_file = os.path.join(script_dir, "logs", "logs_starter.log")
         log_wp = logging.getLogger("model_dist")
         formatter = logging.Formatter("[%(asctime)s] → %(levelname)s: %(message)s")
