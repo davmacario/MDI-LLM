@@ -34,9 +34,8 @@ def main(args):
         profiler = cProfile.Profile()
         profiler.enable()
 
-    start = get_user_prompt(args.prompt)
-
     BATCH_SIZE = args.n_samples  # number of samples to draw
+    start = get_user_prompt(args.prompt, BATCH_SIZE)
 
     using_huggingface = False
 
