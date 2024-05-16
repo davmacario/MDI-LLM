@@ -63,13 +63,13 @@ def gated_repo_catcher(repo_id: str, access_token: Optional[str]):
             if not access_token:
                 raise ValueError(
                     f"https://huggingface.co/{repo_id} requires authentication, please set the `HF_TOKEN=your_token`"
-                    " environment variable or pass `--access_token=your_token`. You can find your token by visiting"
+                    " environment variable or pass `--hf-token=your_token`. You can find your token by visiting"
                     " https://huggingface.co/settings/tokens."
                 ) from None
             else:
                 raise ValueError(
                     f"https://huggingface.co/{repo_id} requires authentication. The access token provided by `HF_TOKEN=your_token`"
-                    " environment variable or `--access_token=your_token` may not have sufficient access rights. Please"
+                    " environment variable or `--hf-token=your_token` may not have sufficient access rights. Please"
                     f" visit https://huggingface.co/{repo_id} for more information."
                 ) from None
         raise e from None
