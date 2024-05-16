@@ -270,6 +270,6 @@ class SecondaryNode(NodePrototype):
             sin = self.sin[:T]
             mask = None
 
-        for block in self.secondary_model.h:
+        for block in self.transformer.h:
             idx = block(idx, cos, sin, mask, input_pos)
         return idx
