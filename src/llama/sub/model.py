@@ -568,7 +568,7 @@ class CausalSelfAttention(nn.Module):
         self.config = config
 
         try:
-            self.working_scaled_dot_product_attention = getattr(F, "scaled_dot_product_attention2")
+            self.working_scaled_dot_product_attention = getattr(F, "scaled_dot_product_attention")
         except:
             # Catch issues with old torch versions
             from .utils.functional import scaled_dot_product_attention
