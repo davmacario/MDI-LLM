@@ -167,13 +167,13 @@ class GPTServer:
                 self.model_path = chunk_path
 
             if isinstance(tokenizer_dir, str):
-                self.model_path = Path(tokenizer_dir)
+                self.tokenizer_dir = Path(tokenizer_dir)
             else:
-                self.model_path = tokenizer_dir
+                self.tokenizer_dir = tokenizer_dir
 
             if self.model_type is None:
                 try:
-                    self.model_type = tokenizer_dir.parent.name
+                    self.model_type = self.tokenizer_dir.parent.name
                 except:
                     self.model_type = None
             
@@ -232,7 +232,7 @@ class GPTServer:
             gc.collect()
 
             # Initialize tokenizer
-            self._load_tokenizer(tokenizer_dir)
+            self._load_tokenizer(self.tokenizer_dir)
 
         else:
             # model_config and chunk_path may be absent!
