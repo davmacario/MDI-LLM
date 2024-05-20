@@ -23,6 +23,8 @@ def plot_tokens_per_time(
         disp: if true, the image will also be displayed at runtime
     """
     assert len(tok_time) >= 1
+    # Create missing dirs:
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     fig = plt.figure(figsize=(12, 8))
     if isinstance(tok_time[0], Tuple):
