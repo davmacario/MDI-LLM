@@ -52,7 +52,6 @@ script_dir = Path(os.path.dirname(__file__))
 logger_wp = logging.getLogger("model_dist")
 logger_wp.setLevel(logging.ERROR)
 
-MODEL_TYPE = ""
 VERB = False
 PLOTS = False
 
@@ -70,6 +69,7 @@ class GPTServer:
     model_params: Optional[Dict] = None
     model_config: Optional[Config] = None
     n_samples: Optional[int] = None
+    model_type = None
 
     # True iff the model has been initialized and it is ready to perform inference.
     running: bool = False
@@ -149,10 +149,9 @@ class GPTServer:
             if VERB:
                 print(f"Overriding 'plots': {PLOTS}")
         if "model_type" in kwargs:
-            global MODEL_TYPE
-            MODEL_TYPE = str(kwargs["model_type"])
+            self.model_type = str(kwargs["model_type"])
             if VERB:
-                print(f"Overriding model type: {MODEL_TYPE}")
+                print(f"Overriding model type: {self.model_type}")
 
         self.node_type = node_type
         self.node_config = node_config
@@ -166,6 +165,20 @@ class GPTServer:
                 self.model_path = Path(chunk_path)
             else:
                 self.model_path = chunk_path
+
+            if isinstance(tokenizer_dir, str):
+                self.model_path = Path(tokenizer_dir)
+            else:
+                self.model_path = tokenizer_dir
+
+            if self.model_type is None:
+                try:
+                    self.model_type = tokenizer_dir.parent.name
+                except:
+                    self.model_type = None
+            
+            if PLOTS and self.model_type is None:
+                raise ValueError("-p flag requires to correctly set the model type")
 
             # The node_config for the starter is the whole json! It should know the
             # other nodes in the network to initialize them
@@ -983,7 +996,7 @@ class GPTServer:
                 "..",
                 "logs",
                 "tok-per-time",
-                f"tokens_time_samples_mdi_{MODEL_TYPE}_{n_samples}samples_{self.n_nodes}nodes.csv",
+                f"tokens_time_samples_mdi_{self.model_type}_{n_samples}samples_{self.n_nodes}nodes.csv",
             )
             if not os.path.exists(os.path.dirname(points_file_path)):
                 os.mkdir(os.path.dirname(points_file_path))
@@ -996,7 +1009,7 @@ class GPTServer:
             plot_tokens_per_time(
                 self.tok_time,
                 out_path=os.path.join(
-                    script_dir, "..", "img", f"tokens_time_mdi_{MODEL_TYPE}.png"
+                    script_dir, "..", "img", f"tokens_time_mdi_{self.model_type}.png"
                 ),
             )
 
