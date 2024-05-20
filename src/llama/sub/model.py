@@ -17,10 +17,9 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
 import torch
 import torch.nn as nn
 import yaml
+from sub.config import configs, name_to_config
+from sub.utils import functional
 from typing_extensions import Self
-from utils import functional
-
-from .config import configs, name_to_config
 
 try:
     working_scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
