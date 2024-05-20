@@ -999,7 +999,7 @@ class GPTServer:
                 f"tokens_time_samples_mdi_{self.model_type}_{n_samples}samples_{self.n_nodes}nodes.csv",
             )
             if not os.path.exists(os.path.dirname(points_file_path)):
-                os.mkdir(os.path.dirname(points_file_path))
+                os.makedirs(os.path.dirname(points_file_path), exist_ok=True)
             with open(points_file_path, "w") as f:
                 times = [x[1] for x in self.tok_time]
                 n_tok = [x[0] for x in self.tok_time]
