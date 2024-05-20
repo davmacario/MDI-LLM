@@ -20,14 +20,15 @@ import yaml
 from typing_extensions import Self
 
 from .config import configs, name_to_config
-from .utils import functional
 
 try:
     working_scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
 except AttributeError:
     # Catch issues with
+    from .utils.functional import scaled_dot_product_attention
+
     warnings.warn("Using inefficient Python implementation of scaled self attention")
-    working_scaled_dot_product_attention = functional.scaled_dot_product_attention
+    working_scaled_dot_product_attention = scaled_dot_product_attention
 
 
 def find_multiple(n: int, k: int) -> int:
@@ -650,7 +651,7 @@ class CausalSelfAttention(nn.Module):
         # scale = 1.0 / math.sqrt(self.config.head_size)
         # NOTE: removed scale to add support for older Torch versions (1.12)
         # This is not a problem in llama models
-        y = torch.nn.functional.scaled_dot_product_attention(
+        y = working_scaled_dot_product_attention(
             q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=mask is None
         )
         return y.transpose(1, 2)
