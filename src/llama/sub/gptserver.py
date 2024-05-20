@@ -141,11 +141,18 @@ class GPTServer:
         if "verb" in kwargs:
             global VERB
             VERB = bool(kwargs["verb"])
-            print(f"Overriding 'verb': {VERB}")
+            if VERB:
+                print(f"Overriding 'verb': {VERB}")
         if "plots" in kwargs:
             global PLOTS
             PLOTS = bool(kwargs["plots"])
-            print(f"Overriding 'plots': {PLOTS}")
+            if VERB:
+                print(f"Overriding 'plots': {PLOTS}")
+        if "model_type" in kwargs:
+            global MODEL_TYPE
+            MODEL_TYPE = str(kwargs["model_type"])
+            if VERB:
+                print(f"Overriding model type: {MODEL_TYPE}")
 
         self.node_type = node_type
         self.node_config = node_config

@@ -250,6 +250,7 @@ class GPTDistributed:
                 tokenizer_dir=self.ckpt_dir,
                 model_device=self.torch_device,
                 **kwargs,
+                model_type=self.full_model_name
             )
         elif "secondary" in self.node_type:
             # FIXME: secondary node may be completely agnostic of the used model and
