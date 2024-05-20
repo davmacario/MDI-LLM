@@ -1,3 +1,23 @@
+# Copyright (c) 2024 Davide Macario
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import gc
 import json
 import logging
@@ -14,7 +34,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cherrypy as cp
 import torch
-import torch.nn.functional as F
 from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
@@ -197,7 +216,7 @@ class GPTServer:
 
         else:
             # model_config and chunk_path may be absent!
-            self.model_config = model_config  # Should be None
+            self.model_config = model_config  # May be None
             if isinstance(chunk_path, str):
                 self.model_path = Path(chunk_path)
             else:
