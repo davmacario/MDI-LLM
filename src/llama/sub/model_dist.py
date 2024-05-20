@@ -18,36 +18,96 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import gc
 import json
 import logging
 import os
 import pickle
-import socket
-import threading
 import time
 import warnings
-from collections import deque
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Optional
 
 import cherrypy as cp
 import requests
-import tiktoken
 import torch
-import torch.nn as nn
-from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
-from sub.model import GPT, Block, Config, build_mask_cache, build_rope_cache
-from sub.submodels import SecondaryNode, StarterNode
-from sub.tokenizer import Tokenizer
 from sub.typing import FileType
-from sub.utils import (load_from_hf, load_from_pt, plot_tokens_per_time,
-                       split_and_store, split_parameters)
-from torch.nn import functional as F
+from sub.utils import load_from_pt, split_and_store
 
 docstring = """
+Distributed implementation of the Llama architecture using Model-Distributed Inference
+(with pipeline parallelism).
+This implementation allows to run a Llama model (of the ones compatible with LitGPT)
+over a network of "nodes" that can be positioned on different physical hosts.
+
+The distributed implementation consists of partitioning the model layers among all the
+nodes in the network. Then, each node will work with a subset of layers, receiving the
+input from the previous node in the network, and transmitting the output to the next
+one.
+This allows to reduce the memory usage for each node compared to the memory required to
+run the complete model on a single node, allowing to run larger models by increasing the
+number of network nodes.
+
+Parallelism is introduced by increasing the batch size, allowing to generate different
+independent samples.
+Due to the autoregressive nature of LLMs, to generate a new token in the sequence, it is
+required to feed back the new token to the model input, hence, if generating a single
+piece of text, the nodes that are not currently busy processing their local model chunk
+would be idle, waiting for the information to reach them.
+If we generate more than one sample, it is possible for different nodes to work on 
+different samples concurrently, improving efficiency.
+In particular, when the number of samples (batch size) is greater or equal than the
+number of nodes, it is possible to ensure every node is always working on a different
+sample.
+This mechanism, that we call, "recurrent pipelining", allows to achieve a generation
+rate (tokens/second) which is higher than sequential generation on a single device.
+With this work, we provide a proof of concept for the use of pipeline parallelism for 
+transformer architecture inference, resulting in an optimized implementation achieving
+competitive performances, with the added bonus of enabling LLM deployment on Edge
+devices (the testbed for this project was made up of Nvidia Jetson TX2 modules).
+
+The application architecture is the following.
+We define 2 types of nodes: "starter" nodes and "secondary" nodes; unlike the name
+suggests, there is no "master-slave" relationship between the 2, the "starter" is just
+acting as the "entrypoint"/application interface with the "user".
+Starter nodes are used to initialize secondary nodes and contain the first and last
+layers of the model. They take the model input (prompt) and collect the output tokens.
+As a consequence, they are the ones that "know" the exact number of tokens (and
+iterations) to be performed in the current inference run.
+Secondary nodes are "activated" by the starting node, and just receive inputs to be 
+passed through the local model chunk.
+For efficiency reasons, we assume the model chunks are already located on the devices
+themselves, but it is also possible to have the starter node split the model layers and
+send them to the different devices.
+
+Communication happens over 2 channels.
+For coordination and initialization, each node acts as an HTTP server and messages are
+sent over HTTP.
+For the transmissions of intermediate activations, the nodes use bare Python sockets 
+running over TCP/IP. The lack of a fully-fledged application layer protocol allows for
+a faster message exchange.
+At the application layer, the message only contains a header of fixed length, specifying
+the exact message size in bytes, which allows to read the exact amount of bytes to
+prevent issues due to message truncation.
+Being message transmission a crucial part of the application, as it is necessary to
+ensure it does not slow down the overall operation, we implement it through input and 
+output message queues running on separate threads.
+Once a message is received, it is placed in the input queue, from where the processing
+thread (the one performing model forward passes) will extract it (in order), process it,
+and place the output message in the output queue.
+There, a separate thread will extract it and transmit it.
+
+The application is composed of the following modules:
+- GPTDistributed: entrypoint for initializing nodes of any type; for starter nodes, it
+provides methods used at initialization.
+- GPTServer: core of the application; it creates the HTTP server for coordination and 
+sets up the message transmission sockets. It contains the definition of all the
+application threads and the processing loop.
+- GPT: model definition, based on LitGPT (by Lightning AI, in turn based on NanoGPT).
+The actual application uses submodels over with the same architecture (with the same
+building blocks).
 """
 
 script_dir = os.path.dirname(__file__)
@@ -60,12 +120,7 @@ CTX = nullcontext()
 
 
 class GPTDistributed:
-    """
-    This class is used to launch individual nodes of a network to perform
-    Model-Distributed Inference of Large Language Models (MDI-LLM).
-
-    """
-
+    __doc__ = docstring
     init_msg = {
         "role": "",
         "prev_node": {},
@@ -87,28 +142,32 @@ class GPTDistributed:
         **kwargs,
     ):
         """
-        Remarks:
-            node_type: role (from args)
-            config_file is the path of the JSON configuration file; for the starter, it
-                has to be the full one, while the secondary nodes _can_ be passed their
-                own dict only (see GPTServer)
-            ckpt_dir is the directory (chackpoints/meta/llama[...]/) containing
-                everything
-            can also pass chunk_path - the path of the chunk directly
+        Instantiate a GPTDistributed object, allowing to run a node for
+        Model-Distributed Inference.
 
-            FOR STARTER:
-            Can infer whether the model was already split by the presence of the
-                "chunks/<n>nodes/" folder inside ckpt_dir
-            If the chunks are found, pass (model is loaded in GPTServer), ELSE perform partition and
-                send each chunk at a time to each node
-            ckpt_dir MUST be specified;
-            chunk_path is OPTIONAL
-
-            FOR SECONDARY:
-            AT LEAST 1 between chunk_path and ckpt_dir must be specified;
-            if ckpt_dir is missing, the GPTServer will not receive the model config
-
-            kwargs used to override VERB and PLOTS
+        Args:
+            node_type: role of the node - can be "starter", "secondary", "secondary:<n>"
+                if "secondary", make sure to specify `secondary_index`
+            config_file: configuration file for the node(s);
+                In starters: it is the configuration of the whole network (full config.json)
+                In secondary: it _can_ be the full config or the individual node config
+            *
+            ckpt_dir (optional):
+                For starter nodes: checkpoint directory containing the
+                model_config.yaml file and either the chunks/ folder or the .pth model.
+                In secondary nodes, one between ckpt_dir and chunk_path must be present.
+            chunk_path (optional): path of the model chunk for the current node.
+                In starters: it can be inferred from ckpt_dir.
+                In secondary: if missing, the chunk path will be inferred.
+                NOTE: chunk path will always be passed, i.e., the model will always be
+                    loaded from disk!
+            device (default: "cpu"): string indicating the device used to load and run
+                the model.
+            secondary_index (optional): positional, zero-index of the secondary node;
+                not necessary if only 1 secondary node is present in the configuration.
+                Not used by starter nodes.
+            Keyword args (optional): allowing to specify verb=VERB and plots=PLOTS
+                (bool)
         """
         if isinstance(ckpt_dir, str):
             self.ckpt_dir = Path(ckpt_dir)
@@ -208,7 +267,6 @@ class GPTDistributed:
 
             self.node_type = f"secondary:{self.secondary_index}"
             self.n_nodes = None
-            self.chunk_path = chunk_path
             # Initialize secondary node
             if "nodes" in self.node_config:
                 # Full config received
@@ -231,9 +289,11 @@ class GPTDistributed:
                     node_chunks_dir / f"model_secondary{self.secondary_index}.pth"
                 )
             elif not self.chunk_path and not self.n_nodes:
-                raise ValueError("Missing info about total n. of nodes")
+                raise ValueError(
+                    "Missing info about total n. of nodes, cannot select correct chunk"
+                )
 
-            assert self.chunk_path, "Unable to get chunk path"
+            assert self.chunk_path, "Did not receive chunk path."
 
             if self.ckpt_dir:
                 self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
@@ -402,7 +462,6 @@ class GPTDistributed:
             addr = f"http://{target_addr}:{target_port}/stop"
             out *= self._request_to_node("put", addr, "")
         return out
-
 
     def _request_to_node(
         self, req_type: str, addr: str, content: Any, max_n_requests: int = 100
