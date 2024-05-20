@@ -1009,7 +1009,7 @@ class GPTServer:
             plot_tokens_per_time(
                 self.tok_time,
                 out_path=os.path.join(
-                    script_dir, "..", "img", f"tokens_time_mdi_{self.model_type}.png"
+                    script_dir, "..", "img", f"{self.n_nodes}", f"tokens_time_mdi_{self.model_type}_{n_samples}samples.png"
                 ),
             )
 
