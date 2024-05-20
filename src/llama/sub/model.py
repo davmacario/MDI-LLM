@@ -9,6 +9,7 @@ https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 """
 
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
@@ -17,8 +18,16 @@ import torch
 import torch.nn as nn
 import yaml
 from typing_extensions import Self
+from utils import functional
 
 from .config import configs, name_to_config
+
+try:
+    working_scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
+except AttributeError:
+    # Catch issues with
+    warnings.warn("Using inefficient Python implementation of scaled self attention")
+    working_scaled_dot_product_attention = functional.scaled_dot_product_attention
 
 
 def find_multiple(n: int, k: int) -> int:
@@ -397,7 +406,7 @@ class GPT(nn.Module):
         dtype: Optional[torch.dtype] = None,
     ) -> None:
         """
-        Trigger the initialization of the KV cache in the self-attention layers and of 
+        Trigger the initialization of the KV cache in the self-attention layers and of
         the triangular mask.
         """
         if rope_cache_length is None:
@@ -570,7 +579,9 @@ class CausalSelfAttention(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        input_pos: Optional[torch.Tensor] = None,  # sample_index_batch (add support for only working on one element of the batch to handle MDI)
+        input_pos: Optional[
+            torch.Tensor
+        ] = None,  # sample_index_batch (add support for only working on one element of the batch to handle MDI)
     ) -> torch.Tensor:
         # batch size, sequence length, embedding dimensionality (n_embd)
         B, T, C = x.size()

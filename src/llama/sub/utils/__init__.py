@@ -9,6 +9,7 @@ from .utils import (count_transformer_blocks, deserialize_params,
                     load_from_hf, load_from_pt, load_sd, loading_bar,
                     remove_prefix, serialize_params, split_and_store,
                     split_parameters)
+from . import functional
 
 __all__ = [
     "convert_hf_checkpoint",
@@ -32,4 +33,5 @@ __all__ = [
     "split_parameters",
     "load_sd",
     "split_and_store",
+    "functional",
 ]
