@@ -23,7 +23,7 @@ from .config import configs, name_to_config
 
 try:
     working_scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
-except AttributeError:
+except:
     # Catch issues with
     from .utils.functional import scaled_dot_product_attention
 
