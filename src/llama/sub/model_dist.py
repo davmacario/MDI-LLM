@@ -218,10 +218,7 @@ class GPTDistributed:
                 if not self.chunk_path
                 else self.chunk_path.resolve().parent
             )
-            if (
-                node_chunks_dir.is_dir()
-                and len(list(node_chunks_dir.iterdir())) == self.n_nodes
-            ) or self.chunk_path:
+            if node_chunks_dir.is_dir() or self.chunk_path:
                 # Model was already split if either the chunks are found or chunk path is passed
                 self.model_was_split = True
             else:
@@ -250,7 +247,7 @@ class GPTDistributed:
                 tokenizer_dir=self.ckpt_dir,
                 model_device=self.torch_device,
                 **kwargs,
-                model_type=self.full_model_name
+                model_type=self.full_model_name,
             )
         elif "secondary" in self.node_type:
             # FIXME: secondary node may be completely agnostic of the used model and
