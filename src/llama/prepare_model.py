@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 
-import gc
 import os
-import warnings
 from argparse import ArgumentParser, RawTextHelpFormatter
 from pathlib import Path
 
-import torch
-from sub import Config
-from sub.utils import (count_transformer_blocks, download_from_hub,
-                       load_from_hf, load_from_pt, split_and_store,
-                       split_parameters)
+from sub.utils import load_from_hf, load_from_pt, split_and_store
 
 docstring = """
 Use this script to:
@@ -68,9 +62,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(
-        description=docstring, formatter_class=RawTextHelpFormatter
-    )
+    parser = ArgumentParser(description=docstring, formatter_class=RawTextHelpFormatter)
 
     parser.add_argument(
         "MODEL",
