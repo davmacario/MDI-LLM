@@ -121,6 +121,8 @@ class GPTServer:
         The couple 'node_config' & 'node_type' should be enough to uniquely identify
         the node.
 
+        NOTE: this class assumes model partition has already been done.
+
         Args:
             node_config: node configuration information (from .json file)
             node_type: string indicating the node type/role ("starter" or "secondary")
@@ -176,7 +178,7 @@ class GPTServer:
                     self.model_type = self.tokenizer_dir.parent.name
                 except:
                     self.model_type = None
-            
+
             if PLOTS and self.model_type is None:
                 raise ValueError("-p flag requires to correctly set the model type")
 
@@ -198,7 +200,11 @@ class GPTServer:
                     " or pass argument `model_device` to this function"
                 )
             self.torch_model_device = torch.device(self.model_device)
-            self.n_nodes = 1 + len(node_config["nodes"]["secondary"])
+            self.n_nodes = 1 + (
+                0
+                if "secondary" not in node_config["nodes"]
+                else len(node_config["nodes"]["secondary"])
+            )
             self.next_node = (
                 None if self.n_nodes == 1 else node_config["nodes"]["secondary"][0]
             )
@@ -358,7 +364,9 @@ class GPTServer:
                 "metrics": metrics_dict,
             },
         )
-        self.inference_thread.start()  # Wait for the loop to conclude!!
+        # NOTE: the separate thread is just a placeholder to make the interface uniform
+        # for all nodes - here we wait for the processing loop to conclude!
+        self.inference_thread.start()
         self.inference_thread.join()
         self.shutdown()
         return metrics_dict["gen_text"], metrics_dict["gen_time"]
@@ -398,13 +406,21 @@ class GPTServer:
             metrics (starter only): dict where the metrics will be inserted (keys:
                 "gen_text" and "gen_time")
         """
-        assert self.sock_to_prev is None and self.sock_to_next is None
-        assert self.next_node is not None and self.prev_node is not None
         assert self.model_config is not None and self.model is not None
+
+        if self.sock_to_prev:
+            warnings.warn("Found open input socket! Closing it now...")
+            try:
+                self.sock_to_prev_prop[0].close()
+            except:
+                pass
+            self.sock_to_prev.close()
+        if self.sock_to_next is not None:
+            warnings.warn("Found open output socket! Closing it now...")
+            self.sock_to_next.close()
 
         # Configuration for all nodes
         self._create_sockets()
-        assert self.sock_to_prev is not None and self.sock_to_next is not None
 
         # Differentiate between different types
         if self.node_type == "starter":
@@ -428,6 +444,7 @@ class GPTServer:
                 metrics["gen_text"] = out_text
                 metrics["gen_time"] = gen_time
         else:
+            assert self.next_node is not None and self.prev_node is not None
             # Secondary node
             self.running = True
             self._launch_queue_threads()
@@ -436,9 +453,7 @@ class GPTServer:
             logger_wp.info("Starting generation loop")
             self._secondary_loop()
 
-
     def stop_generation(self) -> int:
-
         try:
             time.sleep(2)
             self.running = False  # Redundant, but ok
@@ -454,14 +469,14 @@ class GPTServer:
             self.out_queue_thread.join()
             if VERB:
                 print("Stopping input and output sockets")
-            self.sock_to_prev_prop[0].close()
-            self.sock_to_prev.close()
-            self.sock_to_next.close()
+            if self.sock_to_prev:
+                self.sock_to_prev_prop[0].close()
+                self.sock_to_prev.close()
+            if self.sock_to_next:
+                self.sock_to_next.close()
             return 1
         except:
             return 0
-
-
 
     def shutdown(self) -> int:
         """
@@ -489,19 +504,22 @@ class GPTServer:
         """
         Launch the input and output queue threads;
         This method is called by `start_inference()`.
-        """
-        if VERB:
-            print("[INFO] Starting queue threads")
-        logger_wp.info("Starting queue threads")
-        self.in_queue_thread = threading.Thread(
-            target=self._fill_input_queue, daemon=True
-        )
-        self.in_queue_thread.start()
 
-        self.out_queue_thread = threading.Thread(
-            target=self._empty_output_queue, daemon=True
-        )
-        self.out_queue_thread.start()
+        Note: for standalone (single node) operation, the sockets are not created.
+        """
+        if self.sock_to_prev and self.sock_to_next:
+            if VERB:
+                print("[INFO] Starting queue threads")
+            logger_wp.info("Starting queue threads")
+            self.in_queue_thread = threading.Thread(
+                target=self._fill_input_queue, daemon=True
+            )
+            self.in_queue_thread.start()
+
+            self.out_queue_thread = threading.Thread(
+                target=self._empty_output_queue, daemon=True
+            )
+            self.out_queue_thread.start()
 
     def _recv_from_prev(self, size: int) -> bytes:
         """
@@ -558,43 +576,49 @@ class GPTServer:
         would just wait indefinitely, as no node will connect with any other).
         """
         assert self.sock_to_prev is None and self.sock_to_next is None
-        assert self.next_node is not None and self.prev_node is not None
 
         if self.node_type == "starter":
             # Open server towards next node (first thing if starter node)
+            if self.next_node is not None:
+                if VERB:
+                    print(
+                        f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
+                    )
+
+                self._start_client()
+                assert self.sock_to_next is not None
+                logger_wp.info("Created socket to next node")
+
+                if VERB:
+                    print("-> Done!                     ")
+        else:
+            assert self.next_node is not None and self.prev_node is not None
+
+        # Open client towards previous
+        if self.prev_node is not None:
             if VERB:
                 print(
-                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
+                    f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
                 )
 
-            self._start_client()
-            assert self.sock_to_next is not None
-            logger_wp.info("Created socket to next node")
+            self._start_server()
+            assert self.sock_to_prev is not None
+            if VERB:
+                print(
+                    f"[INFO] Started listening on port {self.own_config['inference']['port_in']}"
+                )
+            self.sock_to_prev.listen(1)
+
+            self.sock_to_prev_prop = self.sock_to_prev.accept()
+            logger_wp.info("Created socket to previous node")
 
             if VERB:
                 print("-> Done!                     ")
 
-        # Open client towards previous
-        if VERB:
-            print(
-                f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
-            )
-
-        self._start_server()
-        assert self.sock_to_prev is not None
-        if VERB:
-            print(
-                f"[INFO] Started listening on port {self.own_config['inference']['port_in']}"
-            )
-        self.sock_to_prev.listen(1)
-
-        self.sock_to_prev_prop = self.sock_to_prev.accept()
-        logger_wp.info("Created socket to previous node")
-
-        if VERB:
-            print("-> Done!                     ")
-
         if self.node_type != "starter":
+            if self.prev_node is None or self.next_node is None:
+                raise RuntimeError("Missing neighboring nodes info!")
+
             # Open server towards next node
             if VERB:
                 print(
@@ -984,8 +1008,13 @@ class GPTServer:
 
                         # Send message
                         out_msg = self._build_msg(idx_cond, sample_id)
-                        self.out_message_queue.append(out_msg)
-                        self.out_queue_not_empty.set()
+                        if self.sock_to_next:
+                            self.out_message_queue.append(out_msg)
+                            self.out_queue_not_empty.set()
+                        else:
+                            # Single-node scenario
+                            self.in_message_queue.append(out_msg)
+                            self.in_queue_not_empty.set()
 
         tot_time = time.time() - start_time
         if PLOTS:
@@ -1009,7 +1038,11 @@ class GPTServer:
             plot_tokens_per_time(
                 self.tok_time,
                 out_path=os.path.join(
-                    script_dir, "..", "img", f"{self.n_nodes}", f"tokens_time_mdi_{self.model_type}_{n_samples}samples.png"
+                    script_dir,
+                    "..",
+                    "img",
+                    f"{self.n_nodes}",
+                    f"tokens_time_mdi_{self.model_type}_{n_samples}samples.png",
                 ),
             )
 

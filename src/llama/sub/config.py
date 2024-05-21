@@ -54,6 +54,17 @@ TEMPERATURE = (
 # ---- MDI settings ------------------------------
 # Adaptive layer number - first key is the number of nodes, second is the node type
 N_LAYERS_NODES = {
+    1: {
+        5: {"N_LAYERS_START": 5},
+        7: {"N_LAYERS_START": 7},
+        9: {"N_LAYERS_START": 9},
+        12: {"N_LAYERS_START": 12},  # gpt2
+        22: {"N_LAYERS_START": 22},  # TinyLlama
+        24: {"N_LAYERS_START": 24},  # gpt2-medium
+        32: {"N_LAYERS_START": 32},  # Llama 2
+        36: {"N_LAYERS_START": 36},  # gpt2-large
+        48: {"N_LAYERS_START": 48},  # gpt2-xl
+    },
     2: {
         5: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 3},
         7: {"N_LAYERS_START": 3, "N_LAYERS_SECONDARY": 4},
