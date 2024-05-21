@@ -1056,8 +1056,6 @@ class GPTServer:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
-        print(f"Size of produced tensors: {idx[0].size()}")
-
         return [self.tok.decode(smp) for smp in idx], tot_time
 
     def _secondary_loop(self):
