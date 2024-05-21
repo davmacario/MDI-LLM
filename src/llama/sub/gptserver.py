@@ -505,21 +505,24 @@ class GPTServer:
         Launch the input and output queue threads;
         This method is called by `start_inference()`.
 
-        Note: for standalone (single node) operation, the sockets are not created.
+        Note: for standalone (single node) operation, the sockets are not created and
+        the threads are empty.
         """
-        if self.sock_to_prev and self.sock_to_next:
+        non_standalone = self.sock_to_prev is not None and self.sock_to_next is not None
+        if non_standalone:
             if VERB:
                 print("[INFO] Starting queue threads")
             logger_wp.info("Starting queue threads")
             self.in_queue_thread = threading.Thread(
                 target=self._fill_input_queue, daemon=True
             )
-            self.in_queue_thread.start()
-
             self.out_queue_thread = threading.Thread(
                 target=self._empty_output_queue, daemon=True
             )
-            self.out_queue_thread.start()
+
+        self.in_queue_thread.start()
+        self.out_queue_thread.start()
+
 
     def _recv_from_prev(self, size: int) -> bytes:
         """
