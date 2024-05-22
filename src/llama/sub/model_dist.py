@@ -287,11 +287,9 @@ class GPTDistributed:
                     node_chunks_dir / f"model_secondary{self.secondary_index}.pth"
                 )
             elif not self.chunk_path and not self.n_nodes:
-                raise ValueError(
+                warnings.warn(
                     "Missing info about total n. of nodes, cannot select correct chunk"
                 )
-
-            assert self.chunk_path, "Did not receive chunk path."
 
             if self.ckpt_dir:
                 self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
