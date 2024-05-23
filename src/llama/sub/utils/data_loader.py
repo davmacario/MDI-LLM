@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 
 import os
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Tuple, Union
 
 import numpy as np
 import tiktoken
 import torch
 from sub.model import Config
+from sub.tokenizer import Tokenizer
 
 
 def load_dataset(
-    input_path: str,
-    tokenizer: tiktoken.Encoding,
+    input_path: Union[str, Path],
+    tokenizer: Tokenizer,
     *args,
     **kwargs,
-) -> List:
+) -> torch.Tensor:
     """
     Load a data set from a text file and tokenize its content.
 
@@ -28,23 +30,19 @@ def load_dataset(
     Returns:
         data: List containing the tokens
     """
-    if not os.path.isfile(input_path):
+    input_path = input_path if isinstance(input_path, Path) else Path(input_path)
+    if not input_path.is_file():
         raise ValueError(f"Could not find {input_path}")
 
     fformats = (".txt", ".tex", ".md")
-    if not input_path.lower().endswith(fformats):
+    if not input_path.name.lower().endswith(fformats):
         raise ValueError(f"File format not supported!\nSupported formats: {fformats}")
 
     with open(input_path, "r", encoding="utf-8") as f:
         text = f.read()
         f.close()
 
-    if isinstance(tokenizer, tiktoken.Encoding):
-        data = tokenizer.encode_ordinary(text)
-    else:
-        raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
-
-    return data
+    return tokenizer.encode(text)
 
 
 def split_dataset(
