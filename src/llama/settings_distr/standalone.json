@@ -1,0 +1,15 @@
+{
+  "nodes": {
+    "starter": {
+      "addr": "127.0.0.1",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port_in": 5088,
+        "port_out": 5089
+      }
+    },
+    "secondary": []
+  }
+}

@@ -94,6 +94,12 @@ if __name__ == "__main__":
     # Print first element (first key)
     # print(f"Key: {mod_keys[0]} --> {checkpoint['model'][mod_keys[0]]}")
 
+    # Create model and count n. parameters
+    gptconf = GPTConfig(**checkpoint["model_args"])
+    model = GPT(gptconf)
+    n_params = model.get_num_params()
+    print(f"> Number of model parameters: {n_params}")
+
     if args.split:
         print("")
         buf = io.BytesIO()

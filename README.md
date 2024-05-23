@@ -16,8 +16,10 @@ inaccurate or missing.
 ---
 
 This repository contains the implementation of Model-Distributed Inference for
-[nanoGPT](https://github.com/karpathy/nanoGPT) and
-[GPT2](https://huggingface.co/openai-community/gpt2).
+[nanoGPT](https://github.com/karpathy/nanoGPT),
+[GPT2](https://huggingface.co/openai-community/gpt2) and the
+[Llama](https://llama.meta.com/) architecture (implemented on top of the
+[litGPT](https://github.com/Lightning-AI/litgpt) framework).
 
 This framework allows to run these 2 LLMs over a network of computers
 ("_nodes_").
@@ -35,68 +37,66 @@ number of _samples_ (i.e., independent output pieces of text of the LLM) is at
 least as great as the number of nodes, as it allows the nodes to always be
 processing a different sample at all times.
 
-Notice that since the work found on this repository started with the distributed
-implementation of NanoGPT, the code used for distributing that model is
-"outdated" (see [nanoGPT folder](src/nanoGPT)).
-The contents of [src/GPT2](src/GPT2), instead, contain the final version of MDI
-for GPT-2.
+This repository contains the entire work that started with implementing MDI for
+NanoGPT, followed by the porting of the GPT-2 architecture, leading to the final
+version, which consists of the implementation of
+[litGPT](https://github.com/Lightning-AI/litgpt), specifically for the Llama
+architecture.
 
 This repository also contains the code for training/finetuning and running
 single-device inference of GPT-2 models (and all possible variants obtained by
 handpicking the configuration parameters) based on the NanoGPT code (with minor
 adaptations).
-The code supports Torch's Data-Distributed Parallelism
-(`DistributedDataParallel`), but I plan to add model-parallelism training
-following something like
-[this](https://pytorch.org/tutorials/intermediate/model_parallel_tutorial.html)
-or supporting [PyTorch's PiPPy](https://github.com/pytorch/PiPPy).
 
 ## Quickstart
 
-### GPT-2 over 3 devices
+### TinyLlama over 3 devices
 
-To run GPT-2 on a network of 3 devices, follow these steps.
+To run Llama 2 on a network of 3 devices, follow these steps.
 
 Having cloned this repository and installed the [requirements](requirements.txt)
 on each host device, modify or create your own configuration file using as a
-reference the [existing ones](src/GPT2/settings_distributed/configuration.json).
+reference the [existing ones](src/llama/settings_distributed/configuration.json).
 Make sure the devices can "see" each other over the network.\
-**Note**: the program will use the GPU by default, if available.
-To select a specific device, edit the file
-[src/GPT2/sub/config.py](src/GPT2/sub/config.py), assigning a different value to
-`DEVICE`.
-It is also possible to specify the device for each node through the
-configuration file (JSON): just add the `"device"` key to the node information.
+**Note** that the program will use the GPU by default, if available, but it is
+possible to specify a different torch device as a command line argument.
+It is also possible to select the device for each node through the
+configuration file (JSON) by adding the `"device"` key to the node information.
+
+First, download the model and convert it to the litGPT format:
+
+```bash
+./src/llama/prepare_model.py TinyLlama/TinyLlama-1.1B-Chat-v0.1
+```
 
 On the starter node, run:
 
 ```bash
-./src/GPT2/starter.py -v --model gpt2 --n-samples 3 --n-tokens 200
---nodes-config src/GPT2/settings_distr/configuration.json --prompt "Here is the
-recipe for pizza"
+./src/llama/starter.py --ckpt ./src/llama/checkpoints/TinyLlama/TinyLlama-1.1B-Chat-v0.1 -v --nodes-config ./src/llama/settings-distr/config.json --n-samples 3 --n-tokens 500 --prompt "Who are you?"
 ```
+
+This will make the node partition the model in chunks, and send them to the other
+nodes at initialization; in general, it is preferred to partition and send the
+model beforehand.
 
 On the first worker node, run:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config
-src/GPT2/settings_distr/configuration.json 0
+./src/llama/secondary.py -v --nodes-config ./src/llama/settings-distr/config.json 0
 ```
 
 On the second worker node, run:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 3 --n-tokens 200 --nodes-config
-src/GPT2/settings_distr/configuration.json 1
+./src/llama/secondary.py -v --nodes-config ./src/llama/settings-distr/config.json 1
 ```
 
 **Note:** the above commands assume that the configuration JSON file is the same
 on all the devices.
-The `--nodes-config` flag requires two arguments: the configuration file and the
-positional index of the node configuration parameters in the "secondary" list of
-the JSON file.
-Using the `--secondary-config` flag, it is possible to specify a JSON file
-containing the node configuration only as:
+The `--nodes-config` flag requires two arguments in secondary nodes: the
+configuration file and the positional index of the node configuration parameters
+in the "secondary" list of the JSON file.\
+In secondary nodes, it is also possible to pass a partial config file, such as:
 
 ```json
 {
@@ -116,13 +116,13 @@ containing the node configuration only as:
 The file above will work as long as the same address and ports are specified on
 the main configuration file passed to the starter node.
 
-### GPT-2 XL on multi-GPU system
+### Llama 2 on multi-GPU system
 
-To run GPT-2 XL over 2 GPUs of the same system, instead, just run the
-[src/GPT2/starter.py](src/GPT2/starter.py) and
-[src/GPT2/secondary.py](src/GPT2/secondary.py) programs on the same host, using
+To run Llama 2 7B over 2 GPUs of the same system, instead, just run the
+[src/llama/starter.py](src/llama/starter.py) and
+[src/llama/secondary.py](src/llama/secondary.py) programs on the same host, using
 the following as node configuration file (see
-[src/GPT2/settings_distr/config_2gpus.json](src/GPT2/settings_distr/config_2gpus.json)):
+[src/llama/settings_distr/config_2gpus.json](src/llama/settings_distr/config_2gpus.json)):
 
 ```json
 {
@@ -156,19 +156,24 @@ the following as node configuration file (see
 }
 ```
 
+First, download the weights and split them (notice that, due to the licensing of
+the weights, you need to request access to the model on Huggingface in order to
+download it):
+
+```bash
+./src/llama/prepare_model.py meta-llama/Llama-2-7b-hf --n-nodes 2 --hf-token "<your huggingface token>
+```
+
 Starter node:
 
 ```bash
-./src/GPT2/starter.py -v --model gpt2-xl --n-samples 2 --n-tokens 200
---nodes-config src/GPT2/settings_distr/config_2gpus.json --prompt "Here is the
-recipe for pizza"
+./src/llama/starter.py --ckpt ./src/llama/checkpoints/meta-llama/Llama-2-7b-hf -v --nodes-config ./src/llama/settings-distr/config_2gpus.json --n-samples 2 --n-tokens 500 --prompt "What is the recipe for pizza?"
 ```
 
 Worker node:
 
 ```bash
-./src/GPT2/secondary.py -v --n-samples 2 --n-tokens 200 --nodes-config
-src/GPT2/settings_distr/config_2gpus.json 0
+./src/llama2/secondary.py -v --chunk ./src/llama/checkpoints/meta-llama/Llama-2-7b-hf/chunks/2nodes/model_secondary0.pth --nodes-config src/llama/settings_distr/config_2gpus.json 0
 ```
 
 ## Rationale
@@ -180,9 +185,9 @@ one, who will use them as inputs for its own model chunk, forming a
 communication chain between the devices.
 
 This can solve the memory limitations of resource-limited devices and also
-result in lower inference times when paired with _recurrent pipelining_.
+result in lower inference times when paired with _recurrent pipeline parallelism_.
 
-Recurrent pipelining is a technique introduced in this scenario to prevent idle
+Recurrent pipeline parallelism is a technique introduced in this scenario to prevent idle
 nodes in the network during inference.
 Given the autoregressive nature of a decoder-only transformer model, where the
 generated output is appended to the inputs and fed back to the model input to
@@ -199,10 +204,30 @@ the next iteration.
 > <center><img src="assets/msg_transmission_out_q.svg" alt="message transmission
 > with pipelining" width="600"/>
 >
-> Message transmission with _recurrent pipelining_</center>
+> Message transmission with _recurrent pipeline parallelism_</center>
 
 The network is actually a closed loop, as the outputs of the last node in the
 chain are then transmitted back to the starter node.
+
+Another important aspect of distributed inference in LLMs is that of the
+transmitted message size.\
+In NanoGPT and GPT-2, the intermediate activations have a size that increases as
+more tokens are generated until the context is full.
+Since both models have a relatively low embedding dimension (i.e., length of
+each vector associated to a token), despite the messages growing in size, it is
+still possible to achieve fast generation as the overall amount of transmitted
+data is still low.\
+Moving to Llama, which is a state-of-the-art model and uses a bigger embedding
+dimension, it wouldn't be possible to transmit the intermediate activations fast
+enough to ensure efficient generation.
+We overcome this issue by pairing recurrent pipeline parallelism with rotating
+KV caches.
+This means that each node will keep separate KV caches for all the samples that
+are generated, and when it processes a sample it uses the corresponding cache to
+evaluate the output.
+Thanks to KV caching, it is now only required to forward the one embedding
+associated with the new token in the sequence at each generation iteration,
+allowing for much smaller message size and reduced transmission time.
 
 ## Architecture
 
@@ -277,6 +302,15 @@ The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti
 
     - Context length: 1024 tokens
     - Vocabulary size: 50257 (GPT2 tokenizer, from `tiktoken` library).
+
+- Llama architecture (TinyLlama, Llama 2, [Llama 3]) - based on the
+  [litgpt](https://github.com/Lightning-AI/litgpt) implementation.
+  - Specs:
+    | Model | N. layers | Embedding dim. | N. attention heads | N. parameters | Context Len. | Vocab. size |
+    |-------|-----------|----------------|--------------------|---------------|-------------|--------------|
+    | TinyLlama | 22 | 2048 | 32 | 1.1 B | 2048 | 32000 |
+    | Llama 2 | 32 | 4096 | 32 | 7 B | 4096 | 32000 |
+    | Llama 3 | 32 | 4096 | 32 | 8B | 8192 | 128000 |
 
 ## Implementation details
 

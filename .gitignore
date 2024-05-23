@@ -221,3 +221,6 @@ tmp/
 logs/
 # Images folder
 img/
+
+# Personal notes
+personal_notes/
