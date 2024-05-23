@@ -43,6 +43,13 @@ WARMUP_ITERS: int = 2000
 LR_DECAY_ITERS: int = 600000
 MIN_LR: float = 6e-5  # ~= .1*lr
 
+class TrainingConfig:
+    tie_embeddings: bool = True
+    learning_rate = LEARNING_RATE
+    weight_decay = WEIGHT_DECAY
+    beta1 = BETA1
+    beta2 = BETA2
+
 # ---- Generation settings ----------------------
 TOP_K = (
     200  # retain only the top_k most likely tokens, clamp others to have 0 probability
