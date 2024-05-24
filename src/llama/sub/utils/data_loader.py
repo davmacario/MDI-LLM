@@ -101,7 +101,7 @@ def get_batch(
         x = torch.stack(
             [
                 torch.from_numpy(
-                    (dataset[i : i + model_conf.block_size]).astype(np.int32)
+                    (dataset[i : i + model_conf.block_size]).astype(np.int64)
                 )
                 for i in ix
             ]
@@ -109,7 +109,7 @@ def get_batch(
         y = torch.stack(
             [
                 torch.from_numpy(
-                    (dataset[i + 1 : i + 1 + model_conf.block_size]).astype(np.int32)
+                    (dataset[i + 1 : i + 1 + model_conf.block_size]).astype(np.int64)
                 )
                 for i in ix
             ]
