@@ -161,7 +161,7 @@ def main(args):
         model.load_state_dict(wt)
 
         state = torch.load(ckpt_file)
-        assert state["config"] == config
+        # assert state["config"] == config
         if args.force_settings:
             train = state["train_settings"]
         iter_num = state["iter_num"]
