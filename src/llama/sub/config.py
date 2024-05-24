@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from copy import deepcopy
-from typing import Dict, List
+from typing import Dict, List, Any
 
 import torch
 
@@ -42,13 +42,6 @@ DECAY_LR: bool = True
 WARMUP_ITERS: int = 2000
 LR_DECAY_ITERS: int = 600000
 MIN_LR: float = 6e-5  # ~= .1*lr
-
-class TrainingConfig:
-    tie_embeddings: bool = True
-    learning_rate = LEARNING_RATE
-    weight_decay = WEIGHT_DECAY
-    beta1 = BETA1
-    beta2 = BETA2
 
 # ---- Generation settings ----------------------
 TOP_K = (
@@ -105,12 +98,57 @@ DTYPE = (
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     else "float16"
 )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-DTYPE_TORCH = {
+DTYPE_TORCH_MAPPING = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
-}[DTYPE]
+}
+DTYPE_TORCH = DTYPE_TORCH_MAPPING[DTYPE]
 COMPILE = False  # use PyTorch 2.0 to compile the model to be faster
+
+class TrainingConfig:
+    tie_embeddings: bool = True
+    learning_rate = LEARNING_RATE
+    decay_lr = DECAY_LR
+    min_lr = MIN_LR
+    warmup_iters = WARMUP_ITERS
+    weight_decay = WEIGHT_DECAY
+    beta1 = BETA1
+    beta2 = BETA2
+    grad_clip = GRAD_CLIP
+    # Modifiable
+    compile = COMPILE
+    _dtype_torch = DTYPE_TORCH
+    eval_only = EVAL_ONLY
+    batch_size = BATCH_SIZE
+    max_iters = MAX_ITERS
+    ckpt_interval = CKPT_INTERVAL
+    log_interval = LOG_INTERVAL
+    gradient_accumulation_steps = GRADIENT_ACCUMULATION_STEPS
+    device = DEVICE
+
+    def as_dict(self) -> Dict[str, Any]:
+        out = {}
+        for attr in dir(self):
+            if not attr.startswith("__") and not attr.endswith("__"):
+                out[attr] = getattr(self, attr, None)
+                if out[attr] is None:
+                    del out[attr]
+        return out
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self._dtype_torch
+
+    @dtype.setter
+    def dtype(self, value: str) -> None:
+        """
+        Automatically map a str dtype (among 'float32', 'bfloat16' and 'float16') to the
+        correct torch.dtype
+        """
+        if value not in DTYPE_TORCH_MAPPING:
+            raise ValueError(f"Supported dtypes are: {DTYPE_TORCH_MAPPING.keys()}")
+        self._dtype_torch = DTYPE_TORCH_MAPPING[value]
 
 # DDP settings
 BACKEND = "nccl"  # 'nccl', 'gloo', etc.
