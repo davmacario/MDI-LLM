@@ -162,7 +162,7 @@ def main(args):
 
         state = torch.load(ckpt_file)
         # assert state["config"] == config
-        if args.force_settings:
+        if args.force_old:
             train = state["train_settings"]
         iter_num = state["iter_num"]
         if iter_num > train.max_iters:
