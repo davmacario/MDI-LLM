@@ -35,6 +35,7 @@ from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
 from sub.typing import FileType
 from sub.utils import load_from_pt, split_and_store
+from sub import PromptStyle
 
 docstring = """
 Distributed implementation of the Llama architecture using Model-Distributed Inference
@@ -331,11 +332,15 @@ class GPTDistributed:
         """
         if self.node_type == "starter":
             assert n_samples and tokens_per_sample
+            assert self.model_config
             # Init. nodes, launch iterations
             if not self.configure_nodes(n_samples=n_samples):
                 raise RuntimeError("Unable to initialize network nodes!")
 
+            prompt = prompt if prompt is not None else "\n"
+            prompt_style = PromptStyle.from_config(self.model_config)
             try:
+                prompt = prompt_style.apply(prompt)
                 out_text, time_gen = self.gpt_serv.launch_starter(
                     n_samples, tokens_per_sample, prompt
                 )
