@@ -163,6 +163,10 @@ def main(args):
         state = torch.load(ckpt_file)
         assert state["config"] == config
         train = state["train_settings"]
+        # Some settings are overwritten!
+        train.max_iters = args.max_iters
+        train.gradient_accumulation_steps = args.grad_acc_steps
+        train.batch_size = args.batch_size
         iter_num = state["iter_num"]
         best_val_loss = state["best_val_loss"]
     else:
