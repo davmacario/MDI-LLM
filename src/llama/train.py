@@ -65,11 +65,10 @@ def initialize_weights(model: GPT, n_layer: int, n_embd: int) -> None:
 def main(args):
     script_dir = Path(os.path.dirname(__file__))
     # Extract args
-    ckpt_dir = Path(args.ckpt) if args.ckpt else None
-    if ckpt_dir:
-        model_config_file = ckpt_dir / "model_config.yaml"
-        ckpt_file = ckpt_dir / "train_ckpt.pkl"
-        ckpt_model = ckpt_dir / "lit_model.pth"
+    ckpt_dir = Path(args.ckpt)
+    model_config_file = ckpt_dir / "model_config.yaml"
+    ckpt_file = ckpt_dir / "train_ckpt.pkl"
+    ckpt_model = ckpt_dir / "lit_model.pth"
     dataset_dir = Path(args.dataset)
     dataset_name = dataset_dir.name
     init_from = args.init  # scratch / resume / hf
@@ -149,13 +148,11 @@ def main(args):
         model = GPT(config)
         initialize_weights(model, n_layer=config.n_layer, n_embd=config.n_embd)
     elif init_from == "resume":
-        if not ckpt_dir:
-            raise ValueError("Missing model checkpoint folder")
         # Look for checkpoint file
         if not ckpt_file.exists() or not ckpt_model.exists():
             raise FileNotFoundError("Unable to find training checkpoint!")
         config, wt = load_from_pt(ckpt_dir)
-        assert wt is not None, "Unable to load model parameters!"
+        assert wt, "Unable to load model parameters!"
         if args.verb:
             print(f"Resuming training from {ckpt_model}")
         model = GPT(config)
@@ -171,9 +168,28 @@ def main(args):
                 f"Iteration number of pretrained model ({iter_num}) is greater than the maximum number of iterations specified ({train.max_iters})!"
             )
         best_val_loss = state["best_val_loss"]
+    elif init_from.lower() in {"hf", "huggingface"}:
+        # In this case, the ckpt_dir is the model name on huggingface hub
+        ckpt_dir = script_dir / "checkpoints" / args.ckpt
+        os.makedirs(ckpt_dir, exist_ok=True)
+        model_config_file = ckpt_dir / "model_config.yaml"
+        ckpt_file = ckpt_dir / "train_ckpt.pkl"
+        ckpt_model = ckpt_dir / "lit_model.pth"
+        if ckpt_model.exists() and model_config_file.exists():
+            print("Model was already downloaded!")
+            config, wt = load_from_pt(ckpt_dir)
+        else:
+            config, wt = load_from_hf(
+                repo_id=args.ckpt,
+                access_token=args.hf_token if args.hf_token else os.getenv("HF_TOKEN"),
+                dtype=DTYPE,
+                checkpoint_dir=script_dir / "checkpoints",
+            )
+        assert wt, "Unable to load model parameters!"
+        model = GPT(config)
+        model.load_state_dict(wt)
     else:
-        # TODO
-        raise ValueError("Not implemented")
+        raise ValueError(f"Init type not supported: {args.init}")
 
     n_params = sum(p.numel() for p in model.parameters())
     if args.verb:
@@ -324,13 +340,6 @@ if __name__ == "__main__":
         help="if set, compile the model (Torch >= 2.0.0 required)",
     )
     parser.add_argument(
-        "-F",
-        "--force-old",
-        action="store_true",
-        help="""if resuming training ('--init resume'), force the old training settings
-        - NOTE: this may cause issues if resuming training on a different computer""",
-    )
-    parser.add_argument(
         "--ckpt",
         type=str,
         default="./checkpoints/custom/NanoLlama/",
@@ -353,6 +362,13 @@ if __name__ == "__main__":
         help="""initialization - can be: 'scratch' (default) to initialize a new model
         from scratch given the model_config.yaml file, 'resume', to resume training from
         an existing checkpoint, or 'huggingface' to finetune a model from huggingface""",
+    )
+    parser.add_argument(
+        "-F",
+        "--force-old",
+        action="store_true",
+        help="""if resuming training ('--init resume'), force the old training settings
+        - NOTE: this may cause issues if resuming training on a different computer""",
     )
     parser.add_argument(
         "--batch-size", type=int, default=10, help="training batch size (default=10)"
@@ -400,6 +416,13 @@ if __name__ == "__main__":
         type=str,
         default=DEVICE,
         help="device where to load the model for training",
+    )
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        default=os.getenv("HF_TOKEN"),
+        help="""Huggingface Hub token to access restricted/private workspaces;
+        not required if the HF_TOKEN env variable is set.""",
     )
     parser.add_argument("--seed", type=int, default=10137, help="random seed")
     args = parser.parse_args()
