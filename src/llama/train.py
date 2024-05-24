@@ -239,7 +239,6 @@ def main(args):
     X, Y = get_batch(train_data, train.batch_size, args.device, config)
     t_start = time.time()
     local_iter = 0
-    iter_num = 0
     state = {}
     count_loss_incr = 0
     while iter_num <= train.max_iters:
