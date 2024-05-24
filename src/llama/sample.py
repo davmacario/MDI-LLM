@@ -220,26 +220,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt",
         type=Path,
-        default=script_dir / "checkpoint",
-        help="folder containing the model files",
+        default=script_dir / "checkpoints",
+        help=f"folder containing model files (default={script_dir / 'checkpoints'})",
     )
     parser.add_argument(
         "--n-samples",
         type=int,
         default=1,
-        help="batch size, i.e., n. of generated samples, i.e., produced pieces of text",
+        help="""batch size, i.e., n. of generated samples, i.e., produced pieces of 
+        text (default=1)""",
     )
     parser.add_argument(
         "--n-tokens",
         type=int,
         default=800,
-        help="number of generated tokens per sample, excluding the prompt",
+        help="number of generated tokens per sample, excluding prompt (default=800)",
     )
     parser.add_argument(
         "--device",
         type=str,
         default=default_device,
-        help="torch device where to load model and tensors",
+        help=f"torch device where to load model and tensors (default={default_device}",
     )
     parser.add_argument(
         "--prompt",
