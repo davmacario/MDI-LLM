@@ -11,8 +11,6 @@ Add possibility to init from hf, which downloads model and fine tunes it
 
 MISSING:
 - DDP
-- Fine-tuning from compatible HF model
-- Resuming training
 """
 
 import gc
