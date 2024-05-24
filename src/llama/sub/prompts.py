@@ -123,7 +123,7 @@ class TinyLlama(PromptStyle):
 
 class NoPrompt(PromptStyle):
     def apply(self, prompt: str, **kwargs) -> str:
-        return ""
+        return f"{prompt}"
 
 # Maps prompt style names to PromptStyle classes
 prompt_styles: Dict[str, Type[PromptStyle]] = {
