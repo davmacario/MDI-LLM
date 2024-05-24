@@ -132,7 +132,6 @@ class NoPrompt(PromptStyle):
     """
     No prompt - the LLM will start generation from a single 'newline' char.
     """
-
     def apply(self, prompt: Any, **kwargs) -> str:
         return "\n"
 
@@ -160,6 +159,7 @@ def model_name_to_prompt_style(model_name: str) -> PromptStyle:
     if re.search(r"tiny-llama.*chat", model_name):
         return TinyLlama()
     if re.search(r"nanollama*", model_name.lower()):
+        print("NanoLlama prompt found!")
         return NoPrompt()
     return Default()
 
