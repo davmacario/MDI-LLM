@@ -92,7 +92,10 @@ def estimate_loss(
         for k in range(EVAL_ITERS):
             x, y = get_batch(dss[split], batch_size, device, model.config)
             with ctx:
-                _, loss = model(x, y)
+                logits = model(x)
+                loss = nn.functional.cross_entropy(
+                    logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1
+                )
             losses[k] = loss.item()
         out[split] = losses.mean()
     # Re-set the model to training mode

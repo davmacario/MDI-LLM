@@ -10,6 +10,8 @@ from tqdm import tqdm
 
 """
 Prepare the OpenWebText dataset to be used to train the model.
+
+TODO - ADAPT
 """
 
 curr_dir = os.path.dirname(__file__)

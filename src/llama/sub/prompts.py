@@ -4,7 +4,7 @@ import re
 from abc import abstractmethod
 from json import dumps
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Type, Union
 
 import yaml
 
@@ -54,7 +54,13 @@ class Llama2FunctionCalling(PromptStyle):
                 "Search the web for content on Bing. This allows users to search online/the internet/the web for"
                 " content."
             ),
-            "arguments": [{"name": "query", "type": "string", "description": "The search query string"}],
+            "arguments": [
+                {
+                    "name": "query",
+                    "type": "string",
+                    "description": "The search query string",
+                }
+            ],
         }
 
         system_prompt = (
@@ -121,6 +127,15 @@ class TinyLlama(PromptStyle):
             "<|assistant|>\n"
         )
 
+
+class NoPrompt(PromptStyle):
+    """
+    No prompt - the LLM will start generation from a single 'newline' char.
+    """
+    def apply(self, prompt: Any, **kwargs) -> str:
+        return "\n"
+
+
 # Maps prompt style names to PromptStyle classes
 prompt_styles: Dict[str, Type[PromptStyle]] = {
     # Model-specific prompt styles
@@ -143,6 +158,8 @@ def model_name_to_prompt_style(model_name: str) -> PromptStyle:
         return CodeLlama()
     if re.search(r"tiny-llama.*chat", model_name):
         return TinyLlama()
+    if re.search(r"nanollama*", model_name.lower()):
+        return NoPrompt()
     return Default()
 
 
@@ -168,7 +185,9 @@ def load_prompt_style(checkpoint_dir: Path) -> PromptStyle:
 def has_prompt_style(checkpoint_dir: Path) -> bool:
     return (checkpoint_dir / "prompt_style.yaml").is_file()
 
+
 # Util
+
 
 def get_user_prompt(prompt: str, n_samples: int = 1, **kwargs) -> List[str]:
     """

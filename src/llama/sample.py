@@ -19,7 +19,6 @@ from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
-model_type = "llama"
 
 
 def main(args):
@@ -43,7 +42,8 @@ def main(args):
     PLOTS = args.plots
     DEVICE = args.device
 
-    checkpoint_dir = args.ckpt
+    checkpoint_dir = Path(args.ckpt)
+    model_type = checkpoint_dir.name
     checkpoint_path = args.ckpt / "lit_model.pth"  # Requires ckpt to be converted
     if not checkpoint_path.is_file() and (
         (checkpoint_dir / "model.bin").is_file()
@@ -123,6 +123,7 @@ def main(args):
             print("Beginning generation")
         t_start = time.time()
         for k in range(BATCH_SIZE):
+            curr_tok_time = []
             # TODO: fix support for one prompt per sample
             prompt = prompt_style.apply(start[k])
             if VERB:
@@ -136,8 +137,9 @@ def main(args):
                 max_new_tokens,
                 temperature=TEMPERATURE,
                 top_k=TOP_K,
-                tok_time=tok_time_all,
+                tok_time=curr_tok_time,
             )
+            tok_time_all.append(curr_tok_time)
             decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
             print("---------------")
@@ -148,11 +150,11 @@ def main(args):
 
     if PLOTS:
         # Store points on csv file
+        os.makedirs(os.path.join(script_dir, "logs"), exist_ok=True)
         points_file_path = os.path.join(
             script_dir,
             "logs",
-            "tok-per-time",
-            f"tokens_time_samples_standalone{model_type}_{BATCH_SIZE}samples.csv",
+            f"tokens_time_samples_1nodes_{model_type}_{BATCH_SIZE}samples.csv",
         )
         if not os.path.exists(os.path.dirname(points_file_path)):
             os.mkdir(os.path.dirname(points_file_path))
@@ -164,10 +166,11 @@ def main(args):
                     f.write(f"{times[i]},{n_samples[i]}\n")
 
         # Plot tokens/time
+        os.makedirs(os.path.join(script_dir, "img"), exist_ok=True)
         plot_tokens_per_time(
             tok_time_all,
             out_path=os.path.join(
-                script_dir, "img", f"tokens_time_standalone{model_type}.png"
+                script_dir, "img", f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png"
             ),
         )
 
@@ -220,26 +223,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt",
         type=Path,
-        default=script_dir / "checkpoint",
-        help="folder containing the model files",
+        default=script_dir / "checkpoints",
+        help=f"folder containing model files (default={script_dir / 'checkpoints'})",
     )
     parser.add_argument(
         "--n-samples",
         type=int,
         default=1,
-        help="batch size, i.e., n. of generated samples, i.e., produced pieces of text",
+        help="""batch size, i.e., n. of generated samples, i.e., produced pieces of 
+        text (default=1)""",
     )
     parser.add_argument(
         "--n-tokens",
         type=int,
         default=800,
-        help="number of generated tokens per sample, excluding the prompt",
+        help="number of generated tokens per sample, excluding prompt (default=800)",
     )
     parser.add_argument(
         "--device",
         type=str,
         default=default_device,
-        help="torch device where to load model and tensors",
+        help=f"torch device where to load model and tensors (default={default_device}",
     )
     parser.add_argument(
         "--prompt",
