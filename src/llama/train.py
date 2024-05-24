@@ -243,7 +243,7 @@ def main(args):
     count_loss_incr = 0
     while iter_num <= train.max_iters:
         if VERB:
-            print(f"Training iter {local_iter}")
+            print(f"Training iter {iter_num}")
 
         lr = get_lr(iter_num) if train.decay_lr else train.learning_rate
         for param_group in optimizer.param_groups:
