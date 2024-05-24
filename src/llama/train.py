@@ -23,6 +23,7 @@ import os
 import pickle
 import shutil
 import time
+import warnings
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from functools import partial
@@ -166,7 +167,9 @@ def main(args):
             train = state["train_settings"]
         iter_num = state["iter_num"]
         if iter_num > train.max_iters:
-            raise ValueError(f"Iteration number of pretrained model ({iter_num}) is greater than the maximum number of iterations specified ({train.max_iters})!")
+            raise ValueError(
+                f"Iteration number of pretrained model ({iter_num}) is greater than the maximum number of iterations specified ({train.max_iters})!"
+            )
         best_val_loss = state["best_val_loss"]
     else:
         # TODO
@@ -198,7 +201,10 @@ def main(args):
     if train.compile:
         if args.verb:
             print("Compiling model - this may take a while", end="\r")
-        model = torch.compile(model)
+        try:
+            model = torch.compile(model)
+        except RuntimeError as e:
+            warnings.warn(f"Unable to compile model! {e}")
         if args.verb:
             print("Model compiled!")
 
