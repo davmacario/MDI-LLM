@@ -122,8 +122,11 @@ class TinyLlama(PromptStyle):
         )
 
 class NoPrompt(PromptStyle):
+    """
+    No prompt - the LLM will start generation from a single 'newline' char.
+    """
     def apply(self, prompt: str, **kwargs) -> str:
-        return f"{prompt}"
+        return "\n"
 
 # Maps prompt style names to PromptStyle classes
 prompt_styles: Dict[str, Type[PromptStyle]] = {
