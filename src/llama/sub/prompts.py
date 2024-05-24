@@ -121,6 +121,10 @@ class TinyLlama(PromptStyle):
             "<|assistant|>\n"
         )
 
+class NoPrompt(PromptStyle):
+    def apply(self, prompt: str, **kwargs) -> str:
+        return ""
+
 # Maps prompt style names to PromptStyle classes
 prompt_styles: Dict[str, Type[PromptStyle]] = {
     # Model-specific prompt styles
@@ -143,6 +147,8 @@ def model_name_to_prompt_style(model_name: str) -> PromptStyle:
         return CodeLlama()
     if re.search(r"tiny-llama.*chat", model_name):
         return TinyLlama()
+    if re.search(r"nanollama*", model_name.lower()):
+        return NoPrompt()
     return Default()
 
 
