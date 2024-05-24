@@ -64,12 +64,11 @@ def initialize_weights(model: GPT, n_layer: int, n_embd: int) -> None:
 def main(args):
     script_dir = Path(os.path.dirname(__file__))
     # Extract args
-    model_config_file = (
-        Path(args.model_config) if args.model_config else None
-    )  # None if HF init
-    ckpt_dir = model_config_file.parent  # Where the model will be stored (FIXME)
-    ckpt_file = ckpt_dir / "train_ckpt.pkl"
-    ckpt_model = ckpt_dir / "lit_model.pth"
+    ckpt_dir = Path(args.ckpt) if args.ckpt else None
+    if ckpt_dir:
+        model_config_file = ckpt_dir / "model_config.yaml"
+        ckpt_file = ckpt_dir / "train_ckpt.pkl"
+        ckpt_model = ckpt_dir / "lit_model.pth"
     dataset_dir = Path(args.dataset)
     dataset_name = dataset_dir.name
     init_from = args.init  # scratch / resume / hf
@@ -81,6 +80,7 @@ def main(args):
     train.log_interval = args.log_interval
     train.gradient_accumulation_steps = args.grad_acc_steps
     train.device = args.device
+    train.compile = args.compile
     torch_device = torch.device(args.device)
     # TODO: dtype
 
@@ -128,8 +128,8 @@ def main(args):
 
     # Initialization of the model
     if init_from == "scratch":
-        if not model_config_file:
-            raise ValueError("Missing model config file")
+        if not ckpt_dir:
+            raise ValueError("Missing model checkpoint folder")
 
         if (ckpt_dir / "tokenizer.model").exists() or (
             ckpt_dir / "tokenizer.json"
@@ -147,12 +147,31 @@ def main(args):
 
         model = GPT(config)
         initialize_weights(model, n_layer=config.n_layer, n_embd=config.n_embd)
-        n_params = sum(p.numel() for p in model.parameters())
+    elif init_from == "resume":
+        if not ckpt_dir:
+            raise ValueError("Missing model checkpoint folder")
+        # Look for checkpoint file
+        if not ckpt_file.exists() or not ckpt_model.exists():
+            raise FileNotFoundError("Unable to find training checkpoint!")
+        config, wt = load_from_pt(ckpt_dir)
+        assert wt is not None, "Unable to load model parameters!"
         if args.verb:
-            print(f"Number of model parameters: {n_params}")
+            print(f"Resuming training from {ckpt_model}")
+        model = GPT(config)
+        model.load_state_dict(wt)
+
+        state = torch.load(ckpt_file)
+        assert state["config"] == config
+        train = state["train_settings"]
+        iter_num = state["iter_num"]
+        best_val_loss = state["best_val_loss"]
     else:
         # TODO
         raise ValueError("Not implemented")
+
+    n_params = sum(p.numel() for p in model.parameters())
+    if args.verb:
+        print(f"Number of model parameters: {n_params}")
 
     model.to(torch_device)
 
@@ -166,33 +185,37 @@ def main(args):
         print("> Gradient Accumulation steps: ", train.gradient_accumulation_steps)
         print("> Max epochs: ", train.max_iters)
         print("> Checkpoint update interval: ", train.ckpt_interval)
+        print(f"> The model will {"not" if train.compile else ""} be compiled")
         print("")
         print(f"Tokens per iteration will be: {tokens_per_iter:,}")
 
     if train.tie_embeddings:
         model.transformer.wte.weight = model.lm_head.weight
 
-    if args.compile:
+    if train.compile:
+        if args.verb:
+            print("Compiling model - this may take a while", end="\r")
         model = torch.compile(model)
+        if args.verb:
+            print("Model compiled!")
 
-    if args.init != "resume":
-        fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
-        scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=train.learning_rate,
-            weight_decay=train.weight_decay,
-            betas=(train.beta1, train.beta2),
-            fused=(fused_available and device_type == "cuda"),
-        )
-    else:
-        raise ValueError("Not Implemented!")
+    scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
+    fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=train.learning_rate,
+        weight_decay=train.weight_decay,
+        betas=(train.beta1, train.beta2),
+        fused=(fused_available and device_type == "cuda"),
+    )
+    if args.init == "resume":
+        optimizer.load_state_dict(state["optimizer"])
 
     X, Y = get_batch(train_data, train.batch_size, args.device, config)
     t_start = time.time()
     local_iter = 0
-    iter_num = 0  # FIXME: can be inferred from checkpoint if resuming
-    state = {}  # TODO: store here info
+    iter_num = 0
+    state = {}
     count_loss_incr = 0
     while iter_num <= train.max_iters:
         if VERB:
@@ -292,11 +315,11 @@ if __name__ == "__main__":
         help="if set, compile the model (Torch >= 2.0.0 required)",
     )
     parser.add_argument(
-        "--model-config",
+        "--ckpt",
         type=str,
-        default="./checkpoints/custom/NanoLlama/model_config.yaml",
+        default="./checkpoints/custom/NanoLlama/",
         help="""
-        path to the model config file (only if loading from pretrained or training from
+        path to the model folder (only if loading from pretrained or training from
         scratch
         """,
     )

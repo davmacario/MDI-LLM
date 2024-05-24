@@ -126,6 +126,7 @@ class TrainingConfig:
     log_interval = LOG_INTERVAL
     gradient_accumulation_steps = GRADIENT_ACCUMULATION_STEPS
     device = DEVICE
+    compile = COMPILE
 
     def as_dict(self) -> Dict[str, Any]:
         out = {}
