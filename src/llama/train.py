@@ -245,7 +245,10 @@ def main(args):
         # Gradient Accumulation
         for micro_step in range(train.gradient_accumulation_steps):
             with ctx:
-                _, loss = model(X, Y)
+                logits = model(X)
+                loss = nn.functional.cross_entropy(
+                    logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=-1
+                )
                 loss = loss / train.gradient_accumulation_steps
             X, Y = get_batch(train_data, train.batch_size, args.device, config)
             # Backward pass + scaling if fp16 is used
