@@ -41,8 +41,8 @@ def main(args):
 
     train_ids = np.array(train_ids, dtype=np.uint16)
     val_ids = np.array(val_ids, dtype=np.uint16)
-    train_ids.tofile(args.data / "train.bin")
-    val_ids.tofile(args.data / "val.bin")
+    train_ids.tofile(data_dir / "train.bin")
+    val_ids.tofile(data_dir / "val.bin")
 
     print(f"Created files 'train.bin' and 'val.bin' in {args.data}")
 
