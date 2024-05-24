@@ -123,6 +123,7 @@ def main(args):
             print("Beginning generation")
         t_start = time.time()
         for k in range(BATCH_SIZE):
+            curr_tok_time = []
             # TODO: fix support for one prompt per sample
             prompt = prompt_style.apply(start[k])
             if VERB:
@@ -136,8 +137,9 @@ def main(args):
                 max_new_tokens,
                 temperature=TEMPERATURE,
                 top_k=TOP_K,
-                tok_time=tok_time_all,
+                tok_time=curr_tok_time,
             )
+            tok_time_all.append(curr_tok_time)
             decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
             print("---------------")
