@@ -1023,12 +1023,12 @@ class GPTServer:
         if PLOTS:
             self.tok_time.append((total_iters, tot_time))
             # Store plotted points as csv file
+            os.makedirs(os.path.join(script_dir, "..", "logs"), exist_ok=True)
             points_file_path = os.path.join(
                 script_dir,
                 "..",
                 "logs",
-                "tok-per-time",
-                f"tokens_time_samples_mdi_{self.model_type}_{n_samples}samples_{self.n_nodes}nodes.csv",
+                f"tokens_time_samples_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.csv",
             )
             if not os.path.exists(os.path.dirname(points_file_path)):
                 os.makedirs(os.path.dirname(points_file_path), exist_ok=True)
@@ -1044,8 +1044,7 @@ class GPTServer:
                     script_dir,
                     "..",
                     "img",
-                    f"{self.n_nodes}",
-                    f"tokens_time_mdi_{self.model_type}_{n_samples}samples.png",
+                    f"tokens_time_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.png",
                 ),
             )
 
