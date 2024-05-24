@@ -162,11 +162,8 @@ def main(args):
 
         state = torch.load(ckpt_file)
         assert state["config"] == config
-        train = state["train_settings"]
-        # Some settings are overwritten!
-        train.max_iters = args.max_iters
-        train.gradient_accumulation_steps = args.grad_acc_steps
-        train.batch_size = args.batch_size
+        if args.force_settings:
+            train = state["train_settings"]
         iter_num = state["iter_num"]
         best_val_loss = state["best_val_loss"]
     else:
@@ -317,6 +314,13 @@ if __name__ == "__main__":
         "--compile",
         action="store_true",
         help="if set, compile the model (Torch >= 2.0.0 required)",
+    )
+    parser.add_argument(
+        "-F",
+        "--force-old",
+        action="store_true",
+        help="""if resuming training ('--init resume'), force the old training settings
+        - NOTE: this may cause issues if resuming training on a different computer""",
     )
     parser.add_argument(
         "--ckpt",
