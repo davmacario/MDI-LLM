@@ -203,10 +203,10 @@ def main(args):
             print("Compiling model - this may take a while", end="\r")
         try:
             model = torch.compile(model)
+            if args.verb:
+                print("Model compiled!")
         except RuntimeError as e:
             warnings.warn(f"Unable to compile model! {e}")
-        if args.verb:
-            print("Model compiled!")
 
     scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
