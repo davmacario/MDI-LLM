@@ -313,10 +313,10 @@ if __name__ == "__main__":
         an existing checkpoint, or 'huggingface' to finetune a model from huggingface""",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=10, help="training batch size"
+        "--batch-size", type=int, default=10, help="training batch size (default=10)"
     )
     parser.add_argument(
-        "--max-iters", type=int, default=100, help="number of training iterations"
+        "--max-iters", type=int, default=100, help="number of training iterations (default=100)"
     )
     parser.add_argument(
         "--patience",
@@ -329,7 +329,7 @@ if __name__ == "__main__":
         "--ckpt-interval",
         type=int,
         default=20,
-        help="number of iterations between each checkpoint",
+        help="number of iterations between each checkpoint (default=20)",
     )
     parser.add_argument(
         "-au",
@@ -342,13 +342,13 @@ if __name__ == "__main__":
         "--log-interval",
         type=int,
         default=10,
-        help="number of iterations between each log",
+        help="number of iterations between each log (default=10)",
     )
     parser.add_argument(
         "--grad-acc-steps",
         type=int,
         default=10,
-        help="number of gradient accumulation steps",
+        help="number of gradient accumulation steps (default=10)",
     )
     parser.add_argument(
         "--device",
