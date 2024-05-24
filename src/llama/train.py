@@ -165,6 +165,8 @@ def main(args):
         if args.force_settings:
             train = state["train_settings"]
         iter_num = state["iter_num"]
+        if iter_num > train.max_iters:
+            raise ValueError(f"Iteration number of pretrained model ({iter_num}) is greater than the maximum number of iterations specified ({train.max_iters})!")
         best_val_loss = state["best_val_loss"]
     else:
         # TODO
