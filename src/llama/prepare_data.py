@@ -16,7 +16,11 @@ from sub.utils import load_dataset, split_dataset
 
 
 def main(args):
-    tokenizer = Tokenizer(args.tokenizer)
+    tok_path = Path(args.tokenizer)
+    if not tok_path.is_dir():
+        tok_path = tok_path.parent
+
+    tokenizer = Tokenizer(tok_path)
     data_dir = Path(args.data)
 
     if not data_dir.is_dir():
@@ -58,8 +62,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tokenizer",
         type=str,
-        default="./checkpoints/custom/NanoLlama/tokenizer.model",
-        help="path to the tokenizer configuration."
+        default="./checkpoints/custom/NanoLlama",
+        help="path to the directory containing the tokenizer configuration."
     )
     args = parser.parse_args()
     main(args)
