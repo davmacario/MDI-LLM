@@ -316,7 +316,10 @@ if __name__ == "__main__":
         "--batch-size", type=int, default=10, help="training batch size (default=10)"
     )
     parser.add_argument(
-        "--max-iters", type=int, default=100, help="number of training iterations (default=100)"
+        "--max-iters",
+        type=int,
+        default=100,
+        help="number of training iterations (default=100)",
     )
     parser.add_argument(
         "--patience",
@@ -356,6 +359,7 @@ if __name__ == "__main__":
         default=DEVICE,
         help="device where to load the model for training",
     )
+    parser.add_argument("--seed", type=int, default=10137, help="random seed")
     args = parser.parse_args()
     try:
         main(args)
