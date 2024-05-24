@@ -193,7 +193,7 @@ def main(args):
 
     n_params = sum(p.numel() for p in model.parameters())
     if args.verb:
-        print(f"Number of model parameters: {n_params}")
+        print(f"Number of model parameters: {n_params:,}")
 
     model.to(torch_device)
 
