@@ -15,6 +15,7 @@ def load_dataset(
     input_path: Union[str, Path],
     tokenizer: Tokenizer,
     *args,
+    device: str = "cpu",
     **kwargs,
 ) -> torch.Tensor:
     """
@@ -42,7 +43,7 @@ def load_dataset(
         text = f.read()
         f.close()
 
-    return tokenizer.encode(text)
+    return tokenizer.encode(text, device=torch.device(device))
 
 
 def split_dataset(
