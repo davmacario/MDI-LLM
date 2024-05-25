@@ -337,10 +337,7 @@ class GPTDistributed:
             if not self.configure_nodes(n_samples=n_samples):
                 raise RuntimeError("Unable to initialize network nodes!")
 
-            prompt = prompt if prompt is not None else "\n"
-            prompt_style = PromptStyle.from_config(self.model_config)
             try:
-                prompt = prompt_style.apply(prompt)
                 out_text, time_gen = self.gpt_serv.launch_starter(
                     n_samples, tokens_per_sample, prompt
                 )
