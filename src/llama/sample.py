@@ -11,6 +11,7 @@ import time
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from pathlib import Path
+import gc
 
 import torch
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
@@ -89,6 +90,8 @@ def main(args):
     assert wt is not None
     model = GPT(config)
     model.load_state_dict(wt)
+    del wt
+    gc.collect()
     model.to(torch_device)
 
     # NOTE: by increasing the batch size, the model can generate more samples together
