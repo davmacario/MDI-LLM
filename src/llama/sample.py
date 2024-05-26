@@ -13,9 +13,10 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import torch
-from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
 from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
+
+from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
@@ -124,6 +125,7 @@ def main(args):
         t_start = time.time()
         for k in range(BATCH_SIZE):
             curr_tok_time = []
+            t_start_sample = time.time()
             # TODO: fix support for one prompt per sample
             prompt = prompt_style.apply(start[k])
             if VERB:
@@ -139,7 +141,12 @@ def main(args):
                 top_k=TOP_K,
                 tok_time=curr_tok_time,
             )
-            tok_time_all.append(curr_tok_time)
+            tok_time_all.append(
+                [
+                    (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
+                    for x in curr_tok_time
+                ]
+            )
             decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
             print("---------------")
@@ -170,7 +177,9 @@ def main(args):
         plot_tokens_per_time(
             tok_time_all,
             out_path=os.path.join(
-                script_dir, "img", f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png"
+                script_dir,
+                "img",
+                f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png",
             ),
         )
 
