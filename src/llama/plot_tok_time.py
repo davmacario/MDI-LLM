@@ -52,7 +52,8 @@ def main(args):
     plt.grid(which="minor", linestyle="dashed", linewidth=0.3)
     plt.minorticks_on()
     plt.legend()
-    plt.title(f"Standalone generation vs. MDI - {model_name}")
+    if not args.no_title:
+        plt.title(f"Standalone generation vs. MDI - {model_name}")
     plt.tight_layout()
     plt.savefig(
         img_dir / f"time_vs_tokens_{model_name}.png", dpi=500
@@ -69,6 +70,12 @@ if __name__ == "__main__":
         "MODEL_DIR",
         type=Path,
         help="the directory of the model whose results will be plotted",
+    )
+    parser.add_argument(
+        "-nt",
+        "--no-title",
+        action="store_true",
+        help="if set, don't print the figure title"
     )
     args = parser.parse_args()
     main(args)
