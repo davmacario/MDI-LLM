@@ -104,6 +104,10 @@ def main(args):
     gc.collect()
     model.to(torch_device)
 
+    n_params = sum(p.numel() for p in model.parameters())
+    if args.verb:
+        print(f"Number of model parameters: {n_params:,}")
+
     # NOTE: by increasing the batch size, the model can generate more samples together
     # but this would not be fair compared to MDI, as we could raise the batch size
     # there as well; instead, we generate individual samples multiple times
