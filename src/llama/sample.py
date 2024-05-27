@@ -89,6 +89,16 @@ def main(args):
     config, wt = load_from_pt(checkpoint_dir)
     assert wt is not None
     model = GPT(config)
+
+    model_dtype = torch.float32
+    if all([v.dtype == torch.float16 for v in wt.values()]):
+        model_dtype = torch.float16
+    elif all([v.dtype == torch.bfloat16 for v in wt.values()]):
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            model_dtype = torch.bfloat16
+
+    if model_dtype in {torch.float16, torch.bfloat16}:
+        model = model.to(model_dtype)
     model.load_state_dict(wt)
     del wt
     gc.collect()

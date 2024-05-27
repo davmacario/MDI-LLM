@@ -810,11 +810,21 @@ class GPTServer:
         assert self.model is None, "The model was already initialized!"
         assert self.model_device is not None, "No device was specified"
 
+        model_dtype = torch.float32
+        if all([v.dtype == torch.float16 for v in model_parameters.values()]):
+            model_dtype = torch.float16
+        elif all([v.dtype == torch.bfloat16 for v in model_parameters.values()]):
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                model_dtype = torch.bfloat16
+
         if VERB:
             print("Initializing local model")
+            print(f"Using {model_dtype}")
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         self.model = Model_class(self.model_config, n_transf_layers)
+        if model_dtype in {torch.float16, torch.bfloat16}:
+            self.model = self.model.to(model_dtype)
         self.model.load_weights(model_parameters)
         self.model = self.model.to(self.torch_model_device)
         # NOTE: need to init_kv_cache once the number of samples (batch size) is known
