@@ -11,11 +11,13 @@ import time
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from pathlib import Path
+import gc
 
 import torch
-from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
 from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
+
+from sub import GPT, Config, PromptStyle, Tokenizer
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
@@ -87,8 +89,24 @@ def main(args):
     config, wt = load_from_pt(checkpoint_dir)
     assert wt is not None
     model = GPT(config)
+
+    model_dtype = torch.float32
+    if all([v.dtype == torch.float16 for v in wt.values()]):
+        model_dtype = torch.float16
+    elif all([v.dtype == torch.bfloat16 for v in wt.values()]):
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            model_dtype = torch.bfloat16
+
+    if model_dtype in {torch.float16, torch.bfloat16}:
+        model = model.to(model_dtype)
     model.load_state_dict(wt)
+    del wt
+    gc.collect()
     model.to(torch_device)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    if args.verb:
+        print(f"Number of model parameters: {n_params:,}")
 
     # NOTE: by increasing the batch size, the model can generate more samples together
     # but this would not be fair compared to MDI, as we could raise the batch size
@@ -124,6 +142,7 @@ def main(args):
         t_start = time.time()
         for k in range(BATCH_SIZE):
             curr_tok_time = []
+            t_start_sample = time.time()
             # TODO: fix support for one prompt per sample
             prompt = prompt_style.apply(start[k])
             if VERB:
@@ -139,7 +158,12 @@ def main(args):
                 top_k=TOP_K,
                 tok_time=curr_tok_time,
             )
-            tok_time_all.append(curr_tok_time)
+            tok_time_all.append(
+                [
+                    (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
+                    for x in curr_tok_time
+                ]
+            )
             decoded_text = tokenizer.decode(y)
             print(decoded_text[: find_eot(decoded_text)])
             print("---------------")
@@ -170,7 +194,9 @@ def main(args):
         plot_tokens_per_time(
             tok_time_all,
             out_path=os.path.join(
-                script_dir, "img", f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png"
+                script_dir,
+                "img",
+                f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png",
             ),
         )
 

@@ -4,12 +4,14 @@ import argparse
 import dataclasses
 import io
 import os
+import warnings
 from pathlib import Path
 
 import torch
+from transformers import AutoConfig, AutoModel
+
 from sub import Config
 from sub.utils import count_transformer_blocks, load_from_hf, load_from_pt
-from transformers import AutoConfig, AutoModel
 
 script_dir = Path(os.path.dirname(__file__))
 pt_local_file = script_dir / "tmp" / "local_pt_keys.txt"
@@ -60,6 +62,20 @@ def main(args):
         print(f"{k}: {v}")
     print("")
 
+    model_dtype = torch.float32
+    if all([v.dtype == torch.float16 for v in sd.values()]):
+        model_dtype = torch.float16
+    elif all([v.dtype == torch.bfloat16 for v in sd.values()]):
+        model_dtype = torch.bfloat16
+    print(f"Model dtype: {model_dtype}")
+    if (
+        model_dtype == torch.bfloat16
+        and torch.cuda.is_available()
+        and not torch.cuda.is_bf16_supported()
+    ):
+        warnings.warn("Detected CUDA support, but bf16 is NOT supported!")
+    print("")
+
     n_blocks_detect = count_transformer_blocks(sd)
     print(f"{n_blocks_detect} transformer blocks detected", end=" ")
     if n_blocks_detect == config_dict["n_layer"]:
@@ -104,7 +120,7 @@ if __name__ == "__main__":
         type=str,
         default=os.path.join(script_dir, "checkpoints"),
         help="""subfolder where the model directory will be placed; the model files
-        will be found at `<ckpt_folder>/<hf_model_name>/`"""
+        will be found at `<ckpt_folder>/<hf_model_name>/`""",
     )
     parser.add_argument(
         "--device", type=str, default=device, help="Device where to load models"
