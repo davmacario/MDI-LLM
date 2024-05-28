@@ -1,3 +1,4 @@
+# Adapted from LitGPT --
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file
 # at https://github.com/Lightning-AI/litgpt/blob/main/LICENSE.
 
@@ -292,6 +293,10 @@ class GPT(nn.Module):
         self.max_seq_length = self.config.block_size  # Calls the setter (7j)
         self.mask_cache: Optional[torch.Tensor] = None
 
+    @classmethod
+    def from_name(cls, name: str, **kwargs: Any) -> Self:
+        return cls(Config.from_name(name, **kwargs))
+
     @property
     def max_seq_length(self) -> int:
         return self._max_seq_length
@@ -403,10 +408,6 @@ class GPT(nn.Module):
             x = block(x, cos, sin, mask, input_pos)
         x = self.transformer.ln_f(x)
         return self.lm_head(x)  # (b, t, vocab_size)
-
-    @classmethod
-    def from_name(cls, name: str, **kwargs: Any) -> Self:
-        return cls(Config.from_name(name, **kwargs))
 
     def rope_cache(
         self, device: Optional[torch.device] = None
