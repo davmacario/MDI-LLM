@@ -6,17 +6,19 @@ import os
 import sys
 import warnings
 from contextlib import nullcontext
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
+import yaml
 from numpy.typing import NDArray
+from torch import nn
+
 from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                         N_LAYERS_NODES, WARMUP_ITERS)
 from sub.model import Config
 from sub.utils.data_loader import get_batch
-from torch import nn
-from transformers import GPT2LMHeadModel
 
 VERB = False
 
@@ -330,7 +332,10 @@ def split_parameters(
 
 
 def split_and_store(
-    model_params: Dict[str, Any], n_nodes: int, ckpt_dir: Union[Path, str], **kwargs,
+    model_params: Dict[str, Any],
+    n_nodes: int,
+    ckpt_dir: Union[Path, str],
+    **kwargs,
 ) -> Path:
     """
     Given a state dict, split it among a number of nodes following the configuration.
@@ -541,3 +546,9 @@ def load_from_hf(
 
     model_path = checkpoint_dir / repo_id
     return load_from_pt(model_path, device, config_only=config_only)
+
+
+def save_config(config: "Config", checkpoint_dir: Path) -> None:
+    config_dict = asdict(config)
+    with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
+        yaml.dump(config_dict, fp)

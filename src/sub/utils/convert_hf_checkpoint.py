@@ -9,9 +9,10 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
-from .litgpt_utils import (NotYetLoadedTensor, incremental_save, lazy_load,
-                           save_config)
 from sub.model import Config
+
+from .litgpt_utils import NotYetLoadedTensor, incremental_save, lazy_load
+from .utils import save_config
 
 
 def copy_weights_gpt_neox(
@@ -104,6 +105,7 @@ def copy_weights_falcon(
         if saver is not None:
             param = saver.store_early(param)
         state_dict[to_name] = param
+
 
 def copy_weights_hf_llama(
     config: Config,
