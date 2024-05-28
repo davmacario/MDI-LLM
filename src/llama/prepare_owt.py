@@ -2,41 +2,32 @@
 
 import argparse
 import os
+from pathlib import Path
 
 import numpy as np
-import tiktoken
 from datasets import load_dataset
 from tqdm import tqdm
+import torch
+
+from sub import Tokenizer
 
 """
 Prepare the OpenWebText dataset to be used to train the model.
-
-TODO - ADAPT
 """
+curr_dir = Path(os.path.dirname(__file__))
 
-curr_dir = os.path.dirname(__file__)
-# Number of workers in load_dataset
-num_proc = 5
-num_proc_load_ds = 2
 
-# Load tokenizer
-enc = tiktoken.get_encoding("gpt2")
+def main(args):
+    # Number of workers in load_dataset
+    num_proc = 5
+    num_proc_load_ds = 2
+    out_path = args.data_path
 
-# Define parser
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-o",
-    "--out-dir",
-    type=str,
-    default=curr_dir,
-    help="Output directory where to place the data set splits. Default: script directory",
-)
-
-if __name__ == "__main__":
-    args = parser.parse_args()
-
-    if not os.path.exists(args.out_dir):
-        raise NotADirectoryError(f"{args.out_dir} is not a directory")
+    # Load tokenizer
+    tok_path = Path(args.TOKENIZER_PATH)
+    if not args.TOKENIZER_PATH.is_dir():
+        tok_path = args.TOKENIZER_PATH.parent
+    tokenizer = Tokenizer(tok_path)
 
     dataset = load_dataset("openwebtext", num_proc=num_proc_load_ds)
 
@@ -47,23 +38,20 @@ if __name__ == "__main__":
 
     # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
     def process(example):
-        ids = enc.encode_ordinary(
-            example["text"]
-        )  # encode_ordinary ignores any special tokens
-        ids.append(enc.eot_token)  # add the end of text token, e.g. 50256 for gpt2 bpe
+        ids = tokenizer.encode(example["text"], device=args.device, bos=True, eos=True)
         # note: I think eot should be prepended not appended... hmm. it's called "eot" though...
         out = {"ids": ids, "len": len(ids)}
         return out
 
-    # tokenize the dataset
+    # Tokenize the dataset
     tokenized = split_ds.map(
         process,
         remove_columns=["text"],
-        desc="tokenizing the splits",
+        desc="Tokenizing the splits",
         num_proc=num_proc,
     )
 
-    # concatenate all the ids in each dataset into one large file we can use for training
+    # Concatenate all the ids in each dataset into one large file for training
     for split, dset in tokenized.items():
         arr_len = np.sum(dset["len"], dtype=np.uint64)
         filename = os.path.join(args.out_dir, f"{split}.bin")
@@ -82,3 +70,29 @@ if __name__ == "__main__":
             arr[idx : idx + len(arr_batch)] = arr_batch
             idx += len(arr_batch)
         arr.flush()
+
+
+if __name__ == "__main__":
+    # Define parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "TOKENIZER_PATH",
+        type=Path,
+        help="path to the directory containing the tokenizer",
+    )
+    parser.add_argument(
+        "--data-path",
+        type=Path,
+        default=curr_dir / "./data/openwebtext/",
+        help="""directory where the data set will be stored; default:
+        './data/openwebtext'""",
+    )
+    parser.add_argument(
+        "--device",
+        type=torch.device,
+        default=None,
+        help="torch device used to load tensors"
+    )
+    args = parser.parse_args()
+
+    main(args)
