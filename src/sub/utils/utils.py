@@ -174,15 +174,16 @@ def find_eot(
     """
     Return the sequence of tokens until the stopping tokens are found.
     """
+    tok_lst = tokens.view(-1, 1).tolist()
     l = 0
     for i in range(tokens.size(0)):
         # Return if the last tokens match one of the stopping sequence
         if any(
-            (l := len(st)) <= len(tokens)
-            and all(a == b for a, b in zip(tokens[-l:], st))
+            (l := len(st)) <= len(tok_lst)
+            and all(a == b for a, b in zip(tok_lst[-l:], st))
             for st in stop_tokens
         ):
-            return tokens[:i]
+            return tokens[:, :i]
     return tokens
 
 
