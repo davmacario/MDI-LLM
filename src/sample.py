@@ -14,10 +14,10 @@ from pathlib import Path
 import gc
 
 import torch
-from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
+from sub.config import TEMPERATURE, TOP_K
 from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 
-from sub import GPT, Config, PromptStyle, Tokenizer
+from sub import GPT, PromptStyle, Tokenizer
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
@@ -36,7 +36,6 @@ def main(args):
         profiler.enable()
 
     BATCH_SIZE = args.n_samples  # number of samples to draw
-    start = get_user_prompt(args.prompt, BATCH_SIZE)
 
     using_huggingface = False
 
@@ -54,7 +53,7 @@ def main(args):
         # Weights are there but in wrong format
         from sub.utils.convert_hf_checkpoint import convert_hf_checkpoint
 
-        convert_hf_checkpoint(checkpoint_dir=checkpoint_dir, dtype=DTYPE)
+        convert_hf_checkpoint(checkpoint_dir=checkpoint_dir, dtype=dtype)
 
     assert checkpoint_path.is_file(), "Something went wrong in weight conversion"
 
@@ -73,11 +72,16 @@ def main(args):
     if VERB:
         print(f"Using {DEVICE}")
         print(f"Device type: {device_type}")
+    dtype = (
+        "bfloat16"
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else "float16"
+    )
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
-    }[DTYPE]
+    }[dtype]
     ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
         if device_type == "mps"
@@ -131,6 +135,7 @@ def main(args):
         else PromptStyle.from_config(config)
     )
     stop_tokens = prompt_style.stop_tokens(tokenizer)
+    start = get_user_prompt(args.prompt, BATCH_SIZE, prompt_style)
 
     # ---- GENERATION -------------------------------------------------------------
     # Encode the prompt
@@ -143,8 +148,7 @@ def main(args):
         for k in range(BATCH_SIZE):
             curr_tok_time = []
             t_start_sample = time.time()
-            # TODO: fix support for one prompt per sample
-            prompt = prompt_style.apply(start[k])
+            prompt = start[k]
             if VERB:
                 print(prompt)
             start_ids = tokenizer.encode(prompt, device=torch_device)

@@ -907,12 +907,11 @@ class GPTServer:
         # Encode starting sequence - with prompt support
         if prompt is None:
             start = ["\n"] * n_samples
+            start_styled = [self.prompt_style.apply(s) for s in start]
         else:
-            start = get_user_prompt(prompt, n_samples, verb=VERB)
+            start_styled = get_user_prompt(prompt, n_samples, verb=VERB)
 
-        start_styled = [self.prompt_style.apply(s) for s in start]
-
-        assert len(start) == n_samples
+        assert len(start_styled) == n_samples
 
         idx = [
             self.tok.encode(txt, device=self.torch_model_device).view(1, -1)
