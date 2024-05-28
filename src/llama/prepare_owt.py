@@ -19,8 +19,6 @@ curr_dir = Path(os.path.dirname(__file__))
 
 def main(args):
     # Number of workers in load_dataset
-    num_proc = 5
-    num_proc_load_ds = 2
     out_path = args.data_path
 
     # Load tokenizer
@@ -29,7 +27,7 @@ def main(args):
         tok_path = args.TOKENIZER_PATH.parent
     tokenizer = Tokenizer(tok_path)
 
-    dataset = load_dataset("openwebtext", num_proc=num_proc_load_ds)
+    dataset = load_dataset("openwebtext", num_proc=args.nproc)
 
     split_ds = dataset["train"].train_test_split(
         test_size=0.0005, seed=1234, shuffle=True
@@ -48,19 +46,19 @@ def main(args):
         process,
         remove_columns=["text"],
         desc="Tokenizing the splits",
-        num_proc=num_proc,
+        num_proc=args.nproc,
     )
 
     # Concatenate all the ids in each dataset into one large file for training
     for split, dset in tokenized.items():
         arr_len = np.sum(dset["len"], dtype=np.uint64)
-        filename = os.path.join(args.out_dir, f"{split}.bin")
+        filename = args.data_path / f"{split}.bin"
         dtype = np.uint16  # (can do since enc.max_token_value == 50256 is < 2**16)
         arr = np.memmap(filename, dtype=dtype, mode="w+", shape=(arr_len,))
         total_batches = 1024
 
         idx = 0
-        for batch_idx in tqdm(range(total_batches), desc=f"writing {filename}"):
+        for batch_idx in tqdm(range(total_batches), desc=f"writing {filename.name}"):
             # Batch together samples for faster write
             batch = dset.shard(
                 num_shards=total_batches, index=batch_idx, contiguous=True
@@ -92,6 +90,12 @@ if __name__ == "__main__":
         type=torch.device,
         default=None,
         help="torch device used to load tensors"
+    )
+    parser.add_argument(
+        "--nproc",
+        type=int,
+        default=5,
+        help="number of processes for tokenization (default: 5)"
     )
     args = parser.parse_args()
 
