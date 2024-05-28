@@ -168,8 +168,8 @@ def main(args):
                     for x in curr_tok_time
                 ]
             )
-            decoded_text = tokenizer.decode(y)
-            print(decoded_text[: find_eot(decoded_text)])
+            decoded_text = tokenizer.decode(find_eot(y, stop_tokens))
+            print(decoded_text)
             print("---------------")
 
     tot_gen_time = time.time() - t_start

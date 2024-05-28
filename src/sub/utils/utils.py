@@ -168,20 +168,22 @@ def remove_prefix(text: str, prefix: str) -> str:
     return text
 
 
-# FIXME
-def find_eot(text: str, stop_tokens: Optional[List[int]] = None) -> int:
+def find_eot(
+    tokens: torch.Tensor, stop_tokens: Tuple[List[int], ...] = ()
+) -> torch.Tensor:
     """
-    Return the index of the first character of '<|endoftext|>', if found in text.
-    Else, return len(text)
+    Return the sequence of tokens until the stopping tokens are found.
     """
-    # TODO: add support for tokenizer eos and bos
-    tbf = "<|endoftext|>"
-
-    for i in range(0, len(text) - len(tbf)):
-        if text[i:].startswith(tbf):
-            return i
-
-    return len(text)
+    l = 0
+    for i in range(tokens.size(0)):
+        # Return if the last tokens match one of the stopping sequence
+        if any(
+            (l := len(st)) <= len(tokens)
+            and all(a == b for a, b in zip(tokens[-l:], st))
+            for st in stop_tokens
+        ):
+            return tokens[:i]
+    return tokens
 
 
 def split_parameters(
