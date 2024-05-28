@@ -335,6 +335,34 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def get_num_params(self, non_embedding: bool = True):
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n_params -= self.transformer.wpe.weight.numel()
+        return n_params
+
+    def estimate_mfu(self, fwdbwd_per_iter, dt):
+        """
+        Estimate Model FLOPS Utilization (MFU) in units of A100 bfloat16 peak FLOPS;
+        See PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
+        """
+        N = self.get_num_params()
+        cfg = self.config
+        L, H, Q, T = (
+            cfg.n_layer,
+            cfg.n_head,
+            cfg.n_embd // cfg.n_head,
+            cfg.block_size,
+        )
+        flops_per_token = 6 * N + 12 * L * H * Q * T
+        flops_per_fwdbwd = flops_per_token * T
+        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
+        # express our flops throughput as ratio of A100 bfloat16 peak flops
+        flops_achieved = flops_per_iter * (1.0 / dt)  # per second
+        flops_promised = 312e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        mfu = flops_achieved / flops_promised
+        return mfu
+
     def forward(
         self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
