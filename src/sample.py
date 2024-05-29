@@ -5,20 +5,20 @@ Perform inference on a pre-trained model - TinyLlama & Llama
 """
 
 import cProfile
+import gc
 import os
-import warnings
 import pstats
 import time
+import warnings
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from pathlib import Path
-import gc
 
 import torch
-from sub.config import TEMPERATURE, TOP_K
-from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 
 from sub import GPT, PromptStyle, Tokenizer
+from sub.config import TEMPERATURE, TOP_K
+from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
@@ -121,7 +121,7 @@ def main(args):
     model.eval()
 
     # Compile model + catch exception if unsupported (Python 3.12 currently)
-    if args.compile:
+    if args.compile and hasattr(torch, "compile"):
         if args.verb:
             print("Compiling model - this may take a while", end="\r")
         try:
@@ -130,6 +130,12 @@ def main(args):
                 print("Model compiled!")
         except RuntimeError as e:
             warnings.warn(f"Unable to compile model! {e}")
+    elif args.compile and not hasattr(torch, "compile"):
+        from importlib.metadata import version
+
+        warnings.warn(
+            f"Installed torch version ({version('torch')}) does not support compiling models"
+        )
 
     # Tokenizer
     tokenizer = Tokenizer(checkpoint_dir, force_backend="huggingface")

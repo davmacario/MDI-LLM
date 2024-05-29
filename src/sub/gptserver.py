@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cherrypy as cp
 import torch
+
 from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
@@ -41,8 +42,8 @@ from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
 from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.typing import FileType
-from sub.utils import (count_transformer_blocks, load_sd, loading_bar,
-                       plot_tokens_per_time, find_eot)
+from sub.utils import (count_transformer_blocks, find_eot, load_sd,
+                       loading_bar, plot_tokens_per_time)
 
 # -------------------------------------------------------------------------------------
 
@@ -154,6 +155,8 @@ class GPTServer:
             self.model_type = str(kwargs["model_type"])
             if VERB:
                 print(f"Overriding model type: {self.model_type}")
+
+        self.compile = False if "compile" not in kwargs else kwargs["compile"]
 
         self.node_type = node_type
         self.node_config = node_config
@@ -523,7 +526,6 @@ class GPTServer:
         self.in_queue_thread.start()
         self.out_queue_thread.start()
 
-
     def _recv_from_prev(self, size: int) -> bytes:
         """
         Receive a message of the specified size from the previous node.
@@ -827,7 +829,22 @@ class GPTServer:
             self.model = self.model.to(model_dtype)
         self.model.load_weights(model_parameters)
         self.model = self.model.to(self.torch_model_device)
-        # NOTE: need to init_kv_cache once the number of samples (batch size) is known
+
+        if self.compile and hasattr(torch, "compile"):
+            if VERB:
+                print("Compiling local model - this may take a while", end="\r")
+            try:
+                self.model = torch.compile(self.model)
+                if VERB:
+                    print("Model compiled!                                ")
+            except RuntimeError as e:
+                warnings.warn(f"Unable to compile model! {e}")
+        elif self.compile and not hasattr(torch, "compile"):
+            from importlib.metadata import version
+
+            warnings.warn(
+                f"Installed torch version ({version('torch')}) does not support compiling models"
+            )
 
     def _load_tokenizer(self, tokenizer_dir: FileType):
         """
@@ -1069,7 +1086,9 @@ class GPTServer:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
-        return [self.tok.decode(find_eot(smp, self.stop_tokens)) for smp in idx], tot_time
+        return [
+            self.tok.decode(find_eot(smp, self.stop_tokens)) for smp in idx
+        ], tot_time
 
     def _secondary_loop(self):
         """

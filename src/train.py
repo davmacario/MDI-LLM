@@ -240,6 +240,12 @@ def main(args):
                 print("Model compiled!")
         except RuntimeError as e:
             warnings.warn(f"Unable to compile model! {e}")
+    elif args.compile and not hasattr(torch, "compile"):
+        from importlib.metadata import version
+
+        warnings.warn(
+            f"Installed torch version ({version('torch')}) does not support compiling models"
+        )
 
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
