@@ -261,6 +261,12 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
     parser.add_argument("-p", "--plots", action="store_true", help="enable plots")
     parser.add_argument(
+        "-c",
+        "--compile",
+        action="store_true",
+        help="if set, compile the model (Torch >= 2.0.0 required)",
+    )
+    parser.add_argument(
         "--ckpt",
         type=Path,
         default=script_dir / "checkpoints",
