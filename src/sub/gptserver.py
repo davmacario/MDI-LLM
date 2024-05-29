@@ -870,6 +870,9 @@ class GPTServer:
         else:
             self.prompt_style = load_prompt_style(tok_dir_path)
 
+        if VERB:
+            print(f"Prompt style: {type(self.prompt_style)}")
+
         self.stop_tokens = self.prompt_style.stop_tokens(self.tok)
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
@@ -928,7 +931,7 @@ class GPTServer:
             start = ["\n"] * n_samples
             start_styled = [self.prompt_style.apply(s) for s in start]
         else:
-            start_styled = get_user_prompt(prompt, n_samples, verb=VERB)
+            start_styled = get_user_prompt(prompt, n_samples, prompt_style=self.prompt_style)
 
         assert len(start_styled) == n_samples
 
