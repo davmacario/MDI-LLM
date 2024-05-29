@@ -128,7 +128,7 @@ def main(args):
     #     [...]
 
     # Tokenizer
-    tokenizer = Tokenizer(checkpoint_dir)
+    tokenizer = Tokenizer(checkpoint_dir, force_backend="huggingface")
     prompt_style = (
         load_prompt_style(checkpoint_dir)
         if has_prompt_style(checkpoint_dir)
