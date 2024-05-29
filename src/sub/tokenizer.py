@@ -9,7 +9,15 @@ import torch
 
 
 class Tokenizer:
-    def __init__(self, checkpoint_dir: Union[Path, str]) -> None:
+    def __init__(
+        self, checkpoint_dir: Union[Path, str], force_backend: Optional[str] = None
+    ) -> None:
+        if force_backend:
+            assert force_backend in {
+                "sentencepiece",
+                "huggingface",
+            }, f"Unsupported backend: {force_backend}"
+
         checkpoint_dir = Path(checkpoint_dir)
         if not checkpoint_dir.is_dir():
             checkpoint_dir = checkpoint_dir.parent
@@ -23,8 +31,15 @@ class Tokenizer:
         self.bos_id = None
         self.eos_id = None
 
+        # Force tokenizer
+        want_sentencepiece = (
+            True if not force_backend else force_backend == "sentencepiece"
+        )
+        want_hf = True if not force_backend else force_backend == "huggingface"
         # some checkpoints have both files, `.model` takes precedence
-        if (vocabulary_path := checkpoint_dir / "tokenizer.model").is_file():
+        if (
+            vocabulary_path := checkpoint_dir / "tokenizer.model"
+        ).is_file() and want_sentencepiece:
             from sentencepiece import SentencePieceProcessor
 
             self.processor = SentencePieceProcessor(model_file=str(vocabulary_path))
@@ -32,7 +47,9 @@ class Tokenizer:
             self.bos_id = self.processor.bos_id()
             self.eos_id = self.processor.eos_id()
 
-        elif (vocabulary_path := checkpoint_dir / "tokenizer.json").is_file():
+        elif (
+            vocabulary_path := checkpoint_dir / "tokenizer.json"
+        ).is_file() and want_hf:
             from tokenizers import Tokenizer as HFTokenizer
 
             self.processor = HFTokenizer.from_file(str(vocabulary_path))
@@ -60,8 +77,12 @@ class Tokenizer:
                     self.bos_id = config.get("bos_token_id")
                 if self.eos_id is None:
                     self.eos_id = config.get("eos_token_id")
+        elif force_backend:
+            raise FileNotFoundError(
+                "Unable to find the configuration for the desired tokenizer"
+            )
         else:
-            raise NotImplementedError
+            raise NotImplementedError("No supported tokenizer found")
 
     @property
     def vocab_size(self) -> int:
