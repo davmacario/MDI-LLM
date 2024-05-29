@@ -304,7 +304,7 @@ class NoPrompt(PromptStyle):
     No prompt - the LLM will start generation from a single 'newline' char.
     The API complies with the 
     """
-    def apply(self, prompt: Any, **kwargs) -> str:
+    def apply(self, prompt: str, **kwargs) -> str:
         return "\n"
 
     def stop_tokens(self, tokenizer: "Tokenizer") -> Tuple[List[int], ...]:
@@ -339,7 +339,7 @@ def model_name_to_prompt_style(model_name: str) -> PromptStyle:
         return Vicuna()
     if re.search("Llama-2-7b-chat-hf-function-calling-v2", model_name):
         return Llama2FunctionCalling()
-    if re.search("Llama-2.*-chat", model_name):
+    if re.search("Llama-2.*-chat*", model_name):
         return Llama2()
     if re.search("Llama-3.*-Instruct", model_name):
         return Llama3()
