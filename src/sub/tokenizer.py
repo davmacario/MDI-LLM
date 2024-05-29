@@ -144,5 +144,6 @@ class Tokenizer:
         return torch.tensor(tokens, dtype=torch.int, device=device)
 
     def decode(self, tensor: torch.Tensor) -> str:
+        tensor = tensor.view(-1, 1)
         tokens = [tensor.item()] if tensor.ndim == 0 else tensor.tolist()
-        return self.processor.decode(tokens)[0]  # FIXME: why multiple items?
+        return self.processor.decode(tokens)
