@@ -128,7 +128,7 @@ def main(args):
     }[dtype]
     ctx = (
         nullcontext()
-        if device_type in {"cpu", "mps"}
+        if device_type == "cpu" or not dtype == 'bfloat16'
         else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     )
 

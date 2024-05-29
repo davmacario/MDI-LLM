@@ -81,7 +81,7 @@ def main(args):
         print(f"Device type: {device_type}")
     ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
-        if device_type == "mps"
+        if device_type == "mps" or not dtype == "bfloat16"
         else torch.autocast(device_type=device_type, dtype=ptdtype)
     )
     torch_device = torch.device(args.device)
