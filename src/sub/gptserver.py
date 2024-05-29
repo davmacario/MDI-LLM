@@ -1087,11 +1087,16 @@ class GPTServer:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
-        out_truncated = [find_eot(smp, self.stop_tokens, prompt_lengths[i]) for i, smp in enumerate(idx)]
+        out_truncated = [
+            find_eot(smp, self.stop_tokens, prompt_lengths[i])
+            for i, smp in enumerate(idx)
+        ]
         if VERB:
             print("Truncated samples:")
             for i, smp in enumerate(out_truncated):
-                print(f"- Sample {i} truncated to {len(smp.squeeze())}/{len(idx[i].squeeze())})
+                print(
+                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(idx[i].squeeze())}"
+                )
         out_samples = [self.tok.decode(smp) for smp in out_truncated]
 
         return out_samples, tot_time
