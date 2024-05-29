@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cherrypy as cp
 import torch
 
+from sub.config import DEVICE as DEFAULT_DEVICE
 from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
@@ -110,7 +111,7 @@ class GPTServer:
         model_config: Optional[Config] = None,
         chunk_path: Optional[FileType] = None,
         tokenizer_dir: Optional[FileType] = None,
-        model_device: Optional[str] = "cpu",
+        model_device: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -136,7 +137,7 @@ class GPTServer:
                 the wrapper class GPTDistr]
             tokenizer_dir: directory containing the tokenizer config files
             model_device: device where to load the model chunk; can be omitted if
-                specified in the node_config (key "device" - will override arg!)
+                specified in the node_config (arg will override it!)
             [**kwargs: support for 'verb' and 'plots' bool values]
         """
         # NOTE: this implementation supports running 1 node only
@@ -193,15 +194,12 @@ class GPTServer:
             # Possibly get device info if found in config file
             try:
                 self.model_device = (
-                    model_device
-                    if "device" not in self.own_config
-                    else self.own_config["device"]
+                    model_device if model_device else self.own_config["device"]
                 )
             except KeyError:
-                raise ValueError(
-                    "Missing model device information - either specify it in `node_config`"
-                    " or pass argument `model_device` to this function"
-                )
+                warnings.warn(f"Using default device {DEFAULT_DEVICE}")
+                self.model_device = DEFAULT_DEVICE
+
             self.torch_model_device = torch.device(self.model_device)
             self.n_nodes = 1 + (
                 0
@@ -283,15 +281,11 @@ class GPTServer:
             # Possibly get device info if found in config file
             try:
                 self.model_device = (
-                    model_device
-                    if "device" not in self.own_config
-                    else self.own_config["device"]
+                    model_device if model_device else self.own_config["device"]
                 )
             except KeyError:
-                raise ValueError(
-                    "Missing model device information - either specify it in `node_config`"
-                    " or pass argument `model_device` to this function"
-                )
+                warnings.warn(f"Using default device {DEFAULT_DEVICE}")
+                self.model_device = DEFAULT_DEVICE
             self.torch_model_device = torch.device(self.model_device)
 
             self._running_thread = threading.Thread()  # Placeholder FIXME
@@ -931,7 +925,9 @@ class GPTServer:
             start = ["\n"] * n_samples
             start_styled = [self.prompt_style.apply(s) for s in start]
         else:
-            start_styled = get_user_prompt(prompt, n_samples, prompt_style=self.prompt_style)
+            start_styled = get_user_prompt(
+                prompt, n_samples, prompt_style=self.prompt_style
+            )
 
         assert len(start_styled) == n_samples
 

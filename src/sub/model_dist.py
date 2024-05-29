@@ -419,7 +419,6 @@ class GPTDistributed:
             curr_msg["next_node"] = next
 
             if not self.model_was_split:
-                # TODO: load from file; store in local var to automatically clear mem
                 chunk_path = node_chunks_dir / f"model_secondary{i}.pth"
                 curr_msg["params"] = torch.load(chunk_path, device="cpu")
 
