@@ -64,6 +64,12 @@ if __name__ == "__main__":
         "-d", "--debug", action="store_true", help="enable debug mode (profiler)"
     )
     parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
+    parser.add_argument(
+        "-c",
+        "--compile",
+        action="store_true",
+        help="compile Torch module (only for Torch>=2.0.0)",
+    )
 
     parser.add_argument(
         "--chunk",

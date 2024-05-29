@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cherrypy as cp
 import torch
+
 from sub.model_dist import GPTDistributed
 
 # -----------------------------------------------------------------------------
@@ -28,7 +29,7 @@ def main(args):
     print("+------------------------+")
     print("| Launching starter node |")
     print("+------------------------+")
-    
+
     tok_per_sample = args.n_tokens
     if args.debug:
         # TODO: review
@@ -55,7 +56,6 @@ def main(args):
         verb=args.verb,
         plots=args.plots,
     )
-
 
     # Operation (start now includes loop)
     gpt_distr.start(
@@ -96,6 +96,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
     parser.add_argument("-p", "--plots", action="store_true", help="enable plots")
+    parser.add_argument(
+        "-c",
+        "--compile",
+        action="store_true",
+        help="compile Torch module (only for Torch>=2.0.0)",
+    )
 
     parser.add_argument(
         "--ckpt",
@@ -104,10 +110,7 @@ if __name__ == "__main__":
         help="folder containing the model files",
     )
     parser.add_argument(
-        "--chunk",
-        type=Path,
-        default=None,
-        help="path of the model chunk"
+        "--chunk", type=Path, default=None, help="path of the model chunk"
     )
     parser.add_argument(
         "--nodes-config",

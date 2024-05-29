@@ -31,11 +31,12 @@ from typing import Any, Optional
 import cherrypy as cp
 import requests
 import torch
+
+from sub import PromptStyle
 from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
 from sub.typing import FileType
 from sub.utils import load_from_pt, split_and_store
-from sub import PromptStyle
 
 docstring = """
 Distributed implementation of the Llama architecture using Model-Distributed Inference
@@ -188,6 +189,8 @@ class GPTDistributed:
         VERB = False if "verb" not in kwargs else bool(kwargs["verb"])
         global PLOTS
         PLOTS = False if "plots" not in kwargs else bool(kwargs["plots"])
+
+        self.compile = False if "compile" not in kwargs else bool(kwargs["compile"])
 
         if self.ckpt_dir:
             self.full_model_name = self.ckpt_dir.name
