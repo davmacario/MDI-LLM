@@ -178,7 +178,12 @@ def main(args):
                     for x in curr_tok_time
                 ]
             )
-            decoded_text = tokenizer.decode(find_eot(y, stop_tokens))
+            truncated = find_eot(y, stop_tokens, len(start_ids))
+            if args.verb:
+                print(
+                    f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
+                )
+            decoded_text = tokenizer.decode(truncated)
             print(decoded_text)
             print("---------------")
 

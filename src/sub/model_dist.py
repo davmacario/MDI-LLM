@@ -349,7 +349,7 @@ class GPTDistributed:
                 for i, smpl in enumerate(out_text):
                     print("-------------------------------------------------")
                     print(f"Sample {i + 1}:")
-                    print(smpl, "\n")  # [: find_eot(smpl)], "\n")
+                    print(smpl, "\n")
                 print("-------------------------------------------------")
                 print(f"Total generation time: {time_gen}")
 

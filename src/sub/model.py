@@ -511,6 +511,7 @@ class GPT(nn.Module):
             input_pos = input_pos[-1:].add_(1)  # Returns a tensor of dim. (1,)
             # From now on, only 1 element will be passed to the forward, as the cache
             # has been built
+        print("")
         return tokens
 
 

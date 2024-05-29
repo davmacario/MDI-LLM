@@ -936,6 +936,7 @@ class GPTServer:
             self.tok.encode(txt, device=self.torch_model_device).view(1, -1)
             for txt in start_styled
         ]
+        prompt_lengths = {i: len(id.squeeze()) for i, id in enumerate(idx)}
 
         # IDEA: use set_kv_cache for 1st sample, others are init directly
         # This is needed because set_kv_cache also initializes the mask, which is the
@@ -1086,9 +1087,14 @@ class GPTServer:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
-        return [
-            self.tok.decode(find_eot(smp, self.stop_tokens)) for smp in idx
-        ], tot_time
+        out_truncated = [find_eot(smp, self.stop_tokens, prompt_lengths[i]) for i, smp in enumerate(idx)]
+        if VERB:
+            print("Truncated samples:")
+            for i, smp in enumerate(out_truncated):
+                print(f"- Sample {i} truncated to {len(smp.squeeze())}/{len(idx[i].squeeze())})
+        out_samples = [self.tok.decode(smp) for smp in out_truncated]
+
+        return out_samples, tot_time
 
     def _secondary_loop(self):
         """

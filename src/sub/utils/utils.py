@@ -177,30 +177,26 @@ def find_eot(
     Return the sequence of tokens until the stopping tokens are found.
     The function finds the first EOS sequence starting from `prompt_length` (default 0)
     onwards.
-    It will return the truncated tensor
+    It will return the tensor truncated at the first EOS sequence after the prompt.
 
     Args:
         tokens: output of the LLM
         stop_tokens: tuple containing lists of the IDs representing the EOS
         prompt_length: optional prompt length
     """
-    # assert prompt_length
-    tok_lst = tokens.view(-1, 1).tolist()
+    tok_lst = tokens.view(-1, 1).squeeze().tolist()
     assert (
         len(tok_lst) >= prompt_length
     ), "Prompt length must be longer than the provided tensor"
-    l = 0
-    start_ind = max(prompt_length, max([len(st) for st in stop_tokens]))
+    start_ind = prompt_length + max([len(st) for st in stop_tokens])  # Skip prompt
     for i in range(start_ind, len(tok_lst)):
-        tok_sl = tok_lst[:i]
-        # Return if the last tokens match one of the stopping sequence
         if any(
-            (l := len(st)) <= len(tok_sl)
-            and all(a == b for a, b in zip(tok_sl[-l:], st))
+            all(a == b for a, b in zip(tok_lst[i - len(st):i], st))
             for st in stop_tokens
         ):
-            return tokens[:, : -1 - i]
+            return tokens[:, :i]
     return tokens
+
 
 
 def format_output(text: str):
