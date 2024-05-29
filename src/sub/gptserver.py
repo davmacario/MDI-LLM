@@ -730,21 +730,26 @@ class GPTServer:
 
             # Read payload (exact size - this is important)
             msg_payload = self._recv_from_prev(msg_len)
-            data = pickle.loads(msg_payload)
-            logger_wp.debug(f"Received full message {_n_recv_msg} of length {msg_len}")
+            try:
+                data = pickle.loads(msg_payload)
+            except EOFError:
+                # Here at the end of generation
+                pass
+            else:
+                logger_wp.debug(f"Received full message {_n_recv_msg} of length {msg_len}")
 
-            # Look for stopping msg
-            if "stop" in data and data["stop"]:
-                # Stopping sequence
-                if VERB:
-                    print("Stopping message received! Generation complete!")
-                logger_wp.info("Stopping message received! Generation complete!")
-                self.in_message_queue.append(data)
-                self.in_queue_not_empty.set()
-                self.running = False
-            else:  # Not here if stopping message is received
-                self.in_message_queue.append(data)
-                self.in_queue_not_empty.set()
+                # Look for stopping msg
+                if "stop" in data and data["stop"]:
+                    # Stopping sequence
+                    if VERB:
+                        print("Stopping message received! Generation complete!")
+                    logger_wp.info("Stopping message received! Generation complete!")
+                    self.in_message_queue.append(data)
+                    self.in_queue_not_empty.set()
+                    self.running = False
+                else:  # Not here if stopping message is received
+                    self.in_message_queue.append(data)
+                    self.in_queue_not_empty.set()
 
         if VERB:
             print("Input queue thread stopped")
