@@ -42,7 +42,7 @@ from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.typing import FileType
 from sub.utils import (count_transformer_blocks, load_sd, loading_bar,
-                       plot_tokens_per_time)
+                       plot_tokens_per_time, find_eot)
 
 # -------------------------------------------------------------------------------------
 
@@ -843,7 +843,7 @@ class GPTServer:
         """
         if VERB:
             print("Loading tokenizer", end="")
-        self.tok = Tokenizer(tokenizer_dir)
+        self.tok = Tokenizer(tokenizer_dir, force_backend="huggingface")
         tok_dir_path = (
             Path(tokenizer_dir) if isinstance(tokenizer_dir, str) else tokenizer_dir
         )
@@ -852,6 +852,8 @@ class GPTServer:
             self.prompt_style = PromptStyle.from_config(self.model_config)
         else:
             self.prompt_style = load_prompt_style(tok_dir_path)
+
+        self.stop_tokens = self.prompt_style.stop_tokens(self.tok)
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
 
@@ -1067,7 +1069,7 @@ class GPTServer:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
-        return [self.tok.decode(smp) for smp in idx], tot_time
+        return [self.tok.decode(find_eot(smp, self.stop_tokens)) for smp in idx], tot_time
 
     def _secondary_loop(self):
         """
