@@ -145,5 +145,5 @@ class Tokenizer:
 
     def decode(self, tensor: torch.Tensor) -> str:
         tensor_shaped = tensor.view(-1, 1).squeeze()
-        tokens = [tensor.item()] if tensor.ndim == 0 else tensor_shaped.tolist()
+        tokens = [tensor.item()] if tensor_shaped.ndim == 0 else tensor_shaped.tolist()
         return self.processor.decode(tokens)

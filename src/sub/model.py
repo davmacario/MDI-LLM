@@ -13,7 +13,7 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Type, Union
 
 import torch
 import torch.nn as nn
@@ -22,7 +22,6 @@ import yaml
 from typing_extensions import Self
 
 from .config import configs, name_to_config
-
 
 
 def find_multiple(n: int, k: int) -> int:
@@ -452,6 +451,12 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             block.attn.kv_cache = None
 
+    def next_token(self, x, input_pos, **kwargs):
+        logits = self(x, input_pos)
+        next = sample(logits, **kwargs)
+        token = next.to(dtype=x.dtype)
+        return token.view(1, -1)
+
     @torch.inference_mode()
     def generate(
         self,
@@ -468,9 +473,7 @@ class GPT(nn.Module):
 
         Args:
             prompt: Tensor containing the encoded text prompt; shape: (T).
-            max_returned_tokens: (maximum) number of generated tokens; to provide a
-                reference, it is the exact number of generated tokens (generation will
-                continue even after end of sequence),
+            max_returned_tokens: (maximum) number of generated tokens.
             *
             temperature: scaling factor applied to the logits (1 / temperature).
             top_k: if specified, only sample among the tokens with the `k` highest
@@ -478,10 +481,14 @@ class GPT(nn.Module):
             tok_time: optional list token/time measurements will be appended to (as
                 tuples); this allows to keep the return value as the output tensor
                 containing all generated tokens.
+
+        Returns:
+            Tensor of shape (1, max_returned_tokens) containing prompt and generated
+            text.
         """
         from .utils import loading_bar
 
-        T = prompt.size(0)  # The input tensor has size (T) x (n_embd): not yet reshaped
+        T = prompt.size(0)  # The input tensor has size (T) x 1: not yet reshaped
         assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
         # NOTE: cannot generate more tokens than the context length!
         if self.max_seq_length < max_returned_tokens - 1:
@@ -493,26 +500,76 @@ class GPT(nn.Module):
         device = prompt.device
         input_pos = torch.arange(0, T, device=device)
         # NOTE: need to reshape the input tensor to comply with (B x T x n_embd)
-        tokens: torch.Tensor = prompt.view(1, -1)
-        token = prompt.view(1, -1)
+        token = tokens = prompt.view(1, -1)
         t_start = time.time()
-        for t in range(1, max_returned_tokens - T + 1):
-            # Thanks to caching, at each forward pass we can provide the next token only
-            tok_time.append((t - 1, time.time() - t_start))
-            print(
-                f"Generating {loading_bar(t, max_returned_tokens - T, 30)} "
-                f"{t}/{max_returned_tokens - T}",
-                end="\r",
-            )
-            logits = self(token, input_pos)
-            next = sample(logits, temperature=temperature, top_k=top_k)
-            token = next.to(dtype=token.dtype).view(1, -1)
-            tokens = torch.cat((tokens, token), dim=1)
-            input_pos = input_pos[-1:].add_(1)  # Returns a tensor of dim. (1,)
-            # From now on, only 1 element will be passed to the forward, as the cache
-            # has been built
+        try:
+            for t in range(1, max_returned_tokens - T + 1):
+                # Thanks to caching, at each forward pass we can provide the next token only
+                tok_time.append((t - 1, time.time() - t_start))
+                print(
+                    f"Generating {loading_bar(t, max_returned_tokens - T, 30)} "
+                    f"{t}/{max_returned_tokens - T}",
+                    end="\r",
+                )
+                token = self.next_token(
+                    token.view(1, -1), input_pos, temperature=temperature, top_k=top_k
+                )
+                tokens = torch.cat((tokens, token), dim=1)
+                input_pos = input_pos[-1:].add_(1)  # Returns a tensor of dim. (1,)
+                # From now on, only 1 element will be passed to the forward, as the cache
+                # has been built
+        except KeyboardInterrupt:
+            pass
         print("")
         return tokens
+
+    def generate_chat(
+        self,
+        prompt: torch.Tensor,
+        max_returned_tokens: int,
+        *,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        stop_tokens: Tuple[List[int], ...] = (),
+        ) -> Iterator[torch.Tensor]:
+        """
+        Return tokens gradually, using yield; output tokens will not include the user
+        prompt!
+        """
+        T = prompt.size(0)  # The input tensor has size (T) x 1: not yet reshaped
+        assert max_returned_tokens > 0, "Number of tokens to generate should be >0"
+        # NOTE: cannot generate more tokens than the context length!
+        if self.max_seq_length < max_returned_tokens - 1:
+            # See: https://github.com/Lightning-AI/litgpt/blob/6f03d6cc8638a7850b610b86f4602fba81c16edc/litgpt/chat/base.py#L57-L59
+            raise NotImplementedError(
+                f"max_seq_length {self.max_seq_length} needs to be >= {max_returned_tokens - 1}"
+            )
+
+        device = prompt.device
+        input_pos = torch.arange(0, T, device=device)
+        # NOTE: need to reshape the input tensor to comply with (B x T x n_embd)
+        token = prompt.view(1, -1)
+        tokens = []
+        yield_i = 0
+        buffer_length = max((len(tokens) for tokens in stop_tokens), default=1)
+        for t in range(1, max_returned_tokens - T + 1):
+            token = self.next_token(
+                token.view(1, -1), input_pos, temperature=temperature, top_k=top_k
+            )
+            tokens.append(token)
+            # check the stop condition
+            if any(
+                (l := len(st)) <= len(tokens)
+                and all(a == b for a, b in zip(tokens[-l:], st))
+                for st in stop_tokens
+            ):
+                return
+            if t - yield_i >= buffer_length:
+                # As buffer fills, we are sure we can return the sequence without
+                # missing stopping tokens
+                yield from tokens[yield_i:t]
+                yield_i = t
+            input_pos = input_pos[-1:].add_(1)
 
 
 class Block(nn.Module):
@@ -598,12 +655,16 @@ class CausalSelfAttention(nn.Module):
         self.config = config
 
         try:
-            self.working_scaled_dot_product_attention = getattr(F, "scaled_dot_product_attention")
+            self.working_scaled_dot_product_attention = getattr(
+                F, "scaled_dot_product_attention"
+            )
         except:
             # Catch issues with old torch versions
             from .utils.functional import scaled_dot_product_attention
 
-            warnings.warn("Using inefficient Python implementation of scaled self attention")
+            warnings.warn(
+                "Using inefficient Python implementation of scaled self attention"
+            )
             self.working_scaled_dot_product_attention = scaled_dot_product_attention
 
     def forward(
