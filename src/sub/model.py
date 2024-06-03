@@ -523,6 +523,7 @@ class GPT(nn.Module):
         print("")
         return tokens
 
+    @torch.inference_mode()
     def generate_chat(
         self,
         prompt: torch.Tensor,
