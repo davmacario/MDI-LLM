@@ -136,8 +136,6 @@ def main(args):
         batch_size=1, device=torch_device
     )  # Re-set cache for every sample
 
-    model.eval()
-
     # Compile model + catch exception if unsupported (Python 3.12 currently)
     if args.compile and hasattr(torch, "compile"):
         if args.verb:
@@ -154,6 +152,8 @@ def main(args):
         warnings.warn(
             f"Installed torch version ({version('torch')}) does not support compiling models"
         )
+
+    model.eval()
 
     # Tokenizer
     try:
