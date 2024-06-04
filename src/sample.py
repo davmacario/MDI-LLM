@@ -154,7 +154,7 @@ def main(args):
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with ctx:
+    with ctx and torch.no_grad():
         if args.verb:
             print("Beginning generation")
         t_start = time.time()
@@ -189,6 +189,9 @@ def main(args):
             decoded_text = tokenizer.decode(truncated)
             print(decoded_text)
             print("---------------")
+
+            for block in model.transformer.h:
+                block.attn.kv_cache.reset_parameters()
 
     tot_gen_time = time.time() - t_start
     if args.verb:

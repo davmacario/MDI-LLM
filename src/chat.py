@@ -175,12 +175,12 @@ def main(args):
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with ctx:
+    with ctx and torch.no_grad():
         while True:
             prompt = interactive_prompt(prompt_style)
             t_start_msg = time.time()
             start_ids = tokenizer.encode(prompt, device=torch_device)
-            # Ensure the desired amount of new tokens is generated
+                # Ensure the desired amount of new tokens is generated
             max_new_tokens = model.max_seq_length
             print(">> Reply: ", end="")
 
