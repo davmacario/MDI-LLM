@@ -154,44 +154,44 @@ def main(args):
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with ctx and torch.no_grad():
-        if args.verb:
-            print("Beginning generation")
-        t_start = time.time()
-        for k in range(batch_size):
-            curr_tok_time = []
-            t_start_sample = time.time()
-            prompt = start[k]
+    with ctx, torch.inference_mode():
             if args.verb:
-                print(prompt)
-            start_ids = tokenizer.encode(prompt, device=torch_device)
-            # Ensure the desired amount of new tokens is generated
-            max_new_tokens = start_ids.size(0) + args.n_tokens
+                print("Beginning generation")
+            t_start = time.time()
+            for k in range(batch_size):
+                curr_tok_time = []
+                t_start_sample = time.time()
+                prompt = start[k]
+                if args.verb:
+                    print(prompt)
+                start_ids = tokenizer.encode(prompt, device=torch_device)
+                # Ensure the desired amount of new tokens is generated
+                max_new_tokens = start_ids.size(0) + args.n_tokens
 
-            y = model.generate(
-                start_ids,
-                max_new_tokens,
-                temperature=TEMPERATURE,
-                top_k=TOP_K,
-                tok_time=curr_tok_time,
-            )
-            tok_time_all.append(
-                [
-                    (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
-                    for x in curr_tok_time
-                ]
-            )
-            truncated = find_eot(y, stop_tokens, len(start_ids))
-            if args.verb:
-                print(
-                    f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
+                y = model.generate(
+                    start_ids,
+                    max_new_tokens,
+                    temperature=TEMPERATURE,
+                    top_k=TOP_K,
+                    tok_time=curr_tok_time,
                 )
-            decoded_text = tokenizer.decode(truncated)
-            print(decoded_text)
-            print("---------------")
+                tok_time_all.append(
+                    [
+                        (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
+                        for x in curr_tok_time
+                    ]
+                )
+                truncated = find_eot(y, stop_tokens, len(start_ids))
+                if args.verb:
+                    print(
+                        f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
+                    )
+                decoded_text = tokenizer.decode(truncated)
+                print(decoded_text)
+                print("---------------")
 
-            for block in model.transformer.h:
-                block.attn.kv_cache.reset_parameters()
+                for block in model.transformer.h:
+                    block.attn.kv_cache.reset_parameters()
 
     tot_gen_time = time.time() - t_start
     if args.verb:

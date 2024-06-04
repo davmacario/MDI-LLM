@@ -175,7 +175,7 @@ def main(args):
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with ctx and torch.no_grad():
+    with ctx, torch.inference_mode():
         while True:
             prompt = interactive_prompt(prompt_style)
             t_start_msg = time.time()
