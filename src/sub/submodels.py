@@ -22,6 +22,7 @@ from typing import Any, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+
 from sub.model import Block, Config, build_mask_cache, build_rope_cache
 
 """
@@ -104,6 +105,18 @@ class NodePrototype(nn.Module):
         if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
             # passing `attn_mask` to SDPA disables the flash implementation. since we only need the mask
             # for the kv-cache support (only during inference), we only create it in that situation
+            self.mask_cache = build_mask_cache(max_seq_length, device)
+
+    def init_rope_mask(
+        self,
+        rope_cache_length: Optional[int] = None,
+        device: Optional[torch.device] = None,
+    ):
+        if rope_cache_length is None:
+            rope_cache_length = self.cos.size(-1)
+        max_seq_length = self.max_seq_length
+
+        if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
             self.mask_cache = build_mask_cache(max_seq_length, device)
 
     def clear_kv_cache(self) -> None:

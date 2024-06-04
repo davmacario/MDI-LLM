@@ -5,19 +5,20 @@ Perform inference on a pre-trained model - TinyLlama & Llama
 """
 
 import cProfile
+import gc
 import os
 import pstats
 import time
+import warnings
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from pathlib import Path
-import gc
 
 import torch
-from sub.config import DTYPE, TEMPERATURE, TOP_K  # TODO: change dtype def
-from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 
-from sub import GPT, Config, PromptStyle, Tokenizer
+from sub import GPT, PromptStyle, Tokenizer
+from sub.config import TEMPERATURE, TOP_K
+from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
 script_dir = Path(os.path.dirname(__file__))
@@ -35,14 +36,19 @@ def main(args):
         profiler = cProfile.Profile()
         profiler.enable()
 
-    BATCH_SIZE = args.n_samples  # number of samples to draw
-    start = get_user_prompt(args.prompt, BATCH_SIZE)
-
+    batch_size = args.n_samples  # number of samples to draw
     using_huggingface = False
 
-    VERB = args.verb
-    PLOTS = args.plots
-    DEVICE = args.device
+    dtype = (
+        "bfloat16"
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else "float16"
+    )
+    ptdtype = {
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[dtype]
 
     checkpoint_dir = Path(args.ckpt)
     model_type = checkpoint_dir.name
@@ -54,7 +60,7 @@ def main(args):
         # Weights are there but in wrong format
         from sub.utils.convert_hf_checkpoint import convert_hf_checkpoint
 
-        convert_hf_checkpoint(checkpoint_dir=checkpoint_dir, dtype=DTYPE)
+        convert_hf_checkpoint(checkpoint_dir=checkpoint_dir, dtype=dtype)
 
     assert checkpoint_path.is_file(), "Something went wrong in weight conversion"
 
@@ -64,26 +70,21 @@ def main(args):
 
     # --------------------------------------------------------------------------
     # For later use in torch.autocast:
-    if "cuda" in DEVICE:
+    if "cuda" in args.device:
         device_type = "cuda"
-    elif "mps" in DEVICE:
+    elif "mps" in args.device:
         device_type = "mps"
     else:
         device_type = "cpu"
-    if VERB:
-        print(f"Using {DEVICE}")
+    if args.verb:
+        print(f"Using {args.device}")
         print(f"Device type: {device_type}")
-    ptdtype = {
-        "float32": torch.float32,
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-    }[DTYPE]
     ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
-        if device_type == "mps"
+        if device_type == "mps" or not dtype == "bfloat16"
         else torch.autocast(device_type=device_type, dtype=ptdtype)
     )
-    torch_device = torch.device(DEVICE)
+    torch_device = torch.device(args.device)
 
     # Model setup
     config, wt = load_from_pt(checkpoint_dir)
@@ -112,73 +113,97 @@ def main(args):
     # but this would not be fair compared to MDI, as we could raise the batch size
     # there as well; instead, we generate individual samples multiple times
 
-    # model.set_kv_cache(batch_size=BATCH_SIZE)  # process samples together
+    # model.set_kv_cache(batch_size=batch_size)  # process samples together
     model.set_kv_cache(
         batch_size=1, device=torch_device
     )  # Re-set cache for every sample
 
+    # Compile model + catch exception if unsupported (Python 3.12 currently)
+    if args.compile and hasattr(torch, "compile"):
+        if args.verb:
+            print("Compiling model - this may take a while", end="\r")
+        try:
+            model = torch.compile(model)
+            if args.verb:
+                print("Model compiled!")
+        except RuntimeError as e:
+            warnings.warn(f"Unable to compile model! {e}")
+    elif args.compile and not hasattr(torch, "compile"):
+        from importlib.metadata import version
+
+        warnings.warn(
+            f"Installed torch version ({version('torch')}) does not support compiling models"
+        )
+
     model.eval()
 
-    # Unsupported
-    # if compile:
-    #     [...]
-
     # Tokenizer
-    tokenizer = Tokenizer(checkpoint_dir)
+    try:
+        tokenizer = Tokenizer(checkpoint_dir, force_backend="huggingface")
+    except:
+        tokenizer = Tokenizer(checkpoint_dir)
     prompt_style = (
         load_prompt_style(checkpoint_dir)
         if has_prompt_style(checkpoint_dir)
         else PromptStyle.from_config(config)
     )
     stop_tokens = prompt_style.stop_tokens(tokenizer)
+    start = get_user_prompt(args.prompt, batch_size, prompt_style)
 
     # ---- GENERATION -------------------------------------------------------------
     # Encode the prompt
     # Run generation
     tok_time_all = []
-    with ctx:
-        if VERB:
-            print("Beginning generation")
-        t_start = time.time()
-        for k in range(BATCH_SIZE):
-            curr_tok_time = []
-            t_start_sample = time.time()
-            # TODO: fix support for one prompt per sample
-            prompt = prompt_style.apply(start[k])
-            if VERB:
-                print(prompt)
-            start_ids = tokenizer.encode(prompt, device=torch_device)
-            # Ensure the desired amount of new tokens is generated
-            max_new_tokens = start_ids.size(0) + args.n_tokens
+    with ctx, torch.inference_mode():
+            if args.verb:
+                print("Beginning generation")
+            t_start = time.time()
+            for k in range(batch_size):
+                curr_tok_time = []
+                t_start_sample = time.time()
+                prompt = start[k]
+                if args.verb:
+                    print(prompt)
+                start_ids = tokenizer.encode(prompt, device=torch_device)
+                # Ensure the desired amount of new tokens is generated
+                max_new_tokens = start_ids.size(0) + args.n_tokens
 
-            y = model.generate(
-                start_ids,
-                max_new_tokens,
-                temperature=TEMPERATURE,
-                top_k=TOP_K,
-                tok_time=curr_tok_time,
-            )
-            tok_time_all.append(
-                [
-                    (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
-                    for x in curr_tok_time
-                ]
-            )
-            decoded_text = tokenizer.decode(y)
-            print(decoded_text[: find_eot(decoded_text)])
-            print("---------------")
+                y = model.generate(
+                    start_ids,
+                    max_new_tokens,
+                    temperature=TEMPERATURE,
+                    top_k=TOP_K,
+                    tok_time=curr_tok_time,
+                )
+                tok_time_all.append(
+                    [
+                        (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
+                        for x in curr_tok_time
+                    ]
+                )
+                truncated = find_eot(y, stop_tokens, len(start_ids))
+                if args.verb:
+                    print(
+                        f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
+                    )
+                decoded_text = tokenizer.decode(truncated)
+                print(decoded_text)
+                print("---------------")
+
+                for block in model.transformer.h:
+                    block.attn.kv_cache.reset_parameters()
 
     tot_gen_time = time.time() - t_start
-    if VERB:
+    if args.verb:
         print(f"Total generation time: {tot_gen_time} s")
 
-    if PLOTS:
+    if args.plots:
         # Store points on csv file
         os.makedirs(os.path.join(script_dir, "logs"), exist_ok=True)
         points_file_path = os.path.join(
             script_dir,
             "logs",
-            f"tokens_time_samples_1nodes_{model_type}_{BATCH_SIZE}samples.csv",
+            f"tokens_time_samples_1nodes_{model_type}_{batch_size}samples.csv",
         )
         if not os.path.exists(os.path.dirname(points_file_path)):
             os.mkdir(os.path.dirname(points_file_path))
@@ -196,7 +221,7 @@ def main(args):
             out_path=os.path.join(
                 script_dir,
                 "img",
-                f"tokens_time_1nodes_{model_type}_{BATCH_SIZE}samples.png",
+                f"tokens_time_1nodes_{model_type}_{batch_size}samples.png",
             ),
         )
 
@@ -222,7 +247,7 @@ def main(args):
     #                 + "\n"
     #             )
     #         f.write(
-    #             f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{BATCH_SIZE},{n_model_layers},{gptconf.block_size},{tot_gen_time}\n"
+    #             f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{batch_size},{n_model_layers},{gptconf.block_size},{tot_gen_time}\n"
     #         )
 
     if profiler:
@@ -246,6 +271,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("-v", "--verb", action="store_true", help="enable verbose mode")
     parser.add_argument("-p", "--plots", action="store_true", help="enable plots")
+    parser.add_argument(
+        "-c",
+        "--compile",
+        action="store_true",
+        help="if set, compile the model (Torch >= 2.0.0 required)",
+    )
     parser.add_argument(
         "--ckpt",
         type=Path,

@@ -6,17 +6,19 @@ import os
 import sys
 import warnings
 from contextlib import nullcontext
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
+import yaml
 from numpy.typing import NDArray
+from torch import nn
+
 from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                         N_LAYERS_NODES, WARMUP_ITERS)
 from sub.model import Config
 from sub.utils.data_loader import get_batch
-from torch import nn
-from transformers import GPT2LMHeadModel
 
 VERB = False
 
@@ -166,20 +168,48 @@ def remove_prefix(text: str, prefix: str) -> str:
     return text
 
 
-# FIXME
-def find_eot(text: str, stop_tokens: Optional[List[int]] = None) -> int:
+def find_eot(
+    tokens: torch.Tensor,
+    stop_tokens: Tuple[List[int], ...] = (),
+    prompt_length: int = 0,
+) -> torch.Tensor:
     """
-    Return the index of the first character of '<|endoftext|>', if found in text.
-    Else, return len(text)
+    Return the sequence of tokens until the stopping tokens are found.
+    The function finds the first EOS sequence starting from `prompt_length` (default 0)
+    onwards.
+    It will return the tensor truncated at the first EOS sequence after the prompt.
+
+    Args:
+        tokens: output of the LLM
+        stop_tokens: tuple containing lists of the IDs representing the EOS
+        prompt_length: optional prompt length
     """
-    # TODO: add support for tokenizer eos and bos
-    tbf = "<|endoftext|>"
+    tok_lst = tokens.view(-1, 1).squeeze().tolist()
+    assert (
+        len(tok_lst) >= prompt_length
+    ), "Prompt length must be longer than the provided tensor"
+    start_ind = prompt_length + max([len(st) for st in stop_tokens])  # Skip prompt
+    for i in range(start_ind, len(tok_lst)):
+        if any(
+            all(a == b for a, b in zip(tok_lst[i - len(st):i], st))
+            for st in stop_tokens
+        ):
+            return tokens[:, :i]
+    return tokens
 
-    for i in range(0, len(text) - len(tbf)):
-        if text[i:].startswith(tbf):
-            return i
 
-    return len(text)
+
+def format_output(text: str):
+    """
+    Display the generated text correctly;
+
+    This requires to isolate the <|user|> and <|assistant|> elements to isolate the
+    specific things said by each.
+
+
+    Maybe format with color??
+    """
+    pass
 
 
 def split_parameters(
@@ -330,7 +360,10 @@ def split_parameters(
 
 
 def split_and_store(
-    model_params: Dict[str, Any], n_nodes: int, ckpt_dir: Union[Path, str], **kwargs,
+    model_params: Dict[str, Any],
+    n_nodes: int,
+    ckpt_dir: Union[Path, str],
+    **kwargs,
 ) -> Path:
     """
     Given a state dict, split it among a number of nodes following the configuration.
@@ -541,3 +574,9 @@ def load_from_hf(
 
     model_path = checkpoint_dir / repo_id
     return load_from_pt(model_path, device, config_only=config_only)
+
+
+def save_config(config: "Config", checkpoint_dir: Path) -> None:
+    config_dict = asdict(config)
+    with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
+        yaml.dump(config_dict, fp)

@@ -1,84 +1,14 @@
 import os
 import pickle
 import warnings
-from contextlib import contextmanager
-from dataclasses import asdict
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import IO, Any, List, Optional, Tuple
+from typing import IO, Any
 
 import torch
-import yaml
 from torch.serialization import normalize_storage_type
 from typing_extensions import override
-
-from sub.model import Config
-
-
-def find_weight_files(
-    repo_id: str, access_token: Optional[str]
-) -> Tuple[List[str], List[str]]:
-    """
-    Find weight files in a Huggingface Hub repository.
-    """
-    from huggingface_hub import repo_info
-    from huggingface_hub.utils import filter_repo_objects
-
-    with gated_repo_catcher(repo_id, access_token):
-        info = repo_info(repo_id, token=access_token)
-
-    # If errors in getting repo info, they are caught by context manager
-    filenames = [f.rfilename for f in info.siblings]
-    bins = list(filter_repo_objects(items=filenames, allow_patterns=["*.bin*"]))
-    safetensors = list(
-        filter_repo_objects(items=filenames, allow_patterns=["*.safetensors"])
-    )
-    return bins, safetensors
-
-
-@contextmanager
-def gated_repo_catcher(repo_id: str, access_token: Optional[str]):
-    """
-    Context manager to detect whether the HF repository requires a private API key to be
-    accessed.
-    This context manager catches OSError exceptions and specifies the detailed error
-    message.
-
-    Possible errors:
-    - Repository not found
-    - Repo found, access token required but not provided
-    - Repo found, provided access token does not work
-    """
-    try:
-        yield
-    except OSError as e:
-        err_msg = str(e)
-        if "Repository Not Found" in err_msg:
-            raise ValueError(
-                f"Repository at https://huggingface.co/api/models/{repo_id} not found."
-                " Please make sure you specified the correct `repo_id`."
-            ) from None
-        elif "gated repo" in err_msg:
-            if not access_token:
-                raise ValueError(
-                    f"https://huggingface.co/{repo_id} requires authentication, please set the `HF_TOKEN=your_token`"
-                    " environment variable or pass `--hf-token=your_token`. You can find your token by visiting"
-                    " https://huggingface.co/settings/tokens."
-                ) from None
-            else:
-                raise ValueError(
-                    f"https://huggingface.co/{repo_id} requires authentication. The access token provided by `HF_TOKEN=your_token`"
-                    " environment variable or `--hf-token=your_token` may not have sufficient access rights. Please"
-                    f" visit https://huggingface.co/{repo_id} for more information."
-                ) from None
-        raise e from None
-
-
-def save_config(config: "Config", checkpoint_dir: Path) -> None:
-    config_dict = asdict(config)
-    with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
-        yaml.dump(config_dict, fp)
 
 
 class NotYetLoadedTensor:

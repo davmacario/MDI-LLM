@@ -31,11 +31,12 @@ from typing import Any, Optional
 import cherrypy as cp
 import requests
 import torch
+
+from sub import PromptStyle
 from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
 from sub.typing import FileType
 from sub.utils import load_from_pt, split_and_store
-from sub import PromptStyle
 
 docstring = """
 Distributed implementation of the Llama architecture using Model-Distributed Inference
@@ -138,7 +139,7 @@ class GPTDistributed:
         *,
         ckpt_dir: Optional[FileType] = None,
         chunk_path: Optional[FileType] = None,
-        device: str = "cpu",
+        device: Optional[str] = None,
         secondary_index: Optional[int] = None,
         **kwargs,
     ):
@@ -162,8 +163,9 @@ class GPTDistributed:
                 In secondary: if missing, the chunk path will be inferred.
                 NOTE: chunk path will always be passed, i.e., the model will always be
                     loaded from disk!
-            device (default: "cpu"): string indicating the device used to load and run
-                the model.
+            device (default: None): string indicating the device used to load and run
+                the model; if not specified, the application will try to get it from the
+                nodes configuration file.
             secondary_index (optional): positional, zero-index of the secondary node;
                 not necessary if only 1 secondary node is present in the configuration.
                 Not used by starter nodes.
@@ -182,12 +184,14 @@ class GPTDistributed:
         if isinstance(config_file, str):
             config_file = Path(config_file)
 
-        self.torch_device = device
+        self.torch_device = device if device else None
 
         global VERB
         VERB = False if "verb" not in kwargs else bool(kwargs["verb"])
         global PLOTS
         PLOTS = False if "plots" not in kwargs else bool(kwargs["plots"])
+
+        self.compile = False if "compile" not in kwargs else bool(kwargs["compile"])
 
         if self.ckpt_dir:
             self.full_model_name = self.ckpt_dir.name
@@ -250,6 +254,7 @@ class GPTDistributed:
                 **kwargs,
                 model_type=self.full_model_name,
             )
+
         elif "secondary" in self.node_type:
             # FIXME: secondary node may be completely agnostic of the used model and
             # receive the model config (and the chunk) at initialization
@@ -306,6 +311,10 @@ class GPTDistributed:
                 **kwargs,
             )
 
+        # Here because if the 'device' arg is None, gpt_serv will infer it
+        self.torch_device = self.gpt_serv.model_device
+
+
     def start(
         self,
         *,
@@ -346,7 +355,7 @@ class GPTDistributed:
                 for i, smpl in enumerate(out_text):
                     print("-------------------------------------------------")
                     print(f"Sample {i + 1}:")
-                    print(smpl, "\n")  # [: find_eot(smpl)], "\n")
+                    print(smpl, "\n")
                 print("-------------------------------------------------")
                 print(f"Total generation time: {time_gen}")
 
@@ -416,7 +425,6 @@ class GPTDistributed:
             curr_msg["next_node"] = next
 
             if not self.model_was_split:
-                # TODO: load from file; store in local var to automatically clear mem
                 chunk_path = node_chunks_dir / f"model_secondary{i}.pth"
                 curr_msg["params"] = torch.load(chunk_path, device="cpu")
 

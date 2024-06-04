@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Idea: define the model configuration in a yaml file as LitGPT does, then, depending on
-the --init argument (scratch, resume), either create a model from scratch or resume from
-a pretrained one (fine tuning).
+Training script - LitGPT model
 
-The data set is handled in the same way as GPT-2, through train.bin and test.bin files.
-
-Add possibility to init from hf, which downloads model and fine tunes it
-
-MISSING:
-- DDP
+Supports DistributedDataParallel through `torchrun --nproc-per-node <n> ./train.py`
 """
 
 import gc
@@ -30,8 +23,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from sub import GPT, Config, Tokenizer
-from sub.config import DEVICE, DTYPE, TrainingConfig
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+from sub import GPT
+from sub.config import DEVICE, TrainingConfig
 from sub.model import CausalSelfAttention, LLaMAMLP
 from sub.utils import (estimate_loss, get_batch, get_lr, load_from_hf,
                        load_from_pt)
@@ -62,6 +57,14 @@ def initialize_weights(model: GPT, n_layer: int, n_embd: int) -> None:
 
 def main(args):
     script_dir = Path(os.path.dirname(__file__))
+
+    # Distributed Data Parallel (data parallelism over multiple GPUs)
+    ddp = False
+    master_process = True
+    seed_offset = 0
+    ddp_world_size = 1
+
+    # ---
     # Extract args
     ckpt_dir = Path(args.ckpt)
     model_config_file = ckpt_dir / "model_config.yaml"
@@ -77,39 +80,57 @@ def main(args):
     train.ckpt_interval = args.ckpt_interval
     train.log_interval = args.log_interval
     train.gradient_accumulation_steps = args.grad_acc_steps
-    train.device = args.device
     train.compile = args.compile
-    torch_device = torch.device(args.device)
+    device = args.device
     # TODO: dtype
 
+    # Data parallel training setup
+    ddp = int(os.environ.get("RANK", -1)) != -1  # DDP iff rank > -1
+    if ddp:
+        torch.distributed.init_process_group(backend="nccl")
+        ddp_rank = int(os.environ["RANK"])
+        ddp_local_rank = int(os.environ["LOCAL_RANK"])
+        ddp_world_size = int(os.environ["WORLD_SIZE"])
+        device = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(device)
+        master_process = (
+            ddp_rank == 0
+        )  # this process will do logging, checkpointing etc.
+        seed_offset = ddp_rank  # each process gets a different seed
+        # world_size number of processes will be training simultaneously, so we can scale
+        # down the desired gradient accumulation iterations per process proportionally
+        assert train.gradient_accumulation_steps % ddp_world_size == 0
+        train.gradient_accumulation_steps //= ddp_world_size
+    else:
+        # Cannot override device if using ddp
+        device = args.device
+
+    torch_device = torch.device(args.device)
     torch.manual_seed(args.seed)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 
-    if "cuda" in args.device:
+    if "cuda" in device:
         device_type = "cuda"
-    elif "mps" in args.device:
+    elif "mps" in device:
         device_type = "mps"
     else:
         device_type = "cpu"
+    dtype = (
+        "bfloat16"
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        else "float16"
+    )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
     ptdtype = {
         "float32": torch.float32,
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
-    }[DTYPE]
+    }[dtype]
     ctx = (
         nullcontext()
-        if device_type in {"cpu", "mps"}
+        if device_type == "cpu" or not dtype == 'bfloat16'
         else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
     )
-
-    # TODO: store config parameters -- store train as dict in checkpoints (see later)
-    config_keys = [
-        k
-        for k, v in globals().items()
-        if not k.startswith("_") and isinstance(v, (int, float, bool, str))
-    ]
-    config = {k: globals()[k] for k in config_keys}  # useful for logging
 
     # ---------------------------------------------------------------------------------
 
@@ -121,20 +142,17 @@ def main(args):
     iter_num = 0
     best_val_loss = 1e9
 
-    # TODO: load correct tokenizer - ideally, place tokenizer file in data folder or in
-    # checkpoint folder (same as config)
-
     # Initialization of the model
     if init_from == "scratch":
         if not ckpt_dir:
             raise ValueError("Missing model checkpoint folder")
 
-        if (ckpt_dir / "tokenizer.model").exists() or (
-            ckpt_dir / "tokenizer.json"
-        ).exists():
-            tokenizer = Tokenizer(ckpt_dir)
-        else:
-            tokenizer = Tokenizer(dataset_dir)
+        # NOTE: we assume the training data has already been prepared and is stored
+        # as .bin files -> TOKENIZER is NOT loaded here!
+        if (
+            not (ckpt_dir / "tokenizer.model").exists()
+            and not (ckpt_dir / "tokenizer.json").exists()
+        ):
             # Copy the tokenizer to the checkpoint directory to package
             if (dataset_dir / "tokenizer.model").exists():
                 shutil.copy(dataset_dir / "tokenizer.model", ckpt_dir)
@@ -169,7 +187,8 @@ def main(args):
     elif init_from.lower() in {"hf", "huggingface"}:
         # In this case, the ckpt_dir is the model name on huggingface hub
         ckpt_dir = script_dir / "checkpoints" / args.ckpt
-        os.makedirs(ckpt_dir, exist_ok=True)
+        if master_process:
+            os.makedirs(ckpt_dir, exist_ok=True)
         model_config_file = ckpt_dir / "model_config.yaml"
         ckpt_file = ckpt_dir / "train_ckpt.pkl"
         ckpt_model = ckpt_dir / "lit_model.pth"
@@ -180,7 +199,7 @@ def main(args):
             config, wt = load_from_hf(
                 repo_id=args.ckpt,
                 access_token=args.hf_token if args.hf_token else os.getenv("HF_TOKEN"),
-                dtype=DTYPE,
+                dtype=dtype,
                 checkpoint_dir=script_dir / "checkpoints",
             )
         assert wt, "Unable to load model parameters!"
@@ -221,8 +240,17 @@ def main(args):
                 print("Model compiled!")
         except RuntimeError as e:
             warnings.warn(f"Unable to compile model! {e}")
+    elif args.compile and not hasattr(torch, "compile"):
+        from importlib.metadata import version
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(DTYPE == "float16"))
+        warnings.warn(
+            f"Installed torch version ({version('torch')}) does not support compiling models"
+        )
+
+    if ddp:
+        model = DDP(model, device_ids=[ddp_local_rank])
+
+    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -239,6 +267,8 @@ def main(args):
     local_iter = 0
     state = {}
     count_loss_incr = 0
+    running_mfu = -1.0
+    raw_model = model.module if ddp else model
     while iter_num <= train.max_iters:
         if VERB:
             print(f"Training iter {iter_num}")
@@ -247,8 +277,10 @@ def main(args):
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        if not iter_num % train.ckpt_interval:
-            losses = estimate_loss(model, train_data, val_data, 1, args.device, ctx=ctx)
+        if not iter_num % train.ckpt_interval and master_process:
+            losses = estimate_loss(
+                raw_model, train_data, val_data, 1, args.device, ctx=ctx
+            )
             print(
                 f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
             )
@@ -275,10 +307,11 @@ def main(args):
                     }
                     print(f"Saving state to {ckpt_file} and model to {ckpt_model}")
                     torch.save(state, ckpt_file)
-                    torch.save(model.state_dict(), ckpt_model)
+                    # NOTE: will overwrite old model if resuming
+                    torch.save(raw_model.state_dict(), ckpt_model)
             else:
                 count_loss_incr += 1
-                if args.patience is not None and count_loss_incr > args.patience:
+                if args.patience is not None and count_loss_incr >= args.patience:
                     print(
                         f"No performance increase in the last {args.patience} iters - stopping!"
                     )
@@ -289,6 +322,10 @@ def main(args):
 
         # Gradient Accumulation
         for micro_step in range(train.gradient_accumulation_steps):
+            if ddp:  # Sync gradients @ last micro step for DDP
+                model.require_backward_grad_sync = (
+                    micro_step == train.gradient_accumulation_steps - 1
+                )
             with ctx:
                 logits = model(X)
                 loss = nn.functional.cross_entropy(
@@ -314,17 +351,27 @@ def main(args):
         t_start = t1
 
         # Logging
-        if not iter_num % train.log_interval:
+        if not iter_num % train.log_interval and master_process:
             lossf = loss.item() * train.gradient_accumulation_steps
             if local_iter >= 5:
                 # Estimate MFU
-                pass
-            print(f"Iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}")
+                mfu = raw_model.estimate_mfu(
+                    train.batch_size * train.gradient_accumulation_steps, dt
+                )
+                running_mfu = (
+                    mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
+                )
+            print(
+                f"Iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}, "
+                f"MFU = {running_mfu * 100:.2f}%"
+            )
 
         iter_num += 1
         local_iter += 1
 
-    print("Training stopped!")
+    if ddp:
+        torch.distributed.destroy_process_group()
+    print("Training finished!")
 
 
 if __name__ == "__main__":
