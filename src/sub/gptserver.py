@@ -191,15 +191,7 @@ class GPTServer:
             self.role = "starter"
             self.own_config = node_config["nodes"]["starter"]
 
-            # Possibly get device info if found in config file
-            try:
-                self.model_device = (
-                    model_device if model_device else self.own_config["device"]
-                )
-            except KeyError:
-                warnings.warn(f"Using default device {DEFAULT_DEVICE}")
-                self.model_device = DEFAULT_DEVICE
-            self.torch_model_device = torch.device(self.model_device)
+            self._select_device(model_device)
 
             self.n_nodes = 1 + (
                 0
@@ -278,15 +270,7 @@ class GPTServer:
                 else node_config["nodes"]["secondary"][secondary_index]
             )
             self.starter_addr = self.own_config["communication"]["starter_addr"]
-            # Possibly get device info if found in config file
-            try:
-                self.model_device = (
-                    model_device if model_device else self.own_config["device"]
-                )
-            except KeyError:
-                warnings.warn(f"Using default device {DEFAULT_DEVICE}")
-                self.model_device = DEFAULT_DEVICE
-            self.torch_model_device = torch.device(self.model_device)
+            self._select_device(model_device)
 
             self._running_thread = threading.Thread()  # Placeholder FIXME
             # NOTE: the model will be initialized once config info is received (POST)
@@ -796,6 +780,19 @@ class GPTServer:
         return {"sample_index": sample_index, "data": data}
 
     # ----- Private -------------------------------------------------------------------
+
+    def _select_device(self, device):
+        # Possibly get device info if found in config file
+        try:
+            self.model_device = (
+                device if device else self.own_config["device"]
+            )
+        except KeyError:
+            warnings.warn(f"Using default device {DEFAULT_DEVICE}")
+            self.model_device = DEFAULT_DEVICE
+        self.torch_model_device = torch.device(self.model_device)
+        if VERB:
+            print(f"Using device: {self.model_device}")
 
     def _init_model(self, model_parameters: Dict[str, Any], n_transf_layers: int):
         """
