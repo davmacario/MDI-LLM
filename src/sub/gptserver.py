@@ -856,7 +856,11 @@ class GPTServer:
         """
         if VERB:
             print("Loading tokenizer", end="")
-        self.tok = Tokenizer(tokenizer_dir, force_backend="huggingface")
+        # FIXME: this is just to give priority to HF; some tokenizer_config.json files (Llama 2) are broken...
+        try:
+            self.tok = Tokenizer(tokenizer_dir, force_backend="huggingface")
+        except:
+            self.tok = Tokenizer(tokenizer_dir)
         tok_dir_path = (
             Path(tokenizer_dir) if isinstance(tokenizer_dir, str) else tokenizer_dir
         )
