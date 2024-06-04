@@ -52,13 +52,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    if torch.cuda.is_available():
-        default_device = "cuda"
-    elif torch.backends.mps.is_available():
-        default_device = "mps"
-    else:
-        default_device = "cpu"
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-d", "--debug", action="store_true", help="enable debug mode (profiler)"
@@ -91,7 +84,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         type=str,
-        default=default_device,
+        default=None,
         help="torch device where to load model and tensors",
     )
     parser.add_argument("--seed", type=int, default=10137, help="set random seed")

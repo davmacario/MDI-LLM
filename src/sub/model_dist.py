@@ -139,7 +139,7 @@ class GPTDistributed:
         *,
         ckpt_dir: Optional[FileType] = None,
         chunk_path: Optional[FileType] = None,
-        device: str = "cpu",
+        device: Optional[str] = None,
         secondary_index: Optional[int] = None,
         **kwargs,
     ):
@@ -163,8 +163,9 @@ class GPTDistributed:
                 In secondary: if missing, the chunk path will be inferred.
                 NOTE: chunk path will always be passed, i.e., the model will always be
                     loaded from disk!
-            device (default: "cpu"): string indicating the device used to load and run
-                the model.
+            device (default: None): string indicating the device used to load and run
+                the model; if not specified, the application will try to get it from the
+                nodes configuration file.
             secondary_index (optional): positional, zero-index of the secondary node;
                 not necessary if only 1 secondary node is present in the configuration.
                 Not used by starter nodes.
@@ -183,7 +184,7 @@ class GPTDistributed:
         if isinstance(config_file, str):
             config_file = Path(config_file)
 
-        self.torch_device = device
+        self.torch_device = device if device else None
 
         global VERB
         VERB = False if "verb" not in kwargs else bool(kwargs["verb"])
@@ -253,6 +254,7 @@ class GPTDistributed:
                 **kwargs,
                 model_type=self.full_model_name,
             )
+
         elif "secondary" in self.node_type:
             # FIXME: secondary node may be completely agnostic of the used model and
             # receive the model config (and the chunk) at initialization
@@ -308,6 +310,10 @@ class GPTDistributed:
                 model_device=self.torch_device,
                 **kwargs,
             )
+
+        # Here because if the 'device' arg is None, gpt_serv will infer it
+        self.torch_device = self.gpt_serv.model_device
+
 
     def start(
         self,

@@ -83,12 +83,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    if torch.cuda.is_available():
-        default_device = "cuda"
-    elif torch.backends.mps.is_available():
-        default_device = "mps"
-    else:
-        default_device = "cpu"
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Starter node - MDI")
     parser.add_argument(
@@ -122,7 +116,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         type=str,
-        default=default_device,
+        default=None,
         help="torch device where to load model and tensors",
     )
     # Run
