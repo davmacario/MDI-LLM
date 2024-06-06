@@ -70,8 +70,12 @@ class GPTServer:
     prev_node: Optional[Dict] = None
     model_params: Optional[Dict] = None
     model_config: Optional[Config] = None
-    n_samples: Optional[int] = None
     model_type = None
+
+    # Number of samples that have been requested so far in the current run:
+    n_samples: int = 0
+    # Map sample ID to n. of iteration - initialized to 0 when new sample is created
+    iter_ind: Mapping = {}
 
     # True iff the model has been initialized and it is ready to perform inference.
     running: bool = False
@@ -80,7 +84,9 @@ class GPTServer:
     sock_to_prev_prop: Tuple = ()  # NOTE: used now
     sock_to_next: Optional[socket.socket] = None
     sock_to_next_prop: Tuple = ()  # NOTE: not used!
-    stop_msg = {"stop": True}
+
+    # Message used to indicate generation interruption for one specific sample
+    stop_msg = {"stop": {"sample_id": 0}}
 
     # Input message queue
     in_message_queue = deque([])
@@ -90,6 +96,13 @@ class GPTServer:
     out_message_queue = deque([])
     out_queue_not_empty = threading.Event()
     out_queue_not_empty.clear()
+
+    # Response queue - used to pass generated responses from loop to HTTP server
+    resp_msg_template = {}  # TODO: use Ollama's syntax
+    resp: Mapping[int, Dict] = {}  # Will contain the generated message for each sample
+    resp_finished: Mapping[int, threading.Event] = (
+        {}
+    )  # Used to advertise generation end and make server look for message in self.resp
 
     # Some model configs:
     top_k = TOP_K
@@ -877,13 +890,46 @@ class GPTServer:
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
 
+    def _init_sample_caches(
+        self, idx, dtype
+    ) -> Tuple[int, torch.Tensor, List[KVCache]]:
+        """
+        Initialize the model cache for the new sample `idx`, using a specified dtype.
+
+        Args:
+            idx: new sample (encoded prompt)
+            dtype: desired dtype for the KV caches
+
+        Returns:
+            Cache length (T_i)
+            Input position tensor (input_pos)
+            KV cache for the sumbodel (kvcaches)
+        """
+        assert self.model is not None
+
+        len_cache = idx.size(1)
+        input_pos = torch.arange(0, len_cache, device=self.torch_model_device)
+        kvc_sublist: List[KVCache] = []
+        for _, block in enumerate(self.model.transformer.h):
+            # Build kv cache individually for each attn layer
+            kvc_sublist.append(
+                block.attn.build_kv_cache(
+                    batch_size=1,
+                    max_seq_length=self.model.max_seq_length,
+                    rope_cache_length=self.model.cos.size(-1),
+                    device=self.torch_model_device,
+                    dtype=dtype,
+                )
+            )
+        return len_cache, input_pos, kvc_sublist
+
+    # ---- Main Loops -----------------------------------------------------------------
+
     def _starter_loop(
         self, n_samples: int, max_new_tokens: int, prompt: Optional[str] = None
     ) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
-        This loop has a finite duration, as the starter knows what is the length of the
-        samples to be generated.
 
         Args:
             n_samples: number of produced samples
@@ -926,6 +972,7 @@ class GPTServer:
             else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
+        # >>>> TODO: replace - analogous operations to be executed in POST
         # Encode starting sequence - with prompt support
         if prompt is None:
             start = ["\n"] * n_samples
@@ -942,140 +989,83 @@ class GPTServer:
             for txt in start_styled
         ]
         prompt_lengths = {i: len(id.squeeze()) for i, id in enumerate(idx)}
+        # <<<<
 
         # Initialize RoPE cache and attention mask
         self.model.init_rope_mask(device=self.torch_model_device)
         # Prompt size T and input_pos are now lists of n_samples elements
         T_i: Mapping[int, int] = {}  # Contains size of context of each prompt
-        input_pos: Mapping[int, torch.Tensor] = (
-            {}
-        )  # Will contain the input pos. of all samples
+        # Will contain the input pos. of all samples:
+        input_pos: Mapping[int, torch.Tensor] = {}
         kvcaches: Mapping[int, List[KVCache]] = {}
+        samples: Mapping[int, torch.Tensor] = {}
         self.model.eval()
 
         start_time = time.time()
         if PLOTS:
             self.tok_time.append((0, 0))
-        with torch.no_grad():
-            with ctx:
-                total_iters = max_new_tokens * n_samples
-                first_glob_iter = True
-                for k in range(total_iters):
-                    logger_wp.info(f"Iter {k}")
-                    print(
-                        f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
-                        end="\r",
+        with torch.inference_mode(), ctx:
+            while self.running:
+                # Wait for queue to contain msg
+                assert self.in_queue_not_empty.wait()
+                in_msg = self.in_message_queue.popleft()
+                if len(self.in_message_queue) < 1:
+                    self.in_queue_not_empty.clear()
+
+                sample_id = in_msg["sample_index"]
+                idx = in_msg["data"].to(self.model_device)
+
+                # Keep variable iter_index[i] for each sample i
+                if self.iter_ind[sample_id] >= n_samples:
+                    # We are not in the first iteration for this sample
+                    # --> Can start processing messages from last secondary node
+                    logits = self.model(idx, first_pass=False)
+                    idx_next = sample(
+                        logits, temperature=self.temperature, top_k=self.top_k
                     )
-                    if PLOTS:
-                        self.tok_time.append((k, time.time() - start_time))
-                    # Identify sample
-                    sample_id = k % n_samples
+                    idx_next = idx_next.view(1, -1)  # FIXME: remove? - see GPT.generate
+                    samples[sample_id] = torch.cat(
+                        (samples[sample_id], idx_next), dim=1
+                    )
+                    input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
+                else:
+                    # Begin list of samples
+                    samples[sample_id] = idx.view(1, -1)
+                    # First iter for this sample, init KV cache!
+                    T_i[sample_id], input_pos[sample_id], kvcaches[sample_id] = (
+                        self._init_sample_caches(samples[sample_id], ptdtype)
+                    )
 
-                    if k >= n_samples:
-                        first_glob_iter = False
-                        # We are not in the first iteration (k starts from 0)
-                        # can start processing messages from last secondary node
+                # Send to next iff not at the last token
+                # FIXME - define max_new_tokens
+                if self.iter_ind[sample_id] < max_new_tokens:
+                    # Only propagate last token (KV cache) - OR all initial prompt if
+                    # 1st iter (see 8k)
+                    idx_cond = samples[sample_id][-1]
 
-                        # Wait for queue to contain msg
-                        assert self.in_queue_not_empty.wait()
+                    # NOTE: Swap KVCache for correct sample
+                    curr_kvcache = kvcaches[sample_id]
+                    for ind_b, block in enumerate(self.model.transformer.h):
+                        block.attn.kv_cache = curr_kvcache[ind_b]
 
-                        in_msg = self.in_message_queue.popleft()
-                        if len(self.in_message_queue) < 1:
-                            self.in_queue_not_empty.clear()
-                        sample_in = in_msg["sample_index"]
+                    # Forward in local model (first piece)
+                    idx_cond = self.model(idx_cond, input_pos[sample_id])
 
-                        # Check correct order
-                        assert (
-                            sample_in == sample_id
-                        ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
-
-                        idx_from_fin = in_msg["data"].to(self.model_device)
-
-                        # NOTE: no KV caching here - no need to pass input_pos
-                        logits = self.model(idx_from_fin, first_pass=False)
-                        idx_next = sample(
-                            logits, temperature=self.temperature, top_k=self.top_k
-                        )
-                        idx_next = idx_next.view(1, -1)
-                        idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
-                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
+                    # Send message
+                    out_msg = self._build_msg(idx_cond, sample_id)
+                    if self.sock_to_next:
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
                     else:
-                        # First iter for this sample, init KV cache!
-                        T_i[k] = idx[sample_id].size(1)
-                        input_pos[k] = torch.arange(
-                            0, T_i[sample_id], device=self.torch_model_device
-                        )
-
-                        kvc_sublist: List[KVCache] = []
-                        for _, block in enumerate(self.model.transformer.h):
-                            # Build kv cache individually for each attn layer
-                            kvc_sublist.append(
-                                block.attn.build_kv_cache(
-                                    batch_size=1,
-                                    max_seq_length=self.model.max_seq_length,
-                                    rope_cache_length=self.model.cos.size(-1),
-                                    device=self.torch_model_device,
-                                    dtype=ptdtype,
-                                )
-                            )
-                        kvcaches[k] = kvc_sublist
-
-                    # Send to next iff not at the last token
-                    if k < (n_samples * (max_new_tokens - 1)):
-                        # NOTE: no support for ctx > block_size
-                        # idx_cond should be equal to idx_next if after 1st global iter
-                        idx_cond = (
-                            idx[sample_id]
-                            if first_glob_iter
-                            else idx[sample_id][:, -1].view(1, -1)
-                        )
-
-                        # NOTE: Swap KVCache for correct sample
-                        curr_kvcache = kvcaches[sample_id]
-                        for ind_b, block in enumerate(self.model.transformer.h):
-                            block.attn.kv_cache = curr_kvcache[ind_b]
-
-                        # Forward in local model (first piece)
-                        idx_cond = self.model(idx_cond, input_pos[sample_id])
-
-                        # Send message
-                        out_msg = self._build_msg(idx_cond, sample_id)
-                        if self.sock_to_next:
-                            self.out_message_queue.append(out_msg)
-                            self.out_queue_not_empty.set()
-                        else:
-                            # Single-node scenario
-                            self.in_message_queue.append(out_msg)
-                            self.in_queue_not_empty.set()
+                        # Single-node scenario
+                        self.in_message_queue.append(out_msg)
+                        self.in_queue_not_empty.set()
+                else:
+                    # Generation finished - decode and place msg in self.resp
+                    # Also set resp_queue_not_empty to advertise sample
+                    pass
 
         tot_time = time.time() - start_time
-        if PLOTS:
-            self.tok_time.append((total_iters, tot_time))
-            # Store plotted points as csv file
-            os.makedirs(os.path.join(script_dir, "..", "logs"), exist_ok=True)
-            points_file_path = os.path.join(
-                script_dir,
-                "..",
-                "logs",
-                f"tokens_time_samples_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.csv",
-            )
-            if not os.path.exists(os.path.dirname(points_file_path)):
-                os.makedirs(os.path.dirname(points_file_path), exist_ok=True)
-            with open(points_file_path, "w") as f:
-                times = [x[1] for x in self.tok_time]
-                n_tok = [x[0] for x in self.tok_time]
-                for i in range(len(times)):
-                    f.write(f"{times[i]},{n_tok[i]}\n")
-
-            plot_tokens_per_time(
-                self.tok_time,
-                out_path=os.path.join(
-                    script_dir,
-                    "..",
-                    "img",
-                    f"tokens_time_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.png",
-                ),
-            )
 
         # Send stop message to the next (no queue used)
         if VERB:
