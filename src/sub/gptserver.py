@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import pickle
-import socket
 import threading
 import time
 import warnings
@@ -36,7 +35,8 @@ import cherrypy as cp
 import torch
 
 from sub.config import DEVICE as DEFAULT_DEVICE
-from sub.config import DTYPE, HEADERLENGTH, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.config import DTYPE, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.connections import InputNodeConnection, OutputNodeConnection
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
                          load_prompt_style)
@@ -76,11 +76,11 @@ class GPTServer:
     # True iff the model has been initialized and it is ready to perform inference.
     running: bool = False
 
-    sock_to_prev: Optional[socket.socket] = None
-    sock_to_prev_prop: Tuple = ()  # NOTE: used now
-    sock_to_next: Optional[socket.socket] = None
-    sock_to_next_prop: Tuple = ()  # NOTE: not used!
-    stop_msg = {"stop": True}
+    # Connections
+    conn_to_next: Optional[OutputNodeConnection] = None
+    conn_to_prev: Optional[InputNodeConnection] = None
+
+    msg_format = {"sample_index": 0, "data": None, "stop": False}
 
     # Input message queue
     in_message_queue = deque([])
@@ -271,8 +271,6 @@ class GPTServer:
             )
             self.starter_addr = self.own_config["communication"]["starter_addr"]
             self._select_device(model_device)
-
-            self._running_thread = threading.Thread()  # Placeholder FIXME
             # NOTE: the model will be initialized once config info is received (POST)
 
         # Init own info
@@ -389,16 +387,12 @@ class GPTServer:
         """
         assert self.model_config is not None and self.model is not None
 
-        if self.sock_to_prev:
-            warnings.warn("Found open input socket! Closing it now...")
-            try:
-                self.sock_to_prev_prop[0].close()
-            except:
-                pass
-            self.sock_to_prev.close()
-        if self.sock_to_next is not None:
-            warnings.warn("Found open output socket! Closing it now...")
-            self.sock_to_next.close()
+        if self.conn_to_next:
+            self.conn_to_next.shutdown()
+            self.conn_to_next = None
+        if self.conn_to_prev:
+            self.conn_to_prev.shutdown()
+            self.conn_to_prev = None
 
         # Configuration for all nodes
         self._create_sockets()
@@ -442,19 +436,13 @@ class GPTServer:
                 if VERB:
                     print("Stopping main thread")
                 self.inference_thread.join()
-            if VERB:
-                print("Stopping input queue thread")
-            self.in_queue_thread.join()
-            if VERB:
-                print("Stopping output queue thread")
-            self.out_queue_thread.join()
-            if VERB:
-                print("Stopping input and output sockets")
-            if self.sock_to_prev:
-                self.sock_to_prev_prop[0].close()
-                self.sock_to_prev.close()
-            if self.sock_to_next:
-                self.sock_to_next.close()
+            if self.n_nodes > 1:
+                if VERB:
+                    print("Stopping input queue thread")
+                self.conn_to_prev.shutdown()
+                if VERB:
+                    print("Stopping output queue thread")
+                self.conn_to_next.shutdown()
             return 1
         except:
             return 0
@@ -489,65 +477,20 @@ class GPTServer:
         Note: for standalone (single node) operation, the sockets are not created and
         the threads are empty.
         """
-        non_standalone = self.sock_to_prev is not None and self.sock_to_next is not None
-        if non_standalone:
+        start_only = self.node_type == "starter" and (
+            not self.conn_to_prev and not self.conn_to_next
+        )
+        assert start_only == (
+            self.n_nodes == 1
+        ), "Not running in standalone mode, but missing connections"
+
+        if not start_only:
+            assert self.conn_to_next and self.conn_to_prev
             if VERB:
                 print("[INFO] Starting queue threads")
-            logger_wp.info("Starting queue threads")
-            self.in_queue_thread = threading.Thread(
-                target=self._fill_input_queue, daemon=True
-            )
-            self.out_queue_thread = threading.Thread(
-                target=self._empty_output_queue, daemon=True
-            )
 
-        self.in_queue_thread.start()
-        self.out_queue_thread.start()
-
-    def _recv_from_prev(self, size: int) -> bytes:
-        """
-        Receive a message of the specified size from the previous node.
-
-        Remark: the size specified in socket.recv(...) is the MAX size that will be read
-        from the receiver buffer.
-
-        Args:
-            size: size (in bytes) of the expected message
-
-        Returns:
-            the received message (NOT decoded)
-        """
-        assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
-
-        full_msg = b""
-        while self.running and len(full_msg) < size:
-            msg = self.sock_to_prev_prop[0].recv(size - len(full_msg))
-            if not msg:
-                # Prev node shut connection down (error)
-                self.running = False
-                logger_wp.error("Connection was terminated unexpectedly!")
-            full_msg += msg
-            if not self.running:
-                break
-        return full_msg
-
-    def _send_to_next(self, data: Any):
-        """
-        Send any Python object to the next node.
-        The sender is a **client**.
-
-        The message is composed by a header of HEADERLENGTH bytes including the length
-        of the actual message, plus a message of MSGLENGTH bytes containing the
-        zero-padded message.
-        """
-        assert self.sock_to_next is not None
-
-        message_str = pickle.dumps(data)
-        tx_msg = bytes(f"{len(message_str):<{HEADERLENGTH}}", "utf-8") + message_str
-        # NOTE: attempt at sending multiple messages in a "safe" way (no sendall)
-        while tx_msg:
-            tx_msg = tx_msg[self.sock_to_next.send(tx_msg) :]
-        logger_wp.debug("Sent full message to next")
+            self.conn_to_prev.launch()
+            self.conn_to_next.launch()
 
     def _create_sockets(self):
         """
@@ -558,216 +501,43 @@ class GPTServer:
         other nodes will first connect to the previous ones (otherwise the application
         would just wait indefinitely, as no node will connect with any other).
         """
-        assert self.sock_to_prev is None and self.sock_to_next is None
+        assert self.conn_to_prev is None and self.conn_to_next is None
+
+        if self.node_type != "starter" and (not self.prev_node or not self.next_node):
+            raise RuntimeError("Missing neighboring node info!")
 
         if self.node_type == "starter":
-            # Open server towards next node (first thing if starter node)
-            if self.next_node is not None:
-                if VERB:
-                    print(
-                        f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
-                    )
-
-                self._start_client()
-                assert self.sock_to_next is not None
-                logger_wp.info("Created socket to next node")
-
-                if VERB:
-                    print("-> Done!                     ")
+            # Only create socket if NOT in standalone mode
+            if self.next_node is not None and self.n_nodes != 1:
+                self.conn_to_next = OutputNodeConnection(
+                    self.own_config,
+                    next_node=self.next_node,
+                    queue=self.out_message_queue,
+                    event_callback=self.out_queue_not_empty,
+                    verb=VERB,
+                )
         else:
             assert self.next_node is not None and self.prev_node is not None
 
-        # Open client towards previous
         if self.prev_node is not None:
-            if VERB:
-                print(
-                    f"[INFO] Opening socket to previous node (to port {self.prev_node['inference']['port_out']})"
-                )
-
-            self._start_server()
-            assert self.sock_to_prev is not None
-            if VERB:
-                print(
-                    f"[INFO] Started listening on port {self.own_config['inference']['port_in']}"
-                )
-            self.sock_to_prev.listen(1)
-
-            self.sock_to_prev_prop = self.sock_to_prev.accept()
-            logger_wp.info("Created socket to previous node")
-
-            if VERB:
-                print("-> Done!                     ")
+            self.conn_to_prev = InputNodeConnection(
+                self.own_config,
+                prev_node=self.prev_node,
+                queue=self.in_message_queue,
+                event_callback=self.in_queue_not_empty,
+                verb=VERB,
+            )
 
         if self.node_type != "starter":
-            if self.prev_node is None or self.next_node is None:
-                raise RuntimeError("Missing neighboring nodes info!")
-
-            # Open server towards next node
-            if VERB:
-                print(
-                    f"[INFO] Opening socket to next node (to port {self.next_node['inference']['port_in']})"
-                )
-
-            self._start_client()
-            assert self.sock_to_next is not None
-            logger_wp.info("Created socket to next node")
-
-            if VERB:
-                print("-> Done!                     ")
-
-    def _start_server(self, max_tries: int = 30):
-        """
-        Start the server socket, i.e., the socket to the previous node in the chain.
-        """
-        loopsigns = ["|", "/", "-", "\\"]
-        self.sock_to_prev = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        failed = True
-        tries = 0
-        while failed and tries < max_tries:
-            # Attempt to bind
-            try:
-                self.sock_to_prev.bind(
-                    (
-                        self.own_config["addr"],
-                        self.own_config["inference"]["port_in"],
-                    )
-                )
-            except:
-                tries += 1
-                if VERB:
-                    print(f"[INFO] Retrying {loopsigns[tries % 4]}", end="\r")
-                time.sleep(1)
-            else:
-                failed = False
-
-        if failed:
-            raise ConnectionError(
-                f"Unable to bind to ({self.own_config['addr']}, {self.own_config['inference']['port_out']})"
-            )
-        # Will listen and accept afterwards
-
-    def _start_client(self, max_tries: int = 30):
-        """
-        Start the client socket, i.e., the socket to the next node in the chain.
-        """
-        loopsigns = ["|", "/", "-", "\\"]
-        conn = False
-        tries = 0
-        while not conn and tries < max_tries:
-            try:
-                self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                # Bind should work even after some fails
-                self.sock_to_next.bind(
-                    (
-                        self.own_config["addr"],
-                        self.own_config["inference"]["port_out"],
-                    )
-                )
-                self.sock_to_next.connect(
-                    (
-                        self.next_node["addr"],
-                        self.next_node["inference"]["port_in"],
-                    )
-                )
-                if VERB:
-                    print("Connected to next node!")
-            except:
-                # Can either fail when binding or when connecting
-                tries += 1
-                if VERB:
-                    print(f"[INFO] Retrying {loopsigns[tries % 4]}", end="\r")
-                time.sleep(1)
-            else:
-                conn = True
-
-        if not conn:
-            raise ConnectionError(
-                f"Unable to create client socket at ({self.own_config['addr']}, {self.own_config['inference']['port_in']})"
+            self.conn_to_next = OutputNodeConnection(
+                self.own_config,
+                next_node=self.next_node,
+                queue=self.out_message_queue,
+                event_callback=self.out_queue_not_empty,
+                verb=VERB,
             )
 
-    def _fill_input_queue(self):
-        """
-        This method has the goal of managing incoming messages from previous nodes in
-        the chain.
-        As a message is received, its contents are stored in the message queue
-        (`self.in_message_queue`).
-        This allows to store locally each of the received messages, in order.
-        The order is crucial for the correct functioning of the program (pipelining).
-
-        This method loops infinitely and constantly waits for incoming messages.
-        For this reason, it is ran on a separate thread, and it is stopped when the main
-        thread, running the processing function, finishes.
-        """
-        assert self.sock_to_prev is not None and self.sock_to_prev_prop != ()
-
-        if len(self.in_message_queue) < 1:
-            self.in_queue_not_empty.clear()
-
-        _n_recv_msg = 0
-        while self.running:
-            # Receive information from the new socket (exact length)
-            msg = self._recv_from_prev(HEADERLENGTH)
-
-            # Extract message length from the header
-            msg_len = int(msg[:HEADERLENGTH])
-            _n_recv_msg += 1
-
-            # Read payload (exact size - this is important)
-            msg_payload = self._recv_from_prev(msg_len)
-            try:
-                data = pickle.loads(msg_payload)
-            except EOFError:
-                # Here at the end of generation
-                pass
-            else:
-                logger_wp.debug(
-                    f"Received full message {_n_recv_msg} of length {msg_len}"
-                )
-
-                # Look for stopping msg
-                if "stop" in data and data["stop"]:
-                    # Stopping sequence
-                    if VERB:
-                        print("Stopping message received! Generation complete!")
-                    logger_wp.info("Stopping message received! Generation complete!")
-                    self.in_message_queue.append(data)
-                    self.in_queue_not_empty.set()
-                    self.running = False
-                else:  # Not here if stopping message is received
-                    self.in_message_queue.append(data)
-                    self.in_queue_not_empty.set()
-
-        if VERB:
-            print("Input queue thread stopped")
-
-    def _empty_output_queue(self):
-        """
-        Handle transmission of messages in the output queue. As messages are placed in
-        the output queue by the execution loops, it will use the output socket to send
-        them to the next node in the chain.
-
-        This method should run on its separate thread.
-        """
-        assert self.sock_to_next is not None
-
-        while self.running:
-            # Wait for message in queue
-            assert self.out_queue_not_empty.wait()
-
-            tx_msg = self.out_message_queue.popleft()
-            if len(self.out_message_queue) < 1:
-                self.out_queue_not_empty.clear()
-
-            if "stop" in tx_msg and tx_msg["stop"]:
-                self._send_to_next(tx_msg)
-                self.running = False
-            else:
-                self._send_to_next(tx_msg)
-
-        if VERB:
-            print("Output queue thread stopped")
-
-    def _build_msg(self, data, sample_index) -> Dict:
+    def _build_msg(self, data: Any, sample_index: int, stop: bool = False) -> Dict:
         """
         Build the message which is transmitted to the next node.
 
@@ -779,11 +549,18 @@ class GPTServer:
             the message - a Python dict with the fields "sample_index" and
             "data"
         """
-        return {"sample_index": sample_index, "data": data}
+        return {"sample_index": sample_index, "data": data, "stop": stop}
 
     # ----- Private -------------------------------------------------------------------
 
     def _select_device(self, device):
+        """
+        Select the torch device to be used to load and process the model.
+        Priority (high to low):
+            1. Command line arg (`--device`)
+            2. Config file
+            3. Default device
+        """
         # Possibly get device info if found in config file
         try:
             self.model_device = device if device else self.own_config["device"]
@@ -1040,7 +817,7 @@ class GPTServer:
 
                         # Send message
                         out_msg = self._build_msg(idx_cond, sample_id)
-                        if self.sock_to_next:
+                        if self.conn_to_next and self.n_nodes > 1:
                             self.out_message_queue.append(out_msg)
                             self.out_queue_not_empty.set()
                         else:
@@ -1080,7 +857,7 @@ class GPTServer:
         # Send stop message to the next (no queue used)
         if VERB:
             print("[INFO] Sending stopping message over socket  ")
-        self.out_message_queue.append(self.stop_msg)
+        self.out_message_queue.append(self._build_msg("", -1, stop=True))
         self.out_queue_not_empty.set()
         self.running = False
         if VERB:
@@ -1108,7 +885,7 @@ class GPTServer:
 
         The execution will be stopped once a PUT request is made to /stop.
         """
-        assert self.sock_to_prev is not None and self.sock_to_next is not None
+        assert self.conn_to_prev is not None and self.conn_to_next is not None
         assert self.model is not None and self.model_config is not None
         assert self.n_samples is not None
         assert self.model_device is not None
@@ -1155,7 +932,7 @@ class GPTServer:
                     if len(self.in_message_queue) <= 0:
                         self.in_queue_not_empty.clear()
 
-                    if "stop" in in_msg:
+                    if "stop" in in_msg and in_msg["stop"]:
                         print("[DEBUG] Received stopping message over socket")
                         self.running = False  # Redundant
 
@@ -1207,7 +984,7 @@ class GPTServer:
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        self.out_message_queue.append(self.stop_msg)
+                        self.out_message_queue.append(self._build_msg("", -1, stop=True))
                         self.out_queue_not_empty.set()
                         self.running = False
 
