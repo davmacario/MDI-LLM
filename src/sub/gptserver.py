@@ -63,8 +63,8 @@ class GPTServer:
     Communication server - Cherrypy-based webserver used for exchanging
     (receiving) setup and control information
     """
-
     exposed = True
+
     model: Optional[Union[StarterNode, SecondaryNode]] = None
     next_node: Optional[Dict] = None
     prev_node: Optional[Dict] = None
@@ -441,7 +441,7 @@ class GPTServer:
                     print("Stopping input queue thread")
                 self.conn_to_prev.shutdown()
                 if VERB:
-                    print("Stopping output queue thread")
+                    print("Stopping input queue thread")
                 self.conn_to_next.shutdown()
             return 1
         except:
@@ -474,8 +474,8 @@ class GPTServer:
         Launch the input and output queue threads;
         This method is called by `start_inference()`.
 
-        Note: for standalone (single node) operation, the sockets are not created and
-        the threads are empty.
+        Note: for standalone (single node) operation, the connections are not created,
+        and therefore no threads are launched.
         """
         start_only = self.node_type == "starter" and (
             not self.conn_to_prev and not self.conn_to_next
@@ -984,7 +984,9 @@ class GPTServer:
                         iter += 1
                     else:
                         print("> Generation completed!")
-                        self.out_message_queue.append(self._build_msg("", -1, stop=True))
+                        self.out_message_queue.append(
+                            self._build_msg("", -1, stop=True)
+                        )
                         self.out_queue_not_empty.set()
                         self.running = False
 
@@ -1092,7 +1094,7 @@ class GPTServer:
         """
         Used by the starter to stop running nodes at the end of the generation.
         """
-        if "secondary" not in self.node_type:
+        if self.node_type == "starter":
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
             if len(path) > 0 and path[0] == "stop":

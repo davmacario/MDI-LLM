@@ -179,6 +179,7 @@ class GPTDistributed:
         if isinstance(chunk_path, str):
             self.chunk_path = Path(chunk_path)
         else:
+            # Includes None
             self.chunk_path = chunk_path
 
         if isinstance(config_file, str):
@@ -209,7 +210,8 @@ class GPTDistributed:
             assert self.ckpt_dir, "No model was specified!"
             self.n_secondary = len(self.node_config["nodes"]["secondary"])
             self.n_nodes = 1 + self.n_secondary
-
+            if VERB and self.n_nodes == 1:
+                print("Running in standalone mode!")
             self.own_config = self.node_config["nodes"]["starter"]
             self.own_addr = self.own_config["addr"]
             self.own_comm_port = self.own_config["communication"]["port"]
@@ -218,18 +220,14 @@ class GPTDistributed:
 
             # TODO: add support for downloading model as well (extra)
             # Load model config
-            node_chunks_dir = (
-                self.ckpt_dir / "chunks" / f"{self.n_nodes}nodes"
-                if not self.chunk_path
-                else self.chunk_path.resolve().parent
-            )
-            if node_chunks_dir.is_dir() or self.chunk_path:
-                # Model was already split if either the chunks are found or chunk path is passed
+            if self.chunk_path:  # In standalone mode, chunk path is lit_model.pth
+                node_chunks_dir = self.chunk_path.resolve().parent
                 self.model_was_split = True
             else:
-                self.model_was_split = False
+                node_chunks_dir = self.ckpt_dir / "chunks" / f"{self.n_nodes}nodes"
+                self.model_was_split = node_chunks_dir.is_dir()
 
-            if not self.model_was_split:
+            if not self.model_was_split and self.n_nodes > 1:
                 # Load model, split it, store it; the chunks will then be transmitted
                 if VERB:
                     print("Chunks not found! Splitting the model")
@@ -239,9 +237,16 @@ class GPTDistributed:
                     full_model, self.n_nodes, self.ckpt_dir
                 )
             else:
+                # Here if either model was already split or running in standalone mode
                 self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
 
-            if not self.chunk_path or not self.model_was_split:
+            if not self.chunk_path:
+                if self.n_nodes > 1:
+                    self.chunk_path = node_chunks_dir / "model_starter.pth"
+                else:
+                    self.chunk_path = self.ckpt_dir / "lit_model.pth"
+
+            if (not self.chunk_path or not self.model_was_split) and self.n_nodes > 1:
                 self.chunk_path = node_chunks_dir / "model_starter.pth"
 
             self.gpt_serv = GPTServer(
@@ -313,7 +318,6 @@ class GPTDistributed:
 
         # Here because if the 'device' arg is None, gpt_serv will infer it
         self.torch_device = self.gpt_serv.model_device
-
 
     def start(
         self,
