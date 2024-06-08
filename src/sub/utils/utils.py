@@ -4,6 +4,8 @@ import gc
 import math
 import os
 import sys
+import threading
+import time
 import warnings
 from contextlib import nullcontext
 from dataclasses import asdict
@@ -158,6 +160,18 @@ def loading_bar(
     return "[" + prog + n_prog + "]"
 
 
+def waiting_animation(text: str, stopping: threading.Event):
+    steps = ["⠴", "⠦", "⠇", "⠋", "⠙", "⠸"]
+    stopping.clear()
+    ind = 0
+    while not stopping.is_set():
+        print(text + f" {steps[ind]}", end="\r")
+        ind += 1
+        ind %= len(steps)
+        time.sleep(0.5)
+    print("")
+
+
 def remove_prefix(text: str, prefix: str) -> str:
     """
     Remove the specified prefix from the given string.
@@ -191,21 +205,24 @@ def find_eot(
     start_ind = prompt_length + max([len(st) for st in stop_tokens])  # Skip prompt
     for i in range(start_ind, len(tok_lst)):
         if any(
-            all(a == b for a, b in zip(tok_lst[i - len(st):i], st))
+            all(a == b for a, b in zip(tok_lst[i - len(st) : i], st))
             for st in stop_tokens
         ):
             return tokens[:, :i]
     return tokens
 
 
-def detect_stop_tokens(tokens: torch.Tensor, stop_tokens: Tuple[List[int], ...] = ()) -> bool:
+def detect_stop_tokens(
+    tokens: torch.Tensor, stop_tokens: Tuple[List[int], ...] = ()
+) -> bool:
     """
-    Will return True if `tokens` terminates with one of the sequences defined in 
+    Will return True if `tokens` terminates with one of the sequences defined in
     `stop_tokens`.
     """
     tok_lst = tokens.view(-1, 1).squeeze().tolist()
-    return any(all(a == b for a, b in zip(tok_lst[- len(st):], st)) for st in stop_tokens)
-
+    return any(
+        all(a == b for a, b in zip(tok_lst[-len(st) :], st)) for st in stop_tokens
+    )
 
 
 def format_output(text: str):
