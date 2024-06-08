@@ -374,6 +374,21 @@ split it in at least 3 chunks.
 
 ---
 
+Time vs. number of tokens, NanoLlama 300M.
+This toy model is based on the Llama 2 architecture and it can run on a single
+Nvidia Jetson.
+
+<center><img src="assets/time_vs_tokens_NanoLlama.png" alt="Time/tokens, GPT2 XL"
+  width="400"/></center>
+
+Time vs. number of tokens, TinyLlama 1.1B; notice how the introduction of KV
+caching brought significant speedup compared to GPT-2 XL (of similar size).
+
+<center><img src="assets/time_vs_tokens_TinyLlama.png" alt="Time/tokens, GPT2 XL"
+  width="400"/></center>
+
+---
+
 ## License
 
 MIT
