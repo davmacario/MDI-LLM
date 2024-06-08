@@ -45,6 +45,7 @@ from sub.tokenizer import Tokenizer
 from sub.typing import FileType
 from sub.utils import (count_transformer_blocks, find_eot, load_sd,
                        loading_bar, plot_tokens_per_time)
+from sub.utils.utils import detect_stop_tokens
 
 # -------------------------------------------------------------------------------------
 
@@ -63,6 +64,7 @@ class GPTServer:
     Communication server - Cherrypy-based webserver used for exchanging
     (receiving) setup and control information
     """
+
     exposed = True
 
     model: Optional[Union[StarterNode, SecondaryNode]] = None
@@ -84,6 +86,18 @@ class GPTServer:
     conn_to_next: Optional[OutputNodeConnection] = None
     conn_to_prev: Optional[InputNodeConnection] = None
 
+    """
+    Message format:
+    - Sample index: unique ID of the sample; used to select correct cache
+    - Data: activation - tensor
+    - stop: flag; if set to True, it is used to advertise the end of generation for the
+        current sample (by ID)
+
+    NOTE: if set to True, DO NOT PROCESS DATA (should be empty);
+
+    This logic allows to delete caches for completed samples and make samples
+    independent.
+    """
     msg_format = {"sample_index": 0, "data": None, "stop": False}
 
     # Input message queue
@@ -244,6 +258,9 @@ class GPTServer:
             # Initialize tokenizer
             self._load_tokenizer(self.tokenizer_dir)
 
+            # Standalone:
+            if self.n_nodes == 1:
+                self.out_message_queue = self.in_message_queue
         else:
             # model_config and chunk_path may be absent!
             self.model_config = model_config  # May be None
@@ -747,7 +764,7 @@ class GPTServer:
             else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
         )
 
-        # >>>> TODO: replace - analogous operations to be executed in POST
+        # >>>> TODO: replace - analogous operations to be executed in POST from user
         # Encode starting sequence - with prompt support
         if prompt is None:
             start = ["\n"] * n_samples
@@ -789,7 +806,7 @@ class GPTServer:
 
                 sample_id = in_msg["sample_index"]
                 idx = in_msg["data"].to(self.model_device)
-
+                stopping_detected = False
                 # Keep variable iter_index[i] for each sample i
                 if self.iter_ind[sample_id] >= n_samples:
                     # We are not in the first iteration for this sample
@@ -802,6 +819,12 @@ class GPTServer:
                     samples[sample_id] = torch.cat(
                         (samples[sample_id], idx_next), dim=1
                     )
+
+                    # TODO: detect stopping tokens
+                    stopping_detected = detect_stop_tokens(
+                        samples[sample_id], self.stop_tokens
+                    )
+
                     input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
                 else:
                     # First iteration for the current sample!
@@ -814,7 +837,7 @@ class GPTServer:
 
                 # Send to next iff not at the last token
                 # FIXME - define max_new_tokens
-                if self.iter_ind[sample_id] < max_new_tokens:
+                if self.iter_ind[sample_id] < max_new_tokens and not stopping_detected:
                     # Only propagate last token (KV cache) - OR all initial prompt if
                     # 1st iter (see 8k)
                     idx_cond = samples[sample_id][-1]
@@ -829,19 +852,18 @@ class GPTServer:
 
                     # Send message
                     out_msg = self._build_msg(idx_cond, sample_id)
-                    if self.conn_to_next:
-                        self.out_message_queue.append(out_msg)
-                        self.out_queue_not_empty.set()
-                    else:
-                        # Single-node scenario
-                        self.in_message_queue.append(out_msg)
-                        self.in_queue_not_empty.set()
                 else:
                     # Generation finished - decode and place msg in self.resp
                     # Also set resp_queue_not_empty to advertise sample
 
                     # TODO: transmit msg with 'stop': true for this sample ID
-                    pass
+                    out_msg = self._build_msg(
+                        data="", sample_index=sample_id, stop=True
+                    )
+
+                # NOTE: message queues will be the same if running in standalone!
+                self.out_message_queue.append(out_msg)
+                self.out_queue_not_empty.set()
 
         tot_time = time.time() - start_time
 

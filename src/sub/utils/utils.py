@@ -198,6 +198,15 @@ def find_eot(
     return tokens
 
 
+def detect_stop_tokens(tokens: torch.Tensor, stop_tokens: Tuple[List[int], ...] = ()) -> bool:
+    """
+    Will return True if `tokens` terminates with one of the sequences defined in 
+    `stop_tokens`.
+    """
+    tok_lst = tokens.view(-1, 1).squeeze().tolist()
+    return any(all(a == b for a, b in zip(tok_lst[- len(st):], st)) for st in stop_tokens)
+
+
 
 def format_output(text: str):
     """
