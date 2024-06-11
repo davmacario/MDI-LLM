@@ -35,11 +35,11 @@ def main(args):
     os.makedirs(args.ckpt_folder, exist_ok=True)
 
     if Path(args.MODEL).is_dir():
-        if not (args.MODEL / "lit_model.pth").exists() or not (
-            args.MODEL / "model_config.yaml"
+        if not (Path(args.MODEL) / "lit_model.pth").exists() or not (
+            Path(args.MODEL) / "model_config.yaml"
         ).exists():
             # Need to convert the model to the Lit format
-            convert_hf_checkpoint(checkpoint_dir=args.MODEL)
+            convert_hf_checkpoint(checkpoint_dir=Path(args.MODEL))
 
         _, state_dict = load_from_pt(args.MODEL, args.device)
         model_path = Path(args.MODEL)
