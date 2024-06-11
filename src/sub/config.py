@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from copy import deepcopy
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 import torch
 
@@ -106,6 +106,7 @@ DTYPE_TORCH_MAPPING = {
 DTYPE_TORCH = DTYPE_TORCH_MAPPING[DTYPE]
 COMPILE = False  # use PyTorch 2.0 to compile the model to be faster
 
+
 class TrainingConfig:
     tie_embeddings: bool = True
     learning_rate = LEARNING_RATE
@@ -151,6 +152,7 @@ class TrainingConfig:
             raise ValueError(f"Supported dtypes are: {DTYPE_TORCH_MAPPING.keys()}")
         self._dtype_torch = DTYPE_TORCH_MAPPING[value]
 
+
 # DDP settings
 BACKEND = "nccl"  # 'nccl', 'gloo', etc.
 
@@ -168,7 +170,10 @@ configs: List[Dict] = []
 ########################
 configs = [
     # https://huggingface.co/stabilityai/stablelm-base-alpha-3b/blob/main/config.json
-    dict(name="stablelm-base-alpha-3b", hf_config=dict(org="stabilityai", name="stablelm-base-alpha-3b")),
+    dict(
+        name="stablelm-base-alpha-3b",
+        hf_config=dict(org="stabilityai", name="stablelm-base-alpha-3b"),
+    ),
     # https://huggingface.co/stabilityai/stablelm-base-alpha-7b/blob/main/config.json
     dict(
         name="stablelm-base-alpha-7b",
@@ -178,7 +183,11 @@ configs = [
         padding_multiple=256,
     ),
     # https://huggingface.co/stabilityai/stablelm-tuned-alpha-3b/blob/main/config.json
-    dict(name="stablelm-tuned-alpha-3b", hf_config=dict(org="stabilityai", name="stablelm-tuned-alpha-3b"), n_head=32),
+    dict(
+        name="stablelm-tuned-alpha-3b",
+        hf_config=dict(org="stabilityai", name="stablelm-tuned-alpha-3b"),
+        n_head=32,
+    ),
     # https://huggingface.co/stabilityai/stablelm-tuned-alpha-7b/blob/main/config.json
     dict(
         name="stablelm-tuned-alpha-7b",
@@ -1486,6 +1495,21 @@ mistral = [
         mlp_class_name="LLaMAMLP",
         intermediate_size=14336,
     ),
+    dict(
+        name="Mistral-7B-{}v0.3",
+        hf_config=dict(org="mistralai", name="Mistral-7B-{}v0.3"),
+        padded_vocab_size=32000,
+        block_size=32768,
+        n_layer=32,
+        n_query_groups=8,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        norm_class_name="RMSNorm",
+        norm_eps=1e-05,
+        mlp_class_name="LLaMAMLP",
+        intermediate_size=14336,
+    ),
     # https://huggingface.co/mistralai/Mixtral-8x7B-v0.1/blob/main/config.json
     dict(
         name="Mixtral-8x7B-{}v0.1",
@@ -1512,7 +1536,8 @@ for c in mistral:
         copy["name"] = c["name"].format(kind)
         copy["hf_config"]["name"] = c["hf_config"]["name"].format(kind)
         configs.append(copy)
-configs.append(
+
+configs.append(  # v0.2 foundational not released by Mistral on HF...
     # https://huggingface.co/unsloth/mistral-7b-v0.2/blob/main/config.json
     dict(
         name="Mistral-7B-v0.2",
@@ -1535,42 +1560,6 @@ configs.append(
     dict(
         name="Mistral-7B-Instruct-v0.2",
         hf_config=dict(org="mistralai", name="Mistral-7B-Instruct-v0.2"),
-        padded_vocab_size=32000,
-        block_size=32768,
-        n_layer=32,
-        n_query_groups=8,
-        rotary_percentage=1.0,
-        parallel_residual=False,
-        bias=False,
-        norm_class_name="RMSNorm",
-        norm_eps=1e-05,
-        mlp_class_name="LLaMAMLP",
-        intermediate_size=14336,
-    )
-)
-configs.append(
-    # https://huggingface.co/unsloth/mistral-7b-v0.3/blob/main/config.json
-    dict(
-        name="Mistral-7B-v0.3",
-        hf_config=dict(org="unsloth", name="Mistral-7B-v0.3"),
-        padded_vocab_size=32000,
-        block_size=32768,
-        n_layer=32,
-        n_query_groups=8,
-        rotary_percentage=1.0,
-        parallel_residual=False,
-        bias=False,
-        norm_class_name="RMSNorm",
-        norm_eps=1e-05,
-        mlp_class_name="LLaMAMLP",
-        intermediate_size=14336,
-    )
-)
-configs.append(
-    # https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/blob/main/config.json
-    dict(
-        name="Mistral-7B-Instruct-v0.3",
-        hf_config=dict(org="mistralai", name="Mistral-7B-Instruct-v0.3"),
         padded_vocab_size=32000,
         block_size=32768,
         n_layer=32,
@@ -1610,7 +1599,10 @@ tiny_llama = [
     )
 ]
 for c in tiny_llama:
-    for kind, hf_postfix in (("", "-intermediate-step-1431k-3T"), ("-chat", "-Chat-v1.0")):
+    for kind, hf_postfix in (
+        ("", "-intermediate-step-1431k-3T"),
+        ("-chat", "-Chat-v1.0"),
+    ):
         copy = deepcopy(c)
         copy["name"] = c["name"].format(kind)
         copy["hf_config"]["name"] = c["hf_config"]["name"].format(hf_postfix)
