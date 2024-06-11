@@ -39,7 +39,7 @@ def main(args):
             Path(args.MODEL) / "model_config.yaml"
         ).exists():
             # Need to convert the model to the Lit format
-            convert_hf_checkpoint(checkpoint_dir=Path(args.MODEL))
+            convert_hf_checkpoint(checkpoint_dir=Path(args.MODEL), dtype=args.dtype)
 
         _, state_dict = load_from_pt(args.MODEL, args.device)
         model_path = Path(args.MODEL)
