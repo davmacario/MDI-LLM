@@ -346,7 +346,7 @@ def convert_hf_checkpoint(
 
     # Load the json file containing weight -> file mapping (if present)
     pytorch_bin_map_json_path = checkpoint_dir / "pytorch_model.bin.index.json"
-    model_safetensor_map_json_path = checkpoint_dir / "model.safetensor.index.json"
+    model_safetensor_map_json_path = checkpoint_dir / "model.safetensors.index.json"
     if pytorch_bin_map_json_path.is_file():  # NOTE: not all checkpoints have this file
         # Was using bin files
         print(f"Found {pytorch_bin_map_json_path} file containing weight mapping!")
