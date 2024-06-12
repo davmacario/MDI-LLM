@@ -138,7 +138,7 @@ def find_weight_files(
     filenames = [f.rfilename for f in info.siblings]
     bins = list(filter_repo_objects(items=filenames, allow_patterns=["*.bin*"]))
     safetensors = list(
-        filter_repo_objects(items=filenames, allow_patterns=["*.safetensors"])
+        filter_repo_objects(items=filenames, allow_patterns=["*.safetensors*"])
     )
     return bins, safetensors
 
