@@ -63,6 +63,7 @@ class GPTServer:
     Communication server - Cherrypy-based webserver used for exchanging
     (receiving) setup and control information
     """
+
     exposed = True
 
     model: Optional[Union[StarterNode, SecondaryNode]] = None
@@ -156,6 +157,10 @@ class GPTServer:
             self.model_type = str(kwargs["model_type"])
             if VERB:
                 print(f"Overriding model type: {self.model_type}")
+        if "model_seq_length" in kwargs:
+            self.max_seq_length = kwargs["model_seq_length"]
+        else:
+            self.max_seq_length = None
 
         self.compile = False if "compile" not in kwargs else kwargs["compile"]
 
@@ -601,6 +606,12 @@ class GPTServer:
         if model_dtype in {torch.float16, torch.bfloat16}:
             self.model = self.model.to(model_dtype)
         self.model.load_weights(model_parameters)
+        if self.max_seq_length:
+            print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
+            self.model.max_seq_length = self.max_seq_length
+        else:
+            # Use default value
+            self.max_seq_length = self.model.max_seq_length
         self.model = self.model.to(self.torch_model_device)
 
         if self.compile and hasattr(torch, "compile"):
@@ -682,9 +693,6 @@ class GPTServer:
                 f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
             )
         self.n_samples = n_samples
-
-        if VERB:
-            print("Initializing model cache")
 
         if "cuda" in self.model_device:
             device_type = "cuda"
@@ -782,6 +790,11 @@ class GPTServer:
                         input_pos[k] = torch.arange(
                             0, T_i[sample_id], device=self.torch_model_device
                         )
+
+                        if VERB:
+                            print(
+                                f"Initializing model cache - sample {sample_id}      "
+                            )
 
                         kvc_sublist: List[KVCache] = []
                         for _, block in enumerate(self.model.transformer.h):
@@ -1035,6 +1048,11 @@ class GPTServer:
                 self.model_config = Config(**init_msg["model_config"])
                 self.n_nodes = init_msg["n_nodes"]
                 self.n_layers_local = init_msg["n_local_layers"]
+                self.max_seq_length = (
+                    None
+                    if "max_seq_length" not in init_msg
+                    else init_msg["max_seq_length"]
+                )
 
                 if "params" in init_msg:
                     if VERB:
@@ -1097,6 +1115,7 @@ class GPTServer:
         if self.node_type == "starter":
             raise cp.HTTPError(501, "PUT not implemented!")
         else:
+            # TODO: fix shutdown procedure - should also release models if not terminating app
             if len(path) > 0 and path[0] == "stop":
                 self._end_thr = threading.Thread(target=self.shutdown)
                 self._end_thr.start()

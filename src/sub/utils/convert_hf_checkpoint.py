@@ -198,6 +198,80 @@ def copy_weights_hf_llama(
         del qkv_weights[i]
 
 
+def copy_weights_phi(
+    config: Config,
+    qkv_weights: dict,
+    state_dict: Dict[str, torch.Tensor],
+    hf_weights: Dict[str, Union[torch.Tensor, NotYetLoadedTensor]],
+    saver: Optional[incremental_save] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> None:
+    if any(
+        layer_name.startswith(("layers.", "transformer.")) for layer_name in hf_weights
+    ):
+        raise ValueError(
+            "You are using an outdated Phi checkpoint. Please reload it as described in 'tutorials/download_phi.md'"
+        )
+
+    weight_map = {
+        "model.embed_tokens.weight": "transformer.wte.weight",
+        "model.layers.{}.input_layernorm.weight": "transformer.h.{}.norm_1.weight",
+        "model.layers.{}.input_layernorm.bias": "transformer.h.{}.norm_1.bias",
+        "model.layers.{}.self_attn.q_proj.weight": None,
+        "model.layers.{}.self_attn.q_proj.bias": None,
+        "model.layers.{}.self_attn.k_proj.weight": None,
+        "model.layers.{}.self_attn.k_proj.bias": None,
+        "model.layers.{}.self_attn.v_proj.weight": None,
+        "model.layers.{}.self_attn.v_proj.bias": None,
+        "model.layers.{}.self_attn.dense.weight": "transformer.h.{}.attn.proj.weight",
+        "model.layers.{}.self_attn.dense.bias": "transformer.h.{}.attn.proj.bias",
+        "model.layers.{}.mlp.fc1.weight": "transformer.h.{}.mlp.fc.weight",
+        "model.layers.{}.mlp.fc1.bias": "transformer.h.{}.mlp.fc.bias",
+        "model.layers.{}.mlp.fc2.weight": "transformer.h.{}.mlp.proj.weight",
+        "model.layers.{}.mlp.fc2.bias": "transformer.h.{}.mlp.proj.bias",
+        "model.final_layernorm.weight": "transformer.ln_f.weight",
+        "model.final_layernorm.bias": "transformer.ln_f.bias",
+        "lm_head.weight": "lm_head.weight",
+        "lm_head.bias": "lm_head.bias",
+    }
+
+    for name, param in hf_weights.items():
+        if name.startswith("model.layers."):
+            from_name, l = layer_template(name, 2)
+            qkv = qkv_weights.setdefault(l, defaultdict(dict))
+            if any(w in from_name for w in ("q_proj", "k_proj", "v_proj")):
+                weight_name, weight_type = from_name.split(".")[-2:]
+                qkv[weight_type][weight_name] = param
+            to_name = weight_map[from_name]
+            if to_name is None:
+                continue
+            to_name = to_name.format(l)
+        else:
+            to_name = weight_map[name]
+        param = load_param(param, name, dtype)
+        if saver is not None:
+            param = saver.store_early(param)
+        state_dict[to_name] = param
+
+    for i in list(qkv_weights):
+        for weight_type in list(qkv_weights[i]):
+            qkv = qkv_weights[i][weight_type]
+            if len(qkv) != 3:
+                # split across different .bin files
+                continue
+            q = load_param(qkv["q_proj"], f"layer {i} q {weight_type}", dtype)
+            k = load_param(qkv["k_proj"], f"layer {i} k {weight_type}", dtype)
+            v = load_param(qkv["v_proj"], f"layer {i} v {weight_type}", dtype)
+            q_per_kv = config.n_head // config.n_query_groups
+            qs = torch.split(q, config.head_size * q_per_kv)
+            ks = torch.split(k, config.head_size)
+            vs = torch.split(v, config.head_size)
+            cycled = [t for group in zip(qs, ks, vs) for t in group]
+            qkv = torch.cat(cycled)
+            state_dict[f"transformer.h.{i}.attn.attn.{weight_type}"] = qkv
+            del qkv_weights[i][weight_type]
+
+
 def layer_template(layer_name: str, idx: int) -> Tuple[str, int]:
     """
     Template for the transformer layer attribute name in the GPT class;
@@ -255,25 +329,41 @@ def convert_hf_checkpoint(
     save_config(config, checkpoint_dir)
 
     # Check the downloaded model is LLaMa by the MLP class name
-    if config.mlp_class_name in ("LLaMAMLP", "GemmaMLP", "LLaMAMoE"):
+    if "falcon" in model_name:
+        copy_fn = partial(copy_weights_falcon, model_name)
+    elif config.mlp_class_name in ("LLaMAMLP", "GemmaMLP", "LLaMAMoE"):
         # holder to reconstitute the split q, k, v
         qkv_weights = {}
         copy_fn = partial(copy_weights_hf_llama, config, qkv_weights)
+    elif "phi" in model_name:
+        # holder to reconstitute the split q, k, v
+        qkv_weights = {}
+        copy_fn = partial(copy_weights_phi, config, qkv_weights)
     else:
-        raise ValueError("Unsupported model!")
-
+        copy_fn = copy_weights_gpt_neox
     # Initialize a new empty state dict to hold our new weights
     sd = {}
 
-    # Load the json file containing weight mapping (if downloaded)
+    # Load the json file containing weight -> file mapping (if present)
     pytorch_bin_map_json_path = checkpoint_dir / "pytorch_model.bin.index.json"
+    model_safetensor_map_json_path = checkpoint_dir / "model.safetensors.index.json"
     if pytorch_bin_map_json_path.is_file():  # NOTE: not all checkpoints have this file
+        # Was using bin files
         print(f"Found {pytorch_bin_map_json_path} file containing weight mapping!")
         with open(pytorch_bin_map_json_path, encoding="utf-8") as json_map:
             bin_index = json.load(json_map)  # Load mapping as JSON/dict
         bin_files = {checkpoint_dir / bin for bin in bin_index["weight_map"].values()}
+    elif model_safetensor_map_json_path.is_file():
+        # Was using safetensors
+        print(f"Found {model_safetensor_map_json_path} file containing weight mapping!")
+        with open(model_safetensor_map_json_path, encoding="utf-8") as json_map:
+            bin_index = json.load(json_map)
+        bin_files = {
+            checkpoint_dir / Path(bin).with_suffix(".bin")
+            for bin in bin_index["weight_map"].values()
+        }
     else:
-        # JSON file for weight mapping not found! Will translate the '.bin' file
+        # JSON file for weight mapping not found! Will translate the '.bin' file(s)
         print(
             f"Unable to locate {pytorch_bin_map_json_path} file containing weight mapping!"
         )
@@ -282,7 +372,6 @@ def convert_hf_checkpoint(
         bin_files = {f for f in bin_files if f.name != "training_args.bin"}
 
     # NOTE: bin_files is a set of `.bin` files containing the model weights to be converted
-
     if not bin_files:
         raise ValueError(f"Expected {str(checkpoint_dir)!r} to contain .bin files")
 
@@ -292,6 +381,7 @@ def convert_hf_checkpoint(
         for bin_file in sorted(bin_files):
             print("Processing", bin_file)
             hf_weights = lazy_load(bin_file)
+            # Will place the converted hf_weights in 'sd'
             copy_fn(sd, hf_weights, saver=saver, dtype=dtype)
         gc.collect()
         print(f"Saving converted checkpoint to {checkpoint_dir}")

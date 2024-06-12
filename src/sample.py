@@ -91,6 +91,10 @@ def main(args):
     assert wt is not None
     model = GPT(config)
 
+    if args.sequence_length:
+        print(f"Truncating model context size to {args.sequence_length}")
+        model.max_seq_length = args.sequence_length
+
     model_dtype = torch.float32
     if all([v.dtype == torch.float16 for v in wt.values()]):
         model_dtype = torch.float16
@@ -284,19 +288,6 @@ if __name__ == "__main__":
         help=f"folder containing model files (default={script_dir / 'checkpoints'})",
     )
     parser.add_argument(
-        "--n-samples",
-        type=int,
-        default=1,
-        help="""batch size, i.e., n. of generated samples, i.e., produced pieces of 
-        text (default=1)""",
-    )
-    parser.add_argument(
-        "--n-tokens",
-        type=int,
-        default=800,
-        help="number of generated tokens per sample, excluding prompt (default=800)",
-    )
-    parser.add_argument(
         "--device",
         type=str,
         default=default_device,
@@ -313,6 +304,31 @@ if __name__ == "__main__":
         used for a different sample, with extra prompts being discarded if --n-samples
         is lower than the number of paragraphs.
         """,
+    )
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=1,
+        help="""batch size, i.e., n. of generated samples, i.e., produced pieces of 
+        text (default=1)""",
+    )
+    parser.add_argument(
+        "--n-tokens",
+        type=int,
+        default=800,
+        help="number of generated tokens per sample, excluding prompt (default=800)",
+    )
+    parser.add_argument(
+        "--sequence-length",
+        "--context-length",
+        "--block-size",
+        type=int,
+        default=None,
+        help="""
+        sequence length of the model, i.e., maximum span of the attention window;
+        if not specified, it will use the default model sequence length;
+        allows to reduce RAM usage, as with a shorter context less cache is created.
+        """
     )
     parser.add_argument("--seed", type=int, default=10137, help="set random seed")
 
