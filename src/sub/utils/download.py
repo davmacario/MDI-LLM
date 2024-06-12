@@ -88,6 +88,9 @@ def download_from_hub(
             local_dir_use_symlinks=False,
             resume_download=True,
             allow_patterns=download_files,
+            ignore_patterns=(  # Ignore the full model!
+                None if not from_safetensors else ["consolidated.safetensors"]
+            ),
             token=access_token,
         )
 

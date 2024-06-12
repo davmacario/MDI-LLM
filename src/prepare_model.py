@@ -39,6 +39,7 @@ def main(args):
             Path(args.MODEL) / "model_config.yaml"
         ).exists():
             # Need to convert the model to the Lit format
+            # if the bin files have been deleted, it will raise ValueError
             convert_hf_checkpoint(checkpoint_dir=Path(args.MODEL), dtype=args.dtype)
 
         _, state_dict = load_from_pt(args.MODEL, args.device)
