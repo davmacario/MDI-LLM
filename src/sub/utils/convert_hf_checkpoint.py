@@ -344,7 +344,7 @@ def convert_hf_checkpoint(
     # Initialize a new empty state dict to hold our new weights
     sd = {}
 
-    # Load the json file containing weight mapping (if downloaded)
+    # Load the json file containing weight -> file mapping (if present)
     pytorch_bin_map_json_path = checkpoint_dir / "pytorch_model.bin.index.json"
     if pytorch_bin_map_json_path.is_file():  # NOTE: not all checkpoints have this file
         print(f"Found {pytorch_bin_map_json_path} file containing weight mapping!")
@@ -352,7 +352,7 @@ def convert_hf_checkpoint(
             bin_index = json.load(json_map)  # Load mapping as JSON/dict
         bin_files = {checkpoint_dir / bin for bin in bin_index["weight_map"].values()}
     else:
-        # JSON file for weight mapping not found! Will translate the '.bin' file
+        # JSON file for weight mapping not found! Will translate the '.bin' file(s)
         print(
             f"Unable to locate {pytorch_bin_map_json_path} file containing weight mapping!"
         )
@@ -361,7 +361,6 @@ def convert_hf_checkpoint(
         bin_files = {f for f in bin_files if f.name != "training_args.bin"}
 
     # NOTE: bin_files is a set of `.bin` files containing the model weights to be converted
-
     if not bin_files:
         raise ValueError(f"Expected {str(checkpoint_dir)!r} to contain .bin files")
 
@@ -371,6 +370,7 @@ def convert_hf_checkpoint(
         for bin_file in sorted(bin_files):
             print("Processing", bin_file)
             hf_weights = lazy_load(bin_file)
+            # Will place the converted hf_weights in 'sd'
             copy_fn(sd, hf_weights, saver=saver, dtype=dtype)
         gc.collect()
         print(f"Saving converted checkpoint to {checkpoint_dir}")
