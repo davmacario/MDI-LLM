@@ -3,7 +3,6 @@
 
 import gc
 import json
-import os
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -360,7 +359,7 @@ def convert_hf_checkpoint(
         with open(model_safetensor_map_json_path, encoding="utf-8") as json_map:
             bin_index = json.load(json_map)
         bin_files = {
-            checkpoint_dir / (os.path.splitext(bin)[0] + ".bin")
+            checkpoint_dir / Path(bin).with_suffix(".bin")
             for bin in bin_index["weight_map"].values()
         }
     else:
