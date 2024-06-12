@@ -683,9 +683,6 @@ class GPTServer:
             )
         self.n_samples = n_samples
 
-        if VERB:
-            print("Initializing model cache")
-
         if "cuda" in self.model_device:
             device_type = "cuda"
         elif "mps" in self.model_device:
@@ -782,6 +779,9 @@ class GPTServer:
                         input_pos[k] = torch.arange(
                             0, T_i[sample_id], device=self.torch_model_device
                         )
+
+                        if VERB:
+                            print(f"Initializing model cache - sample {sample_id}      ")
 
                         kvc_sublist: List[KVCache] = []
                         for _, block in enumerate(self.model.transformer.h):
