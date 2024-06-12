@@ -130,6 +130,7 @@ class GPTDistributed:
         "model_config": {},
         "n_nodes": 0,
         "n_samples": 0,
+        "max_seq_length": None,
     }
 
     def __init__(
@@ -141,6 +142,7 @@ class GPTDistributed:
         chunk_path: Optional[FileType] = None,
         device: Optional[str] = None,
         secondary_index: Optional[int] = None,
+        model_seq_length: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -169,6 +171,8 @@ class GPTDistributed:
             secondary_index (optional): positional, zero-index of the secondary node;
                 not necessary if only 1 secondary node is present in the configuration.
                 Not used by starter nodes.
+            model_seq_length (optional): maximum sequence length of the model; should be
+                less or equal than the one specified in the config (default value)
             Keyword args (optional): allowing to specify verb=VERB and plots=PLOTS
                 (bool)
         """
@@ -240,6 +244,16 @@ class GPTDistributed:
                 # Here if either model was already split or running in standalone mode
                 self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
 
+            self.model_seq_length = None
+            if model_seq_length and model_seq_length > self.model_config.block_size:
+                raise ValueError(
+                    f"The truncated sequence length {model_seq_length} should be lower "
+                    "or equal than the model's max sequence length "
+                    f"{self.model_config.block_size}"
+                )
+            else:
+                self.model_seq_length = model_seq_length
+
             if not self.chunk_path:
                 if self.n_nodes > 1:
                     self.chunk_path = node_chunks_dir / "model_starter.pth"
@@ -258,6 +272,7 @@ class GPTDistributed:
                 model_device=self.torch_device,
                 **kwargs,
                 model_type=self.full_model_name,
+                model_seq_length=self.model_seq_length
             )
 
         elif "secondary" in self.node_type:
@@ -427,6 +442,7 @@ class GPTDistributed:
             curr_msg["n_samples"] = n_samples
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
+            curr_msg["max_seq_length"] = self.model_seq_length
 
             if not self.model_was_split:
                 chunk_path = node_chunks_dir / f"model_secondary{i}.pth"
