@@ -79,6 +79,11 @@ class GPTServer:
     # Map sample ID to n. of iteration - initialized to 0 when new sample is created
     iter_ind: Dict[int, int] = {}
 
+    T_i: Dict[int, int] = {}  # Contains size of context of each prompt
+    # Will contain the input pos. of all samples:
+    input_pos: Dict[int, torch.Tensor] = {}
+    kvcaches: Dict[int, List[KVCache]] = {}
+
     # Set iff the model has been initialized and it is ready to perform inference.
     running = threading.Event()
     running.clear()
@@ -696,13 +701,13 @@ class GPTServer:
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
 
-    def _init_sample_caches(
-        self, idx, dtype
-    ) -> Tuple[int, torch.Tensor, List[KVCache]]:
+    def _init_sample_caches(self, id, idx, dtype):
         """
-        Initialize the model cache for the new sample `idx`, using a specified dtype.
+        Initialize the model cache for the new sample `idx` with ID: `id`, using a
+        specified dtype.
 
         Args:
+            id: sample ID
             idx: new sample (encoded prompt)
             dtype: desired dtype for the KV caches
 
@@ -713,8 +718,10 @@ class GPTServer:
         """
         assert self.model is not None
 
-        len_cache = idx.size(1)
-        input_pos = torch.arange(0, len_cache, device=self.torch_model_device)
+        self.T_i[id] = idx.size(1)
+        self.input_pos[id] = torch.arange(
+            0, self.T_i[id], device=self.torch_model_device
+        )
         kvc_sublist: List[KVCache] = []
         for _, block in enumerate(self.model.transformer.h):
             # Build kv cache individually for each attn layer
@@ -727,7 +734,7 @@ class GPTServer:
                     dtype=dtype,
                 )
             )
-        return len_cache, input_pos, kvc_sublist
+        self.kvcaches[id] = kvc_sublist
 
     # ---- Main Loops -----------------------------------------------------------------
 
@@ -807,31 +814,27 @@ class GPTServer:
         self.model.init_rope_mask(device=self.torch_model_device)
         self.model.eval()
 
-        T_i: Mapping[int, int] = {}  # Contains size of context of each prompt
-        # Will contain the input pos. of all samples:
-        input_pos: Mapping[int, torch.Tensor] = {}
-        kvcaches: Mapping[int, List[KVCache]] = {}
-
-        samples: Mapping[int, torch.Tensor] = {}
-        prompt_lengths: Mapping[int, int] = {}
+        # Starter Only
+        self.samples: Dict[int, torch.Tensor] = {}
+        self.prompt_lengths: Dict[int, int] = {}
 
         # >>>> TODO: remove - will be done in POST
         for i, samp in enumerate(idx):
             self.in_message_queue.append(self._build_msg(samp, i))
-            prompt_lengths[i] = len(samp.squeeze())  # Length in tokens
+            self.prompt_lengths[i] = len(samp.squeeze())  # Length in tokens
             self.iter_ind[i] = 0
         self.in_queue_not_empty.set()
-        # <<<<
 
         if "max_new_tokens" in kwargs:
             # NOTE: can override the max. n. of tokens - must ensure
-            max_new_tokens = {
-                i: kwargs["max_new_tokens"] for i in range(len(prompt_lengths))
+            self.max_new_tokens = {
+                i: kwargs["max_new_tokens"] for i in range(len(self.prompt_lengths))
             }
             # Check max_new_tokens won't cause errors later
             if not all(
                 [
-                    max_new_tokens[i] + prompt_lengths[i] <= self.model.max_seq_length
+                    self.max_new_tokens[i] + self.prompt_lengths[i]
+                    <= self.model.max_seq_length
                     for i in range(n_samples)
                 ]
             ):
@@ -840,13 +843,14 @@ class GPTServer:
                 )
         else:
             # The maximum number of tokens is the model's sequence length - prompt length
-            max_new_tokens = {
+            self.max_new_tokens = {
                 i: (self.model.max_seq_length - p_l)
-                for i, p_l in prompt_lengths.items()
+                for i, p_l in self.prompt_lengths.items()
             }
-        assert all(
-            max_tok > 0 for max_tok in max_new_tokens.values()
-        ), "Some prompt is longer than the context length of the model"
+            assert all(
+                max_tok > 0 for max_tok in self.max_new_tokens.values()
+            ), "Some prompt is longer than the context length of the model"
+        # <<<<
 
         event_stop = threading.Event()
         loading_thread = threading.Thread(
@@ -888,46 +892,46 @@ class GPTServer:
                                 top_k=self.top_k,
                             )
                             idx_next = idx_next.view(1, -1)
-                            samples[sample_id] = torch.cat(
-                                (samples[sample_id], idx_next), dim=1
+                            self.samples[sample_id] = torch.cat(
+                                (self.samples[sample_id], idx_next), dim=1
                             )
                             # Detect stopping token sequence and possibly interrupt gen for current sample
                             stopping_detected = detect_stop_tokens(
-                                samples[sample_id], self.stop_tokens
+                                self.samples[sample_id], self.stop_tokens
                             )
                             # Update input pos (will be used in next pass)
-                            input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
+                            self.input_pos[sample_id] = self.input_pos[sample_id][
+                                -1:
+                            ].add_(1)
                         else:
                             # First iteration for the current sample!
                             # Begin list of samples
-                            samples[sample_id] = idx.view(1, -1)
+                            self.samples[sample_id] = idx.view(1, -1)
                             # First iter for this sample, init KV cache!
-                            (
-                                T_i[sample_id],
-                                input_pos[sample_id],
-                                kvcaches[sample_id],
-                            ) = self._init_sample_caches(samples[sample_id], ptdtype)
+                            self._init_sample_caches(
+                                sample_id, self.samples[sample_id], ptdtype
+                            )
 
                         # Send to next iff not at the last token
                         if (
-                            self.iter_ind[sample_id] < max_new_tokens[sample_id]
+                            self.iter_ind[sample_id] < self.max_new_tokens[sample_id]
                             and not stopping_detected
                         ):
                             # Only propagate last token (KV cache) - OR all initial prompt if
                             # 1st iter
                             idx_cond = (
-                                samples[sample_id]
+                                self.samples[sample_id]
                                 if self.iter_ind[sample_id] == 0
-                                else samples[sample_id][:, -1].view(1, -1)
+                                else self.samples[sample_id][:, -1].view(1, -1)
                             )
 
                             # NOTE: Swap KVCache for correct sample
-                            curr_kvcache = kvcaches[sample_id]
+                            curr_kvcache = self.kvcaches[sample_id]
                             for ind_b, block in enumerate(self.model.transformer.h):
                                 block.attn.kv_cache = curr_kvcache[ind_b]
 
                             # Forward in local model (first piece)
-                            idx_cond = self.model(idx_cond, input_pos[sample_id])
+                            idx_cond = self.model(idx_cond, self.input_pos[sample_id])
 
                             # Send message
                             out_msg = self._build_msg(idx_cond, sample_id)
@@ -956,14 +960,14 @@ class GPTServer:
         logger_wp.info("Generation completed")
 
         out_truncated = [
-            find_eot(smp, self.stop_tokens, prompt_lengths[i])
-            for i, smp in samples.items()
+            find_eot(smp, self.stop_tokens, self.prompt_lengths[i])
+            for i, smp in self.samples.items()
         ]
         if VERB:
             print("Truncated samples:")
             for i, smp in enumerate(out_truncated):
                 print(
-                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(samples[i].squeeze())}"
+                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(self.samples[i].squeeze())}"
                 )
         out_samples = [self.tok.decode(smp) for smp in out_truncated]
 
@@ -1004,10 +1008,6 @@ class GPTServer:
         self.model.init_rope_mask(device=self.torch_model_device)
         self.model.eval()
 
-        T_i: Mapping[int, int] = {}  # Contains size of context of each prompt
-        kvcaches: Mapping[int, List[KVCache]] = {}
-        input_pos: Mapping[int, torch.Tensor] = {}
-
         event_stop = threading.Event()
         loading_thread = threading.Thread(
             target=waiting_animation, args=("Processing samples", event_stop)
@@ -1040,36 +1040,20 @@ class GPTServer:
                             first_glob_iter = False
 
                         idx = in_msg["data"].to(self.torch_model_device)
-                        if sample_id not in T_i:
+                        if sample_id not in self.T_i:
                             assert (
                                 first_glob_iter
                             ), "Should have seen this sample already..."
                             # Initialization of the input_pos
-                            T_i[sample_id] = idx.size(1)
-                            input_pos[sample_id] = torch.arange(
-                                0, T_i[sample_id], device=self.torch_model_device
-                            )
-                            kvc_sublist: List[KVCache] = []
-                            for block in self.model.transformer.h:
-                                # Build kv cache individually for each attn layer
-                                kvc_sublist.append(
-                                    block.attn.build_kv_cache(
-                                        batch_size=1,
-                                        max_seq_length=self.model.max_seq_length,
-                                        rope_cache_length=self.model.cos.size(-1),
-                                        device=self.torch_model_device,
-                                        dtype=ptdtype,
-                                    )
-                                )
-                            kvcaches[sample_id] = kvc_sublist
+                            self._init_sample_caches(sample_id, idx, ptdtype)
 
                         # Swap KVCache
-                        curr_kvcache = kvcaches[sample_id]
+                        curr_kvcache = self.kvcaches[sample_id]
                         for ind_b, block in enumerate(self.model.transformer.h):
                             block.attn.kv_cache = curr_kvcache[ind_b]
 
                         # Forward pass
-                        outs = self.model(idx, input_pos=input_pos[sample_id])
+                        outs = self.model(idx, input_pos=self.input_pos[sample_id])
 
                         # Build msg
                         out_msg = self._build_msg(outs, sample_id)
@@ -1077,7 +1061,9 @@ class GPTServer:
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
 
-                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
+                        self.input_pos[sample_id] = self.input_pos[sample_id][-1:].add_(
+                            1
+                        )
                         iter += 1
 
         if VERB:
@@ -1198,7 +1184,7 @@ class GPTServer:
                 self._end_thr.start()
                 # self._end_thr.join()  # cannot wait, since thread stops server
                 if VERB:
-                    print("[INFO] Node stopped!")
+                    print("[INFO] Node stopped through PUT request!")
                 logger_wp.info("Received stopping directive")
                 cp.response.status = 200
             else:
