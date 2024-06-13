@@ -43,9 +43,9 @@ from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
 from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.typing import FileType
-from sub.utils import (count_transformer_blocks, find_eot, load_sd,
-                       loading_bar, plot_tokens_per_time)
-from sub.utils.utils import detect_stop_tokens, waiting_animation
+from sub.utils import (catch_loop_errors, count_transformer_blocks,
+                       detect_stop_tokens, find_eot, load_sd,
+                       plot_tokens_per_time, waiting_animation)
 
 # -------------------------------------------------------------------------------------
 
@@ -79,8 +79,9 @@ class GPTServer:
     # Map sample ID to n. of iteration - initialized to 0 when new sample is created
     iter_ind: Dict[int, int] = {}
 
-    # True iff the model has been initialized and it is ready to perform inference.
-    running: bool = False
+    # Set iff the model has been initialized and it is ready to perform inference.
+    running = threading.Event()
+    running.clear()
 
     # Connections
     conn_to_next: Optional[OutputNodeConnection] = None
@@ -435,7 +436,7 @@ class GPTServer:
             assert max_new_tokens is not None
 
             self.n_samples = n_samples
-            self.running = True
+            self.running.set()
             self._launch_queue_threads()
 
             if VERB:
@@ -456,7 +457,7 @@ class GPTServer:
         else:
             assert self.next_node is not None and self.prev_node is not None
             # Secondary node
-            self.running = True
+            self.running.set()
             self._launch_queue_threads()
             if VERB:
                 print("[INFO] Starting generation loop")
@@ -466,7 +467,7 @@ class GPTServer:
     def stop_generation(self) -> int:
         try:
             time.sleep(2)
-            self.running = False  # Redundant, but ok
+            self.running.clear()  # Redundant, but ok
             if "starter" not in self.role:
                 if VERB:
                     print("Stopping main thread")
@@ -845,111 +846,101 @@ class GPTServer:
         start_time = time.time()
         if PLOTS:
             self.tok_time.append((0, 0))
-        with torch.inference_mode(), ctx:
-            print("[INFO] Launching loop")
-            loading_thread.start()
 
-            try:
-                while self.running:
-                    # Wait for queue to contain msg -- timeout allows to handle shutdown
-                    if self.in_queue_not_empty.wait(timeout=2):
-                        in_msg = self.in_message_queue.popleft()
-                        if len(self.in_message_queue) < 1:
-                            self.in_queue_not_empty.clear()
+        print("[INFO] Launching processing loop")
+        loading_thread.start()
+        with torch.inference_mode(), ctx, catch_loop_errors(
+            running_event=self.running, event_to_be_set=[event_stop]
+        ):
+            while self.running.is_set():
+                # Wait for queue to contain msg -- timeout allows to handle shutdown
+                if self.in_queue_not_empty.wait(timeout=2):
+                    in_msg = self.in_message_queue.popleft()
+                    if len(self.in_message_queue) < 1:
+                        self.in_queue_not_empty.clear()
 
-                        if in_msg["stop"]:
-                            # The stopping message made the whole loop
-                            self.running = False  # TODO: remove
+                    if in_msg["stop"]:
+                        # The stopping message made the whole loop
+                        self.running.clear()  # TODO: remove
+                    else:
+                        sample_id = in_msg["sample_index"]
+                        idx = in_msg["data"].to(self.model_device)
+                        stopping_detected = False
+
+                        # Keep variable iter_ind[i] for each sample i
+                        if self.iter_ind[sample_id] >= 1:
+                            # We are not in the first iteration for this sample
+                            # --> Can start processing messages from last secondary node
+                            logits = self.model(idx, first_pass=False)
+                            idx_next = sample(
+                                logits,
+                                temperature=self.temperature,
+                                top_k=self.top_k,
+                            )
+                            idx_next = idx_next.view(1, -1)
+                            samples[sample_id] = torch.cat(
+                                (samples[sample_id], idx_next), dim=1
+                            )
+                            # Detect stopping token sequence and possibly interrupt gen for current sample
+                            stopping_detected = detect_stop_tokens(
+                                samples[sample_id], self.stop_tokens
+                            )
+                            # Update input pos (will be used in next pass)
+                            input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
                         else:
-                            sample_id = in_msg["sample_index"]
-                            idx = in_msg["data"].to(self.model_device)
-                            stopping_detected = False
+                            # First iteration for the current sample!
+                            # Begin list of samples
+                            samples[sample_id] = idx.view(1, -1)
+                            # First iter for this sample, init KV cache!
+                            (
+                                T_i[sample_id],
+                                input_pos[sample_id],
+                                kvcaches[sample_id],
+                            ) = self._init_sample_caches(samples[sample_id], ptdtype)
 
-                            # Keep variable iter_ind[i] for each sample i
-                            if self.iter_ind[sample_id] >= 1:
-                                # We are not in the first iteration for this sample
-                                # --> Can start processing messages from last secondary node
-                                logits = self.model(idx, first_pass=False)
-                                idx_next = sample(
-                                    logits,
-                                    temperature=self.temperature,
-                                    top_k=self.top_k,
-                                )
-                                idx_next = idx_next.view(1, -1)
-                                samples[sample_id] = torch.cat(
-                                    (samples[sample_id], idx_next), dim=1
-                                )
-                                # Detect stopping token sequence and possibly interrupt gen for current sample
-                                stopping_detected = detect_stop_tokens(
-                                    samples[sample_id], self.stop_tokens
-                                )
-                                # Update input pos (will be used in next pass)
-                                input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
-                            else:
-                                # First iteration for the current sample!
-                                # Begin list of samples
-                                samples[sample_id] = idx.view(1, -1)
-                                # First iter for this sample, init KV cache!
-                                (
-                                    T_i[sample_id],
-                                    input_pos[sample_id],
-                                    kvcaches[sample_id],
-                                ) = self._init_sample_caches(
-                                    samples[sample_id], ptdtype
-                                )
+                        # Send to next iff not at the last token
+                        if (
+                            self.iter_ind[sample_id] < max_new_tokens[sample_id]
+                            and not stopping_detected
+                        ):
+                            # Only propagate last token (KV cache) - OR all initial prompt if
+                            # 1st iter
+                            idx_cond = (
+                                samples[sample_id]
+                                if self.iter_ind[sample_id] == 0
+                                else samples[sample_id][:, -1].view(1, -1)
+                            )
 
-                            # Send to next iff not at the last token
-                            if (
-                                self.iter_ind[sample_id] < max_new_tokens[sample_id]
-                                and not stopping_detected
-                            ):
-                                # Only propagate last token (KV cache) - OR all initial prompt if
-                                # 1st iter
-                                idx_cond = (
-                                    samples[sample_id]
-                                    if self.iter_ind[sample_id] == 0
-                                    else samples[sample_id][:, -1].view(1, -1)
-                                )
+                            # NOTE: Swap KVCache for correct sample
+                            curr_kvcache = kvcaches[sample_id]
+                            for ind_b, block in enumerate(self.model.transformer.h):
+                                block.attn.kv_cache = curr_kvcache[ind_b]
 
-                                # NOTE: Swap KVCache for correct sample
-                                curr_kvcache = kvcaches[sample_id]
-                                for ind_b, block in enumerate(self.model.transformer.h):
-                                    block.attn.kv_cache = curr_kvcache[ind_b]
+                            # Forward in local model (first piece)
+                            idx_cond = self.model(idx_cond, input_pos[sample_id])
 
-                                # Forward in local model (first piece)
-                                idx_cond = self.model(idx_cond, input_pos[sample_id])
+                            # Send message
+                            out_msg = self._build_msg(idx_cond, sample_id)
+                        else:
+                            # Generation finished
+                            print(f"[DEBUG] Finished sample {sample_id}")
+                            # TODO: decode and place msg in self.resp
+                            # Also set resp_queue_not_empty to advertise sample
 
-                                # Send message
-                                out_msg = self._build_msg(idx_cond, sample_id)
-                            else:
-                                # Generation finished
-                                print(f"[DEBUG] Finished sample {sample_id}")
-                                # TODO: decode and place msg in self.resp
-                                # Also set resp_queue_not_empty to advertise sample
+                            # Transmit msg with 'stop': true for this sample ID
+                            out_msg = self._build_msg(
+                                data="", sample_index=sample_id, stop=True
+                            )
 
-                                # Transmit msg with 'stop': true for this sample ID
-                                out_msg = self._build_msg(
-                                    data="", sample_index=sample_id, stop=True
-                                )
+                        # UPDATE ITERATION COUNT FOR SAMPLE
+                        self.iter_ind[sample_id] += 1
 
-                            # UPDATE ITERATION COUNT FOR SAMPLE
-                            self.iter_ind[sample_id] += 1
-
-                            # NOTE: message queues will be the same if running in standalone!
-                            self.out_message_queue.append(out_msg)
-                            self.out_queue_not_empty.set()
-
-            except KeyboardInterrupt:
-                event_stop.set()
-            except Exception as e:
-                event_stop.set()
-                raise e
-            else:
-                event_stop.set()
+                        # NOTE: message queues will be the same if running in standalone!
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
 
         tot_time = time.time() - start_time
 
-        self.running = False
         if VERB:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
@@ -1007,13 +998,19 @@ class GPTServer:
         kvcaches: Mapping[int, List[KVCache]] = {}
         input_pos: Mapping[int, torch.Tensor] = {}
 
-        loopsigns = ["|", "/", "-", "\\"]
+        event_stop = threading.Event()
+        loading_thread = threading.Thread(
+            target=waiting_animation, args=("Processing samples", event_stop)
+        )
         iter = 0
         first_glob_iter = True  # True for the first n_samples iters
-        with ctx, torch.inference_mode():
-            while self.running:
-                logger_wp.info(f"Iter {iter}")
 
+        print("[INFO] Launching processing loop")
+        loading_thread.start()
+        with ctx, torch.inference_mode(), catch_loop_errors(
+            running_event=self.running, event_to_be_set=[event_stop]
+        ):
+            while self.running.is_set():
                 if self.in_queue_not_empty.wait(timeout=2):
                     # Extract message from queue
                     in_msg = self.in_message_queue.popleft()
@@ -1056,7 +1053,6 @@ class GPTServer:
                                 )
                             kvcaches[sample_id] = kvc_sublist
 
-                        print(f"> Generating {loopsigns[iter % 4]}", end="\r")
                         # Swap KVCache
                         curr_kvcache = kvcaches[sample_id]
                         for ind_b, block in enumerate(self.model.transformer.h):
@@ -1109,7 +1105,7 @@ class GPTServer:
             self.node_type is None or "secondary" in self.node_type
         ) and self.model is None:  # Only for non-init nodes
             if len(path) > 0 and path[0] == "init":
-                assert not self.running
+                assert not self.running.is_set()
                 init_msg = pickle.loads(cp.request.body.read())
                 if self.node_type is None:
                     self.node_type = init_msg["role"]
