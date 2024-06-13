@@ -509,14 +509,17 @@ def load_sd(
     """
     try:
         sd = torch.load(model_path, map_location=device)
-    except:
-        if device != "cpu":
-            warnings.warn(
-                f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
-            )
-            sd = torch.load(model_path, map_location="cpu")
+    except Exception as e:
+        if 'out of memory' in str(e):
+            if device != "cpu":
+                warnings.warn(
+                    f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
+                )
+                sd = torch.load(model_path, map_location="cpu")
+            else:
+                raise e
         else:
-            raise MemoryError("Not enough system memory to load ckpt!")
+            raise e
 
     return sd
 

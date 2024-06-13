@@ -1,13 +1,9 @@
 import os
 from contextlib import contextmanager
-from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import torch
-import yaml
-
-from sub.model import Config
 
 from .convert_hf_checkpoint import convert_hf_checkpoint
 from .lightning_core_imports import RequirementCache
@@ -69,7 +65,7 @@ def download_from_hub(
         elif safetensors:
             if not _SAFETENSORS_AVAILABLE:
                 raise ModuleNotFoundError(str(_SAFETENSORS_AVAILABLE))
-            download_files.append("*.safetensors")
+            download_files.append("*.safetensors*")
             from_safetensors = True
         else:
             raise ValueError(f"Couldn't find weight files for {repo_id}")
@@ -92,6 +88,9 @@ def download_from_hub(
             local_dir_use_symlinks=False,
             resume_download=True,
             allow_patterns=download_files,
+            ignore_patterns=(  # Ignore the full model!
+                None if not from_safetensors else ["consolidated.safetensors"]
+            ),
             token=access_token,
         )
 
@@ -139,7 +138,7 @@ def find_weight_files(
     filenames = [f.rfilename for f in info.siblings]
     bins = list(filter_repo_objects(items=filenames, allow_patterns=["*.bin*"]))
     safetensors = list(
-        filter_repo_objects(items=filenames, allow_patterns=["*.safetensors"])
+        filter_repo_objects(items=filenames, allow_patterns=["*.safetensors*"])
     )
     return bins, safetensors
 
@@ -180,5 +179,3 @@ def gated_repo_catcher(repo_id: str, access_token: Optional[str]):
                     f" visit https://huggingface.co/{repo_id} for more information."
                 ) from None
         raise e from None
-
-

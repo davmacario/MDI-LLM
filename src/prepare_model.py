@@ -5,6 +5,7 @@ from argparse import ArgumentParser, RawTextHelpFormatter
 from pathlib import Path
 
 from sub.utils import load_from_hf, load_from_pt, split_and_store
+from sub.utils.convert_hf_checkpoint import convert_hf_checkpoint
 
 docstring = """
 Use this script to:
@@ -34,6 +35,13 @@ def main(args):
     os.makedirs(args.ckpt_folder, exist_ok=True)
 
     if Path(args.MODEL).is_dir():
+        if not (Path(args.MODEL) / "lit_model.pth").exists() or not (
+            Path(args.MODEL) / "model_config.yaml"
+        ).exists():
+            # Need to convert the model to the Lit format
+            # if the bin files have been deleted, it will raise ValueError
+            convert_hf_checkpoint(checkpoint_dir=Path(args.MODEL), dtype=args.dtype)
+
         _, state_dict = load_from_pt(args.MODEL, args.device)
         model_path = Path(args.MODEL)
     else:
