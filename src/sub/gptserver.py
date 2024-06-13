@@ -824,10 +824,20 @@ class GPTServer:
         # <<<<
 
         if "max_new_tokens" in kwargs:
-            # NOTE: can override the max. n. of tokens
+            # NOTE: can override the max. n. of tokens - must ensure
             max_new_tokens = {
                 i: kwargs["max_new_tokens"] for i in range(len(prompt_lengths))
             }
+            # Check max_new_tokens won't cause errors later
+            if not all(
+                [
+                    max_new_tokens[i] + prompt_lengths[i] <= self.model.max_seq_length
+                    for i in range(n_samples)
+                ]
+            ):
+                raise ValueError(
+                    f"Cannot generate {kwargs['max_new_tokens']} tokens - would exceed block size!"
+                )
         else:
             # The maximum number of tokens is the model's sequence length - prompt length
             max_new_tokens = {
