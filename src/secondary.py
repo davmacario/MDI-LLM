@@ -45,6 +45,7 @@ def main(args):
         config_file=config_path,
         chunk_path=args.chunk,
         device=args.device,
+        dtype=args.dtype,
         verb=args.verb,
     )
 
@@ -86,6 +87,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="torch device where to load model and tensors",
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default=None,
+        help="""the model dtype (among float32, float16 and bfloat16 - if supported)""",
     )
     parser.add_argument("--seed", type=int, default=10137, help="set random seed")
     args = parser.parse_args()

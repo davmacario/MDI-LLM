@@ -53,6 +53,7 @@ def main(args):
         ckpt_dir=args.ckpt,
         chunk_path=args.chunk,
         device=args.device,
+        dtype=args.dtype,
         model_seq_length=args.sequence_length,
         verb=args.verb,
         plots=args.plots,
@@ -156,6 +157,12 @@ if __name__ == "__main__":
         if not specified, it will use the default model sequence length;
         allows to reduce RAM usage, as with a shorter context less cache is created.
         """
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default=None,
+        help="""the model dtype (among float32, float16 and bfloat16 - if supported)""",
     )
     parser.add_argument(
         "--time-run",

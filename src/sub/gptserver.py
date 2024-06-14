@@ -35,7 +35,8 @@ import cherrypy as cp
 import torch
 
 from sub.config import DEVICE as DEFAULT_DEVICE
-from sub.config import DTYPE, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
+                        TEMPERATURE, TOP_K)
 from sub.connections import InputNodeConnection, OutputNodeConnection
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
@@ -143,6 +144,7 @@ class GPTServer:
         chunk_path: Optional[FileType] = None,
         tokenizer_dir: Optional[FileType] = None,
         model_device: Optional[str] = None,
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -193,6 +195,15 @@ class GPTServer:
             self.max_seq_length = None
 
         self.compile = False if "compile" not in kwargs else kwargs["compile"]
+        self.use_default_dtype = dtype is None
+        self.dtype = dtype if dtype else DTYPE  # Default
+        self.ptdtype = DTYPE_TORCH_MAPPING[self.dtype]
+        if self.dtype == "bfloat16" and (
+            not torch.cuda.is_available() or not torch.cuda.is_bf16_supported()
+        ):
+            raise ValueError(
+                "Specified bfloat16, but the host does not support this format"
+            )
 
         self.node_type = node_type
         self.node_config = node_config
@@ -633,6 +644,13 @@ class GPTServer:
             if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
                 model_dtype = torch.bfloat16
 
+        if self.use_default_dtype:
+            self.ptdtype = model_dtype
+        elif self.ptdtype != model_dtype:
+            # Here if user provided dtype and it does not match
+            warnings.warn(f"Casting model from {model_dtype} to {self.ptdtype}")
+            model_dtype = self.ptdtype
+
         if VERB:
             print("Initializing local model")
             print(f"Using {model_dtype}")
@@ -701,7 +719,7 @@ class GPTServer:
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
 
-    def _init_sample_caches(self, id, idx, dtype):
+    def _init_sample_caches(self, id, idx):
         """
         Initialize the model cache for the new sample `idx` with ID: `id`, using a
         specified dtype.
@@ -731,7 +749,7 @@ class GPTServer:
                     max_seq_length=self.model.max_seq_length,
                     rope_cache_length=self.model.cos.size(-1),
                     device=self.torch_model_device,
-                    dtype=dtype,
+                    dtype=self.ptdtype,
                 )
             )
         self.kvcaches[id] = kvc_sublist
@@ -780,15 +798,10 @@ class GPTServer:
             device_type = "mps"
         else:
             device_type = "cpu"
-        ptdtype = {
-            "float32": torch.float32,
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-        }[DTYPE]
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=self.ptdtype)
         )
 
         # <<<< TODO: replace - analogous operations to be executed in POST from user
@@ -908,9 +921,7 @@ class GPTServer:
                             # Begin list of samples
                             self.samples[sample_id] = idx.view(1, -1)
                             # First iter for this sample, init KV cache!
-                            self._init_sample_caches(
-                                sample_id, self.samples[sample_id], ptdtype
-                            )
+                            self._init_sample_caches(sample_id, self.samples[sample_id])
 
                         # Send to next iff not at the last token
                         if (
@@ -992,15 +1003,10 @@ class GPTServer:
             device_type = "mps"
         else:
             device_type = "cpu"
-        ptdtype = {
-            "float32": torch.float32,
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-        }[DTYPE]
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=self.ptdtype)
         )
 
         # Allow node to be 100% agnostic of the system! If it receives a sample with a
@@ -1045,7 +1051,7 @@ class GPTServer:
                                 first_glob_iter
                             ), "Should have seen this sample already..."
                             # Initialization of the input_pos
-                            self._init_sample_caches(sample_id, idx, ptdtype)
+                            self._init_sample_caches(sample_id, idx)
 
                         # Swap KVCache
                         curr_kvcache = self.kvcaches[sample_id]
