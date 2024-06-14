@@ -121,7 +121,7 @@ MODEL_TYPE = ""
 CTX = nullcontext()
 
 
-class GPTDistributed:
+class App:
     __doc__ = docstring
     init_msg = {
         "role": "",
