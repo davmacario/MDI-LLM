@@ -653,7 +653,7 @@ class GPTServer:
 
         if VERB:
             print("Initializing local model")
-            print(f"Using {model_dtype}")
+            print(f"Using dtype {model_dtype}")
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         self.model = Model_class(self.model_config, n_transf_layers)

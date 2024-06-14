@@ -90,6 +90,7 @@ def main(args):
     if args.verb:
         print(f"Using {args.device}")
         print(f"Device type: {device_type}")
+        print(f"Dtype: {dtype}")
     ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
         if device_type == "mps" or not dtype == "bfloat16"
