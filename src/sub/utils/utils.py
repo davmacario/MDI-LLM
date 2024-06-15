@@ -21,6 +21,7 @@ from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                         N_LAYERS_NODES, WARMUP_ITERS)
 from sub.model import Config
 from sub.utils.data_loader import get_batch
+from sub.utils.typing import JSONType
 
 VERB = False
 
@@ -510,7 +511,7 @@ def load_sd(
     try:
         sd = torch.load(model_path, map_location=device)
     except Exception as e:
-        if 'out of memory' in str(e):
+        if "out of memory" in str(e):
             if device != "cpu":
                 warnings.warn(
                     f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
@@ -605,10 +606,65 @@ def load_from_hf(
     return load_from_pt(model_path, device, config_only=config_only)
 
 
+def get_available_models(ckpt_dir: Path) -> List[JSONType]:
+    """
+    Provides a list of dicts containing the information of the models for which at least
+    one chunk has been found in the local node.
+
+    Will return, for each of the subdirectories at 'ckpt_dir', a dict:
+    {
+      "name": model name
+      "hf_config": {
+        "org": organization name (e.g., mistralai),
+        "name": actual model name
+      },
+      "chunks": {
+        "<n>nodes": [...],   <-- List of all the chunks (list dir)
+        "<k>nodes": [...]
+      }
+    }
+    """
+    # No recursion because (believe it or not) it's messier
+    out = []
+    for org in ckpt_dir.iterdir():
+        if org.is_dir():
+            curr_org_name = org.name
+            for mod in org.iterdir():
+                new_mod_dict = {}
+                new_mod_dict["name"] = mod.name
+                new_mod_dict["hf_config"] = dict(org=curr_org_name, name=mod.name)
+
+                curr_chunk_dir = mod / "chunks"
+                if curr_chunk_dir.is_dir():
+                    new_mod_dict["chunks"] = {}
+                    # First, look for chunks, then add info only if chunks have been found
+                    tmp_mod_dict = {}
+                    for p in curr_chunk_dir.rglob("*"):
+                        if not p.is_dir():
+                            # We have a chunk
+                            if p.parent.name not in tmp_mod_dict:
+                                # Create list
+                                tmp_mod_dict["p.parent.name"] = []
+                            # Append chunk name
+                            tmp_mod_dict["p.parent.name"].append(p.name)
+
+                    # Only add keys with non-empty lists
+                    for k, v in tmp_mod_dict.items():
+                        if len(v):
+                            new_mod_dict["chunks"][k] = v
+                    
+                    # Only add the model info if some chunks have been found
+                    if len(new_mod_dict["chunks"]):
+                        out.append(new_mod_dict)
+
+    return out
+
+
 def save_config(config: "Config", checkpoint_dir: Path) -> None:
     config_dict = asdict(config)
     with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
         yaml.dump(config_dict, fp)
+
 
 def s_to_ns(timestamp_s):
     return int(timestamp_s * 1e9)

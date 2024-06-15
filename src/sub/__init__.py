@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-from . import config, model, prompts, tokenizer, utils, submodels, gptserver, typing, connections
+from . import (config, connections, gptserver, model, prompts, submodels,
+               tokenizer, utils)
+from .app import App
 from .model import GPT, Config
 from .prompts import PromptStyle, get_user_prompt
 from .tokenizer import Tokenizer
-from .app import App
-from .utils import functional
+from .utils import functional, typing
 
 __all__ = [
     "config",

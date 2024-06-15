@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from . import functional
+from . import functional, typing
 from .context_managers import catch_loop_errors
 from .convert_hf_checkpoint import convert_hf_checkpoint, copy_weights_hf_llama
 from .data_loader import get_batch, load_dataset, split_dataset
@@ -10,7 +10,7 @@ from .utils import (count_transformer_blocks, deserialize_params,
                     detect_stop_tokens, estimate_loss, find_eot, get_lr,
                     get_obj_size, load_from_hf, load_from_pt, load_sd,
                     loading_bar, remove_prefix, s_to_ns, serialize_params,
-                    split_and_store, split_parameters, waiting_animation)
+                    split_and_store, split_parameters, waiting_animation, get_available_models)
 
 __all__ = [
     "convert_hf_checkpoint",
@@ -39,4 +39,6 @@ __all__ = [
     "waiting_animation",
     "catch_loop_errors",
     "s_to_ns",
+    "typing",
+    "get_available_models"
 ]
