@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import logging
 import os
-import warnings
 from pathlib import Path
 
-import cherrypy as cp
 import torch
-from sub import GPTDistributed
+from sub import App
 
 # -----------------------------------------------------------------------------
 script_dir = Path(os.path.dirname(__file__))
@@ -40,7 +37,7 @@ def main(args):
     role = f"secondary:{args.nodes_config[1]}"
     config_path = Path(args.nodes_config[0])
 
-    gpt_distr = GPTDistributed(
+    gpt_distr = App(
         node_type=role,
         config_file=config_path,
         chunk_path=args.chunk,

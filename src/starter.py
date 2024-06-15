@@ -3,13 +3,11 @@
 import argparse
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
 
-import cherrypy as cp
 import torch
 
-from sub.model_dist import GPTDistributed
+from sub import App
 
 # -----------------------------------------------------------------------------
 script_dir = Path(os.path.dirname(__file__))
@@ -30,7 +28,6 @@ def main(args):
     print("| Launching starter node |")
     print("+------------------------+")
 
-    tok_per_sample = args.n_tokens
     if args.debug:
         # TODO: review
         log_file = os.path.join(script_dir, "logs", "logs_starter.log")
@@ -47,7 +44,7 @@ def main(args):
         assert out_stats_file.parent.is_dir()
 
     # Init. distributed model, config file from parser
-    gpt_distr = GPTDistributed(
+    gpt_distr = App(
         node_type="starter",
         config_file=args.nodes_config,
         ckpt_dir=args.ckpt,
@@ -60,11 +57,7 @@ def main(args):
     )
 
     # Operation (start now includes loop)
-    gpt_distr.start(
-        n_samples=args.n_samples,
-        tokens_per_sample=tok_per_sample,
-        prompt=args.prompt,
-    )
+    gpt_distr.start()
     # # Print the stats to file (we are sure directory exists)
     # if out_stats_file is not None:
     #     # Output csv
@@ -122,30 +115,6 @@ if __name__ == "__main__":
         help="torch device where to load model and tensors",
     )
     # Run
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default="Who are you?",
-        help="""specify a prompt for the language model;
-        if starting with 'FILE:', the prompt will be extracted for a file.
-        If the string is the prompt itself, it will be used for all generated samples,
-        while if a file is specified, each paragraph (separated by blank line) will be 
-        used for a different sample, with extra prompts being discarded if --n-samples
-        is lower than the number of paragraphs.
-        """,
-    )
-    parser.add_argument(
-        "--n-samples",
-        type=int,
-        default=3,
-        help="number of samples (independent pieces of text) to be generated",
-    )
-    parser.add_argument(
-        "--n-tokens",
-        type=int,
-        default=300,
-        help="number of tokens to be generated, default: 300",
-    )
     parser.add_argument(
         "--sequence-length",
         "--context-length",

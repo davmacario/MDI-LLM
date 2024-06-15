@@ -28,6 +28,7 @@ import time
 import warnings
 from collections import deque
 from contextlib import nullcontext
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
@@ -46,7 +47,7 @@ from sub.tokenizer import Tokenizer
 from sub.typing import FileType
 from sub.utils import (catch_loop_errors, count_transformer_blocks,
                        detect_stop_tokens, find_eot, load_sd,
-                       plot_tokens_per_time, waiting_animation)
+                       plot_tokens_per_time, s_to_ns, waiting_animation)
 
 # -------------------------------------------------------------------------------------
 
@@ -84,6 +85,11 @@ class GPTServer:
     # Will contain the input pos. of all samples:
     input_pos: Dict[int, torch.Tensor] = {}
     kvcaches: Dict[int, List[KVCache]] = {}
+
+    samples: Dict[int, torch.Tensor] = {}
+    prompt_lengths: Dict[int, int] = {}
+    max_new_tokens: Dict[int, int] = {}
+    sample_finished: Dict[int, threading.Event] = {}
 
     # Set iff the model has been initialized and it is ready to perform inference.
     running = threading.Event()
@@ -362,9 +368,98 @@ class GPTServer:
 
     # ---------------------------------------------------------------------------------
 
-    def launch_starter(
-        self, n_samples: int, max_tokens: int, prompt: Optional[str] = None
-    ) -> Tuple[List[str], int]:
+    def process_user_prompt(self, http_msg_body: Dict[str, Any]):
+        """
+        Entrypoint for the user - will be called by POST
+        """
+        if not self.prompt_style:
+            raise RuntimeError("Prompt style has not been initialized")
+        if not self.tok:
+            raise RuntimeError("Tokenizer has not been initialized")
+        if not self.model:
+            raise RuntimeError("Model has not been initialized")
+        if not self.role == "starter":
+            raise ValueError(
+                "The `process_user_prompt` method should only be called on starter"
+            )
+
+        t_start_tot_ns = s_to_ns(time.time())
+
+        # NOTE: for now, ignore the keys that are not "prompt"
+        new_prompt = http_msg_body["prompt"]
+        if new_prompt == "":
+            new_prompt = "\n"
+        start_styled = self.prompt_style.apply(new_prompt)
+
+        # Create new sample by processing prompt
+        new_idx = self.tok.encode(start_styled, device=self.torch_device).view(1, -1)
+        t_prompt_eval = s_to_ns(time.time()) - t_start_tot_ns
+
+        new_id = self.n_samples
+        self.n_samples += 1
+        if VERB:
+            print(f"Created new sample {new_id}")
+
+        # NOTE: self.samples[new_id] will be initialized in the loop
+        prompt_len = len(new_idx.squeeze())
+        self.prompt_lengths[new_id] = prompt_len
+        self.iter_ind[new_id] = 0
+        self.sample_finished[new_id] = threading.Event()
+        self.sample_finished[new_id].clear()
+        self.max_new_tokens[new_id] = (
+            self.model.max_seq_length - self.prompt_lengths[new_id]
+        )
+        if self.max_new_tokens[new_id] <= 0:
+            raise RuntimeError(
+                f"Prompt for sample {new_id} is longer than the model sequence length"
+            )
+
+        # Place sample in input queue
+        t_start_load_ns = s_to_ns(time.time())
+        self.in_message_queue.append(self._build_msg(new_idx, new_id))
+        self.in_queue_not_empty.set()
+
+        # Retrieve response - loop should signal end (e.g., Event)
+        self.sample_finished[new_id].wait()
+        out_sample_tensor = self.samples[new_id]
+
+        # FIXME: redundant
+        out_truncated = find_eot(
+            out_sample_tensor, self.stop_tokens, self.prompt_lengths[new_id]
+        )
+        n_out_tokens = len(out_truncated.squeeze())
+        out_truncated_no_prompt = out_truncated[0][prompt_len:]
+
+        if VERB:
+            print(
+                f"Truncated sample {new_id} to {n_out_tokens}/"
+                f"{len(out_sample_tensor.squeeze())}"
+            )
+        t_start_decode = s_to_ns(time.time())
+        gen_text = self.tok.decode(out_truncated_no_prompt)
+
+        t_stop_ns = s_to_ns(time.time())
+        t_tot_ns = t_stop_ns - t_start_tot_ns
+        t_load_ns = t_stop_ns - t_start_load_ns
+        t_decode = t_stop_ns - t_start_decode
+
+        # Clear starter's caches
+        self._delete_starter_caches(new_id)
+
+        # Make sure to return something in here! (JSON resp)
+        return self._build_serv_resp(
+            gen_text,
+            http_msg_body,
+            new_id,
+            t_tot_ns,
+            t_load_ns,
+            prompt_len,
+            t_prompt_eval,
+            n_out_tokens,
+            t_decode,
+        )
+
+    def launch_starter(self):
         """
         Launch processing thread in starter node.
 
@@ -382,58 +477,20 @@ class GPTServer:
         """
         if self.role != "starter":
             raise ValueError(f"Cannot run `launch_starter` for node type {self.role}")
-        metrics_dict = {}
-        self.n_samples = n_samples
-        self.inference_thread = threading.Thread(
-            target=self.start_inference,
-            args=(n_samples,),
-            kwargs={
-                "max_new_tokens": max_tokens,
-                "prompt": prompt,
-                "metrics": metrics_dict,
-            },
-        )
+        self.inference_thread = threading.Thread(target=self.start_inference)
+
         # NOTE: the separate thread is just a placeholder to make the interface uniform
         # for all nodes - here we wait for the processing loop to conclude!
         self.inference_thread.start()
         self.inference_thread.join()
         self.shutdown()
-        return metrics_dict["gen_text"], metrics_dict["gen_time"]
 
-    def start_inference(
-        self,
-        n_samples: int,
-        *,
-        max_new_tokens: Optional[int] = None,
-        prompt: Optional[str] = None,
-        metrics: Optional[Dict] = None,
-    ):
+    def start_inference(self):
         """
         This method is meant to be ran as an independent thread.
 
         Perform normal operation (open sockets, wait for communication from previous
         node and forward activations to next one).
-
-        In starter nodes, the function launches the operation by creating sockets to the
-        nodes and initializing the sample vectors.
-        Starter nodes are the only ones for which the arguments should not be None.
-        The loop, for starter nodes, is not infinite, as they should know how many
-        tokens to generate.
-
-        This function launches an infinite loop on a separate thread in secondary
-        nodes, interrupted by the receival of a special message (PUT) over the
-        communication channel that triggers a change in a class attribute.
-        Non-starter nodes do not know how long the generation will take, hence they need
-        to be stopped "externally" by the starter node once the generation is complete.
-
-        Args:
-            n_samples: number of samples to be generated (i.e., independent pieces of
-                text)
-            max_new_tokens (starter only): maximum number of tokens per generated
-                sample
-            prompt (starter only): string containing the prompt or "FILE:<filename.txt>"
-            metrics (starter only): dict where the metrics will be inserted (keys:
-                "gen_text" and "gen_time")
         """
         assert self.model_config is not None and self.model is not None
 
@@ -447,37 +504,19 @@ class GPTServer:
         # Configuration for all nodes
         self._create_sockets()
 
-        # Differentiate between different types
+        if VERB:
+            print("[INFO] Starting generation loop")
+        logger_wp.info("Starting generation loop")
+        self.running.set()
+
+        # Differentiate between different types - FIXME: needed?
         if self.node_type == "starter":
-            assert max_new_tokens is not None
-
-            self.n_samples = n_samples
-            self.running.set()
             self._launch_queue_threads()
-
-            if VERB:
-                print(
-                    f"[INFO] Starting generation loop - {n_samples} samples, {max_new_tokens} tokens each"
-                )
-            logger_wp.info("Starting generation loop")
-
-            out_text, gen_time = self._starter_loop(
-                n_samples, prompt, max_new_tokens=max_new_tokens
-            )
-
-            if metrics is not None:
-                # NOTE: this allows to return values even if this method is on a
-                # separate thread! Just read from this object after `join`
-                metrics["gen_text"] = out_text
-                metrics["gen_time"] = gen_time
+            self._starter_loop()
         else:
             assert self.next_node is not None and self.prev_node is not None
             # Secondary node
-            self.running.set()
             self._launch_queue_threads()
-            if VERB:
-                print("[INFO] Starting generation loop")
-            logger_wp.info("Starting generation loop")
             self._secondary_loop()
 
     def stop_generation(self) -> int:
@@ -603,6 +642,53 @@ class GPTServer:
         """
         return {"sample_index": sample_index, "data": data, "stop": stop}
 
+    def _build_serv_resp(
+        self,
+        generated_text: str,
+        in_msg: Dict[str, Any],
+        sample_id: int,
+        tot_duration: int,
+        load_duration: int,
+        prompt_length: int,
+        t_prompt_eval: int,
+        len_tokens_gen: int,
+        t_decode: int,
+    ) -> Dict[str, Any]:
+        """
+        Package the generated text as specified by the Ollama APIs.
+
+        All times should be expressed in NANOSECONDS.
+
+        Ref:
+        {
+          "model": "llama3",
+          "created_at": "2023-08-04T19:22:45.499127Z",
+          "response": "",
+          "done": true,
+          "context": [1, 2, 3],
+          "total_duration": 10706818083,
+          "load_duration": 6338219291,
+          "prompt_eval_count": 26,
+          "prompt_eval_duration": 130079000,
+          "eval_count": 259,
+          "eval_duration": 4232710000
+        }
+        """
+        out_msg = {}
+        out_msg["model"] = in_msg["model"]  # FIXME: use model type
+        out_msg["created_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+        out_msg["response"] = generated_text
+        out_msg["done"] = True
+        out_msg["context"] = [sample_id]
+        out_msg["total_duration"] = tot_duration
+        out_msg["load_duration"] = load_duration
+        out_msg["prompt_eval_count"] = prompt_length
+        out_msg["prompt_eval_duration"] = t_prompt_eval
+        out_msg["eval_count"] = len_tokens_gen
+        out_msg["eval_duration"] = t_decode
+
+        return out_msg
+
     # ----- Private -------------------------------------------------------------------
 
     def _select_device(self, device):
@@ -619,7 +705,7 @@ class GPTServer:
         except KeyError:
             warnings.warn(f"Using default device {DEFAULT_DEVICE}")
             self.model_device = DEFAULT_DEVICE
-        self.torch_model_device = torch.device(self.model_device)
+        self.torch_device = torch.device(self.model_device)
         if VERB:
             print(f"Using device: {self.model_device}")
 
@@ -666,7 +752,7 @@ class GPTServer:
         else:
             # Use default value
             self.max_seq_length = self.model.max_seq_length
-        self.model = self.model.to(self.torch_model_device)
+        self.model = self.model.to(self.torch_device)
 
         if self.compile and hasattr(torch, "compile"):
             if VERB:
@@ -728,18 +814,11 @@ class GPTServer:
             id: sample ID
             idx: new sample (encoded prompt)
             dtype: desired dtype for the KV caches
-
-        Returns:
-            Cache length (T_i)
-            Input position tensor (input_pos)
-            KV cache for the sumbodel (kvcaches)
         """
         assert self.model is not None
 
         self.T_i[id] = idx.size(1)
-        self.input_pos[id] = torch.arange(
-            0, self.T_i[id], device=self.torch_model_device
-        )
+        self.input_pos[id] = torch.arange(0, self.T_i[id], device=self.torch_device)
         kvc_sublist: List[KVCache] = []
         for _, block in enumerate(self.model.transformer.h):
             # Build kv cache individually for each attn layer
@@ -748,17 +827,44 @@ class GPTServer:
                     batch_size=1,
                     max_seq_length=self.model.max_seq_length,
                     rope_cache_length=self.model.cos.size(-1),
-                    device=self.torch_model_device,
+                    device=self.torch_device,
                     dtype=self.ptdtype,
                 )
             )
         self.kvcaches[id] = kvc_sublist
 
+    def _delete_sample_caches(self, id):
+        """
+        Delete the cached parameters for sample `id`.
+
+        Args:
+            id: sample ID
+        """
+        if VERB:
+            print("[DEBUG] Releasing caches")
+        # FIXME: maybe try-except to prevent issues if key not found for some reason
+        # Find a clean way, as try-except should be done for all vars
+        del self.T_i[id]
+        del self.input_pos[id]
+        del self.kvcaches[id]
+
+        # if self.role == "starter":
+        #     del self.samples[id]  # FIXME: in th. call this func after msg sent to user
+        #     del self.prompt_lengths[id]
+
+    def _delete_starter_caches(self, id):
+        if self.role != "starter":
+            warnings.warn("This method should only be called on starter nodes!")
+        else:
+            del self.samples[id]
+            del self.iter_ind[id]
+            del self.prompt_lengths[id]
+            del self.max_new_tokens[id]
+            del self.sample_finished[id]
+
     # ---- Main Loops -----------------------------------------------------------------
 
-    def _starter_loop(
-        self, n_samples: int, prompt: Optional[str] = None, **kwargs
-    ) -> Tuple[List[str], float]:
+    def _starter_loop(self, **kwargs) -> Tuple[List[str], float]:
         """
         Generation loop for the starter node only.
 
@@ -774,24 +880,6 @@ class GPTServer:
         assert self.model_config is not None and self.model is not None
         assert self.model_device is not None
 
-        #
-        # TODO
-        # Starter loop should become agnostic of n_samples (it will work on-demand
-        #
-        # The prompt will need to be processed "outside", e.g., by the POST
-        #
-        # Will probably be able to "unify" this part of code before the actual loop for
-        # both types of nodes - then _starter_loop and _secondary_loop could be
-        # streamlined to just contain what's inside the "while"
-        #
-        if n_samples < 1:
-            raise ValueError("Cannot generate less than 1 sample!")
-        elif n_samples < self.n_nodes:
-            warnings.warn(
-                f"Generating less samples ({n_samples}) than nodes ({self.n_nodes}) will not be efficient!"
-            )
-        self.n_samples = n_samples
-
         if "cuda" in self.model_device:
             device_type = "cuda"
         elif "mps" in self.model_device:
@@ -804,78 +892,25 @@ class GPTServer:
             else torch.amp.autocast(device_type=device_type, dtype=self.ptdtype)
         )
 
-        # <<<< TODO: replace - analogous operations to be executed in POST from user
-        # The POST should
-        # Encode starting sequence - with prompt support
-        if prompt is None:
-            start = ["\n"] * n_samples
-            start_styled = [self.prompt_style.apply(s) for s in start]
-        else:
-            start_styled = get_user_prompt(
-                prompt, n_samples, prompt_style=self.prompt_style
-            )
-
-        assert len(start_styled) == n_samples
-
-        idx = [
-            self.tok.encode(txt, device=self.torch_model_device).view(1, -1)
-            for txt in start_styled
-        ]
-        # >>>>
-
         # Initialize RoPE cache and attention mask
-        self.model.init_rope_mask(device=self.torch_model_device)
+        self.model.init_rope_mask(device=self.torch_device)
         self.model.eval()
 
         # Starter Only
         self.samples: Dict[int, torch.Tensor] = {}
         self.prompt_lengths: Dict[int, int] = {}
 
-        # >>>> TODO: remove - will be done in POST
-        for i, samp in enumerate(idx):
-            self.in_message_queue.append(self._build_msg(samp, i))
-            self.prompt_lengths[i] = len(samp.squeeze())  # Length in tokens
-            self.iter_ind[i] = 0
-        self.in_queue_not_empty.set()
-
-        if "max_new_tokens" in kwargs:
-            # NOTE: can override the max. n. of tokens - must ensure
-            self.max_new_tokens = {
-                i: kwargs["max_new_tokens"] for i in range(len(self.prompt_lengths))
-            }
-            # Check max_new_tokens won't cause errors later
-            if not all(
-                [
-                    self.max_new_tokens[i] + self.prompt_lengths[i]
-                    <= self.model.max_seq_length
-                    for i in range(n_samples)
-                ]
-            ):
-                raise ValueError(
-                    f"Cannot generate {kwargs['max_new_tokens']} tokens - would exceed block size!"
-                )
-        else:
-            # The maximum number of tokens is the model's sequence length - prompt length
-            self.max_new_tokens = {
-                i: (self.model.max_seq_length - p_l)
-                for i, p_l in self.prompt_lengths.items()
-            }
-            assert all(
-                max_tok > 0 for max_tok in self.max_new_tokens.values()
-            ), "Some prompt is longer than the context length of the model"
-        # <<<<
-
         event_stop = threading.Event()
-        loading_thread = threading.Thread(
-            target=waiting_animation, args=("Processing samples", event_stop)
-        )
+        # loading_thread = threading.Thread(
+        #     target=waiting_animation, args=("Processing samples", event_stop)
+        # )
 
         start_time = time.time()
         if PLOTS:
             self.tok_time.append((0, 0))
 
         print("[INFO] Launching processing loop")
-        loading_thread.start()
+        # loading_thread.start()
         with torch.inference_mode(), ctx, catch_loop_errors(
             running_event=self.running, event_to_be_set=[event_stop]
         ):
@@ -886,11 +921,12 @@ class GPTServer:
                     if len(self.in_message_queue) < 1:
                         self.in_queue_not_empty.clear()
 
+                    sample_id = in_msg["sample_index"]
                     if in_msg["stop"]:
-                        # The stopping message made the whole loop
-                        self.running.clear()  # TODO: remove
+                        # The stopping message made the whole loop - just ignore as
+                        # caches should have already been cleared
+                        pass
                     else:
-                        sample_id = in_msg["sample_index"]
                         idx = in_msg["data"].to(self.model_device)
                         stopping_detected = False
 
@@ -928,8 +964,8 @@ class GPTServer:
                             self.iter_ind[sample_id] < self.max_new_tokens[sample_id]
                             and not stopping_detected
                         ):
-                            # Only propagate last token (KV cache) - OR all initial prompt if
-                            # 1st iter
+                            # Only propagate last token (KV cache) - OR all initial
+                            # prompt if 1st iter
                             idx_cond = (
                                 self.samples[sample_id]
                                 if self.iter_ind[sample_id] == 0
@@ -948,41 +984,29 @@ class GPTServer:
                             out_msg = self._build_msg(idx_cond, sample_id)
                         else:
                             # Generation finished
-                            print(f"[DEBUG] Finished sample {sample_id}")
-                            # TODO: decode and place msg in self.resp
-                            # Also set resp_queue_not_empty to advertise sample
+                            print(
+                                f"[DEBUG] Finished sample {sample_id}"
+                                + f"{' - early detection' if stopping_detected else ''}"
+                            )
+                            # Release caches
+                            self._delete_sample_caches(sample_id)
 
                             # Transmit msg with 'stop': true for this sample ID
                             out_msg = self._build_msg(
                                 data="", sample_index=sample_id, stop=True
                             )
+                            # Advertise the end of the generation for the sample
+                            self.sample_finished[sample_id].set()
 
-                        # UPDATE ITERATION COUNT FOR SAMPLE
+                        # Update iteration count for sample
                         self.iter_ind[sample_id] += 1
 
-                        # NOTE: message queues will be the same if running in standalone!
+                        # NOTE: message queues will be the same if running in standalone
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
 
-        tot_time = time.time() - start_time
-
         if VERB:
-            print("[INFO] Generation completed!                          ")
-        logger_wp.info("Generation completed")
-
-        out_truncated = [
-            find_eot(smp, self.stop_tokens, self.prompt_lengths[i])
-            for i, smp in self.samples.items()
-        ]
-        if VERB:
-            print("Truncated samples:")
-            for i, smp in enumerate(out_truncated):
-                print(
-                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(self.samples[i].squeeze())}"
-                )
-        out_samples = [self.tok.decode(smp) for smp in out_truncated]
-
-        return out_samples, tot_time
+            print("[INFO] Stopping main thread (starter)")
 
     def _secondary_loop(self):
         """
@@ -1011,7 +1035,7 @@ class GPTServer:
 
         # Allow node to be 100% agnostic of the system! If it receives a sample with a
         # new ID, it will initialize the caches for that sample on the fly!
-        self.model.init_rope_mask(device=self.torch_model_device)
+        self.model.init_rope_mask(device=self.torch_device)
         self.model.eval()
 
         event_stop = threading.Event()
@@ -1037,7 +1061,8 @@ class GPTServer:
 
                     if "stop" in in_msg and in_msg["stop"]:
                         print(f"[DEBUG] Finished sample {sample_id}")
-                        # TODO: delete variables for sample id
+                        # Delete cached variables for sample id
+                        self._delete_sample_caches(sample_id)
 
                         self.out_message_queue.append(in_msg)
                         self.out_queue_not_empty.set()
@@ -1045,11 +1070,8 @@ class GPTServer:
                         if iter >= self.n_samples:
                             first_glob_iter = False
 
-                        idx = in_msg["data"].to(self.torch_model_device)
+                        idx = in_msg["data"].to(self.torch_device)
                         if sample_id not in self.T_i:
-                            assert (
-                                first_glob_iter
-                            ), "Should have seen this sample already..."
                             # Initialization of the input_pos
                             self._init_sample_caches(sample_id, idx)
 
@@ -1102,6 +1124,8 @@ class GPTServer:
                 n_local_layers (n. of chunk layers - prevent issues due to different config)
                 [params] (model parameters - needed if no chunk path was passed)
                 n_samples (number of produced samples)
+
+        - Starter node: Ollama-like APIs
         """
         if (
             self.node_type is None or "secondary" in self.node_type
@@ -1153,29 +1177,34 @@ class GPTServer:
                 chunk_sd = None
                 gc.collect()
 
-                self.n_samples = init_msg["n_samples"]
-
-                if VERB:
-                    print(f"{self.n_nodes} Nodes, generating {self.n_samples} samples")
-
                 if VERB:
                     print(f"[INFO] Starting operation - {self.node_type} node")
-                # FIXME: review threads
-                logger_wp.info("Received initialization information!")
+
                 self.inference_thread = threading.Thread(
-                    target=self.start_inference, daemon=True, args=(self.n_samples,)
+                    target=self.start_inference, daemon=True
                 )
                 self.inference_thread.start()
                 cp.response.status = 200
             else:
                 raise cp.HTTPError(404, "Not found")
-        elif self.model is not None:
+        elif self.role == "starter":
+            # Starter node - Provide Ollama-like APIs
+            if path[0] == "api":
+                if path[1] == "generate":
+                    raw_body = cp.request.body.read()
+                    print(raw_body)
+                    body = json.loads(raw_body)
+                    resp = self.process_user_prompt(body)
+                    return json.dumps(resp)
+            raise cp.HTTPError(404, "Not found")
+
+        elif self.model is not None:  # FIXME
             raise cp.HTTPError(
                 403,
                 f"Failed to configure node - the model was already initialized: {self.node_type}",
             )
         else:
-            raise cp.HTTPError(403, "Unable to initialize node!")
+            raise cp.HTTPError(404, "Not found")
 
     def PUT(self, *path):
         """

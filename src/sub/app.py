@@ -275,7 +275,7 @@ class App:
                 dtype=dtype,
                 **kwargs,
                 model_type=self.full_model_name,
-                model_seq_length=self.model_seq_length
+                model_seq_length=self.model_seq_length,
             )
 
         elif "secondary" in self.node_type:
@@ -338,54 +338,25 @@ class App:
         # Here because if the 'device' arg is None, gpt_serv will infer it
         self.torch_device = self.gpt_serv.model_device
 
-    def start(
-        self,
-        *,
-        n_samples: Optional[int] = None,
-        tokens_per_sample: Optional[int] = None,
-        prompt: Optional[str] = None,
-    ):
+    def start(self):
         """
         Main class entrypoint.
         Start the application; for the starter node, this triggers the initialization of
-        other nodes and launches generation.
+        other nodes and launches the web server awaiting for generation.
         For secondary nodes, this starts an infinite loop where the node will wait to be
         initialized and perform inference.
-
-        Args:
-            *,
-            n_samples (starter only): number of samples to be generated; NOTE: if the
-                number is lower than the number of nodes, the generation will not
-                benefit from pipelining.
-            tokens_per_sample (starter only): number of samples to be *generated*
-                (regardless of the prompt length).
-            prompt (starter only): prompt (as received from command line) - can be
-                FILE:<...>
         """
         if self.node_type == "starter":
-            assert n_samples and tokens_per_sample
             assert self.model_config
             # Init. nodes, launch iterations
-            if not self.configure_nodes(n_samples=n_samples):
+            if not self.configure_nodes():
                 raise RuntimeError("Unable to initialize network nodes!")
 
             try:
-                out_text, time_gen = self.gpt_serv.launch_starter(
-                    n_samples, tokens_per_sample, prompt
-                )
-                print("-------------------------------------------------")
-                print("Produced output:\n")
-                for i, smpl in enumerate(out_text):
-                    print("-------------------------------------------------")
-                    print(f"Sample {i + 1}:")
-                    print(smpl, "\n")
-                print("-------------------------------------------------")
-                print(f"Total generation time: {time_gen}")
-
-                self.stop_nodes()
-
+                self.gpt_serv.launch_starter()
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
+                self.stop_nodes()
                 print("Node was stopped!")
         else:
             try:
@@ -396,7 +367,7 @@ class App:
 
     # ---------------------------------------------------------------------------------
 
-    def configure_nodes(self, n_samples: int) -> int:
+    def configure_nodes(self) -> int:
         """
         Send POST requests to the other nodes to inform them of their role, the number
         of samples, and including their chunk of model.
@@ -443,7 +414,6 @@ class App:
             curr_msg["n_local_layers"] = N_LAYERS_NODES[self.n_nodes][
                 self.model_config.n_layer
             ]["N_LAYERS_SECONDARY"]
-            curr_msg["n_samples"] = n_samples
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
             curr_msg["max_seq_length"] = self.model_seq_length

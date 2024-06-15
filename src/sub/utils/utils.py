@@ -609,3 +609,6 @@ def save_config(config: "Config", checkpoint_dir: Path) -> None:
     config_dict = asdict(config)
     with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
         yaml.dump(config_dict, fp)
+
+def s_to_ns(timestamp_s):
+    return int(timestamp_s * 1e9)
