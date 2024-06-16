@@ -26,17 +26,16 @@ import time
 import warnings
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import cherrypy as cp
 import requests
 import torch
 
-from sub import PromptStyle
 from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
-from sub.typing import FileType
 from sub.utils import load_from_pt, split_and_store
+from sub.utils.typing import FileType, JSONType
 
 docstring = """
 Distributed implementation of the Llama architecture using Model-Distributed Inference
@@ -102,7 +101,7 @@ and place the output message in the output queue.
 There, a separate thread will extract it and transmit it.
 
 The application is composed of the following modules:
-- GPTDistributed: entrypoint for initializing nodes of any type; for starter nodes, it
+- App: entrypoint for initializing nodes of any type; for starter nodes, it
 provides methods used at initialization.
 - GPTServer: core of the application; it creates the HTTP server for coordination and 
 sets up the message transmission sockets. It contains the definition of all the
@@ -132,6 +131,8 @@ class App:
         "n_samples": 0,
         "max_seq_length": None,
     }
+
+    secondary_nodes_config: List[JSONType] = []
 
     def __init__(
         self,
@@ -367,7 +368,21 @@ class App:
 
     # ---------------------------------------------------------------------------------
 
-    def configure_nodes(self) -> int:
+    def get_nodes_info(self):
+        """
+        Send GET to all nodes listed in the config JSON to obtain the information about
+        the nodes and the available models (and chunks).
+
+        TODO: design algorithm to look for a good node combination so that the nodes
+        contain all the model
+        """
+        for node in self.node_config["nodes"]["secondary"]:
+            addr = f"http://{node['addr']}:{node['communication']['port']}/"
+            self.secondary_nodes_config.append(
+                json.loads(self._request_to_node("get", addr))
+            )
+
+    def configure_nodes(self) -> bool:
         """
         Send POST requests to the other nodes to inform them of their role, the number
         of samples, and including their chunk of model.
@@ -391,7 +406,9 @@ class App:
         if not self.model_config:
             raise ValueError("The model configuration was not loaded!")
 
-        out = 1  # Return code
+        self.get_nodes_info()
+
+        out = True  # Return code
         # Store the prev and next in a smart way
         prev = self.node_config["nodes"]["starter"]
         if self.n_secondary == 1:
@@ -436,7 +453,7 @@ class App:
             target_port = sec_node["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/init"
-            out *= self._request_to_node("post", addr, curr_msg)
+            out = out and (self._request_to_node("post", addr, curr_msg) is not None)
 
             if not out:
                 if VERB:
@@ -464,8 +481,12 @@ class App:
         return out
 
     def _request_to_node(
-        self, req_type: str, addr: str, content: Any, max_n_requests: int = 100
-    ) -> int:
+        self,
+        req_type: str,
+        addr: str,
+        content: Optional[Any] = None,
+        max_n_requests: int = 100,
+    ) -> Any:
         """
         Send an HTTP request containing a json-formatted string to a specified
         target node.
@@ -480,12 +501,15 @@ class App:
             1 if successful
             0 if failed
         """
-        if req_type.lower() == "post":
+        if req_type.lower() == "get":
+            req_func = requests.get
+        elif req_type.lower() == "post":
             req_func = requests.post
         elif req_type.lower() == "put":
             req_func = requests.put
         else:
             raise ValueError(f"Unsupported request type '{req_type}'")
+
         ret = None
         n_ret = 0
         if VERB:
@@ -495,7 +519,7 @@ class App:
             # Specify timeout
             ret = req_func(
                 addr,
-                data=pickle.dumps(content),
+                data=pickle.dumps(content) if content else None,
                 timeout=100,
             )
 
@@ -536,5 +560,5 @@ class App:
             n_ret += 1
 
         if ret is not None and ret.status_code == 200:
-            return 1
-        return 0
+            return ret.text
+        return None

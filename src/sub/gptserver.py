@@ -40,14 +40,13 @@ from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
                         TEMPERATURE, TOP_K)
 from sub.connections import InputNodeConnection, OutputNodeConnection
 from sub.model import Config, KVCache, sample
-from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
-                         load_prompt_style)
+from sub.prompts import PromptStyle, has_prompt_style, load_prompt_style
 from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
-from sub.typing import FileType
 from sub.utils import (catch_loop_errors, count_transformer_blocks,
-                       detect_stop_tokens, find_eot, load_sd,
-                       plot_tokens_per_time, s_to_ns, waiting_animation)
+                       detect_stop_tokens, find_eot, get_available_models,
+                       load_sd, s_to_ns, waiting_animation)
+from sub.utils.typing import FileType, JSONType
 
 # -------------------------------------------------------------------------------------
 
@@ -76,6 +75,8 @@ class GPTServer:
     model_config: Optional[Config] = None
     model_type = None
 
+    node_capabilities: Dict[str, Any] = {}
+
     # Number of samples that have been requested so far in the current run:
     n_samples: int = 0
     # Map sample ID to n. of iteration - initialized to 0 when new sample is created
@@ -95,7 +96,7 @@ class GPTServer:
     running = threading.Event()
     running.clear()
 
-    # Connections
+    # Connections - None if not connected
     conn_to_next: Optional[OutputNodeConnection] = None
     conn_to_prev: Optional[InputNodeConnection] = None
 
@@ -124,7 +125,6 @@ class GPTServer:
 
     # Response queue - used to pass generated responses from loop to HTTP server
     resp_msg_template = {}  # TODO: use Ollama's syntax
-    resp: Mapping[int, Dict] = {}  # Will contain the generated message for each sample
     resp_finished: Mapping[int, threading.Event] = (
         {}
     )  # Used to advertise generation end and make server look for message in self.resp
@@ -145,6 +145,7 @@ class GPTServer:
         self,
         node_config: Dict,
         node_type: str,
+        ckpts_dir: FileType = script_dir / ".." / "checkpoints",
         *,
         model_config: Optional[Config] = None,
         chunk_path: Optional[FileType] = None,
@@ -211,6 +212,7 @@ class GPTServer:
                 "Specified bfloat16, but the host does not support this format"
             )
 
+        self.checkpoints_dir = Path(ckpts_dir)
         self.node_type = node_type
         self.node_config = node_config
 
@@ -297,6 +299,7 @@ class GPTServer:
             else:
                 self.model_path = chunk_path  # May be None
 
+            # TODO: role should be inferred from POST for initialization
             # Parse role name to get right node config
             split_node_type = node_type.split(":")
             if len(split_node_type) == 1:
@@ -334,6 +337,9 @@ class GPTServer:
         self.own_comm_port = self.own_config["communication"]["port"]
         self.inference_port_in = self.own_config["inference"]["port_in"]
         self.inference_port_out = self.own_config["inference"]["port_out"]
+
+        # Initialize capabilities dict
+        self._get_node_capabilities()
 
         self.start_webserv()
 
@@ -519,10 +525,21 @@ class GPTServer:
             self._launch_queue_threads()
             self._secondary_loop()
 
-    def stop_generation(self) -> int:
+    def stop_generation(self) -> bool:
+        """
+        Interrupt the current application run.
+
+        This method will:
+        1. Stop main loop (non-starters)
+        2. Stop connections (and queue threads)
+        3. Delete model
+
+        NOTE: this method does NOT turn the node off, it just un-initializes it; it will
+        leave the HTTP server UP, allowing to further initialization calls from any
+        starter node.
+        """
         try:
-            time.sleep(2)
-            self.running.clear()  # Redundant, but ok
+            self.running.clear()
             if "starter" not in self.role:
                 if VERB:
                     print("Stopping main thread")
@@ -531,12 +548,19 @@ class GPTServer:
                 if VERB:
                     print("Stopping input queue thread")
                 self.conn_to_prev.shutdown()
+                self.conn_to_prev = None
                 if VERB:
                     print("Stopping output queue thread")
                 self.conn_to_next.shutdown()
-            return 1
+                self.conn_to_next = None
+
+            # TODO: maybe delete some run-specific parameters (e.g., role)
+            # Clear node model
+            self.model = None
+            gc.collect()
+            return True
         except:
-            return 0
+            return False
 
     def shutdown(self) -> int:
         """
@@ -551,10 +575,10 @@ class GPTServer:
         try:
             assert self.stop_generation()
             if VERB:
-                print("Stopping HTTP server")
+                print("[INFO] Stopping HTTP server")
             self.stop_webserv()
             if VERB:
-                print("Closing application")
+                print("[INFO] Closing application")
             return 1
         except:
             return 0
@@ -688,6 +712,50 @@ class GPTServer:
         out_msg["eval_duration"] = t_decode
 
         return out_msg
+
+    def _get_node_capabilities(self) -> JSONType:
+        """
+        Return the node capabilities to be sent as response of GET requests.
+        The info is a JSON-serializable dict.
+
+        The dict is stored as a class attribute, this method updates it.
+
+        Fields:
+            - node_config: from configuration JSON (passed at init)
+                - addr: IP
+                - communication:
+                    - port
+                - inference:
+                    - port_in
+                    - port_out
+                - [device]
+            - role: ("" if not init, else: "secondary:n") else, if starter: "starter"        FIXME
+            - model:
+                - active: "" if none, else HF name of the model, as rx at init
+                - available: list of available models, with the structure:
+                    "available": [
+                      {
+                        "name": "model_name",  <-- from checkpoints dir
+                        "hf_config": {
+                          "org": organization name (e.g., mistralai),
+                          "name": actual model name
+                        },
+                        "chunks": {
+                          "<n>nodes": [...],   <-- List of all the chunks (list dir)
+                          "<k>nodes": [...]
+                        }
+                      },
+                      ...
+                    ]
+            TODO
+        """
+        self.node_capabilities["node_config"] = self.own_config
+        self.node_capabilities["role"] = self.role
+        self.node_capabilities["model"] = {
+            "active": self.model_type,
+            "available": get_available_models(self.checkpoints_dir),
+        }
+        return self.node_capabilities
 
     # ----- Private -------------------------------------------------------------------
 
@@ -1105,8 +1173,8 @@ class GPTServer:
             Return node information (port numbers, [capabilities]?)
             Used for pinging "neighbor" nodes
         """
-        if len(path) == 0:
-            return json.dumps(self.node_config)
+        if not len(path):
+            return json.dumps(self._get_node_capabilities())
 
     def POST(self, *path, **params):
         """
@@ -1188,14 +1256,24 @@ class GPTServer:
             else:
                 raise cp.HTTPError(404, "Not found")
         elif self.role == "starter":
-            # Starter node - Provide Ollama-like APIs
+            if not len(path):
+                return "Available URLs: "
             if path[0] == "api":
+                # Ollama-like APIs
                 if path[1] == "generate":
-                    raw_body = cp.request.body.read()
-                    print(raw_body)
+                    content_type = cp.request.headers["Content-Type"]
+                    raw_body = cp.request.body.read().decode("utf-8")
+                    if "application/json" in content_type:
+                        body = json.loads(raw_body)
+                    else:
+                        return "Unsupported Media Type", 415
                     body = json.loads(raw_body)
                     resp = self.process_user_prompt(body)
                     return json.dumps(resp)
+            elif path[0] == "register":
+                # TODO: Secondary node registering at starter node
+                pass
+
             raise cp.HTTPError(404, "Not found")
 
         elif self.model is not None:  # FIXME
