@@ -926,7 +926,6 @@ class GPTServer:
                         # Send to next iff not at the last token
                         if (
                             self.iter_ind[sample_id] < self.max_new_tokens[sample_id]
-                            and not stopping_detected
                         ):
                             # Only propagate last token (KV cache) - OR all initial prompt if
                             # 1st iter
