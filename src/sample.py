@@ -196,7 +196,7 @@ def main(args):
             )
             tok_time_all.append(
                 [
-                    (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
+                    (x[0] + k * (args.n_tokens), x[1] + t_start_sample - t_start)
                     for x in curr_tok_time
                 ]
             )
