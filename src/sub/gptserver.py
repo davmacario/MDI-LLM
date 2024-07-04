@@ -364,7 +364,7 @@ class GPTServer:
 
     def launch_starter(
         self, n_samples: int, max_tokens: int, prompt: Optional[str] = None
-    ) -> Tuple[List[str], int]:
+    ) -> Tuple[List[str], List[Tuple[int, float]]]:
         """
         Launch processing thread in starter node.
 
@@ -758,7 +758,7 @@ class GPTServer:
 
     def _starter_loop(
         self, n_samples: int, prompt: Optional[str] = None, **kwargs
-    ) -> Tuple[List[str], float]:
+    ) -> Tuple[List[str], List[Tuple[int, float]]]:
         """
         Generation loop for the starter node only.
 
@@ -871,6 +871,7 @@ class GPTServer:
         )
 
         start_time = time.time()
+        n_tokens = 0
         if PLOTS:
             self.tok_time.append((0, 0))
 
@@ -916,6 +917,12 @@ class GPTServer:
                             self.input_pos[sample_id] = self.input_pos[sample_id][
                                 -1:
                             ].add_(1)
+
+                            # Only add new token after it has been generated
+                            n_tokens += 1
+                            if PLOTS:
+                                self.tok_time.append((n_tokens, time.time() - start_time))
+
                         else:
                             # First iteration for the current sample!
                             # Begin list of samples
@@ -924,9 +931,7 @@ class GPTServer:
                             self._init_sample_caches(sample_id, self.samples[sample_id])
 
                         # Send to next iff not at the last token
-                        if (
-                            self.iter_ind[sample_id] < self.max_new_tokens[sample_id]
-                        ):
+                        if self.iter_ind[sample_id] < self.max_new_tokens[sample_id]:
                             # Only propagate last token (KV cache) - OR all initial prompt if
                             # 1st iter
                             idx_cond = (
@@ -963,8 +968,6 @@ class GPTServer:
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
 
-        tot_time = time.time() - start_time
-
         if VERB:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
@@ -981,7 +984,7 @@ class GPTServer:
                 )
         out_samples = [self.tok.decode(smp) for smp in out_truncated]
 
-        return out_samples, tot_time
+        return out_samples, self.tok_time
 
     def _secondary_loop(self):
         """

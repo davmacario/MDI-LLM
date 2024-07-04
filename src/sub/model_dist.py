@@ -380,19 +380,22 @@ class GPTDistributed:
                     print(f"Sample {i + 1}:")
                     print(smpl, "\n")
                 print("-------------------------------------------------")
-                print(f"Total generation time: {time_gen}")
+                print(f"Total generation time: {time_gen[-1][1]}")
 
                 self.stop_nodes()
 
+                return time_gen
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
                 print("Node was stopped!")
+
         else:
             try:
                 cp.engine.block()  # Same as while True: time.sleep(...)
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
                 print("Node was stopped!")
+
 
     # ---------------------------------------------------------------------------------
 
