@@ -5,8 +5,20 @@ sudo apt update
 sudo apt upgrade -y
 
 echo "Installing requirements"
-PACKAGES="git vim htop neofetch curl wget tmux nvidia-jetpack python3.8 python3.8-venv python3-pip"
-for p in $PACKAGES; do
+PACKAGES=(
+    "git"
+    "vim"
+    "htop"
+    "neofetch"
+    "curl"
+    "wget"
+    "tmux"
+    "nvidia-jetpack"
+    "python3.8"
+    "python3.8-venv"
+    "python3-pip"
+)
+for p in "${PACKAGES[@]}"; do
     sudo apt install "$p" -y
 done
 python3.8 -m pip install --upgrade pip
