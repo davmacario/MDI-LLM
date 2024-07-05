@@ -13,6 +13,8 @@ PACKAGES=(
     "curl"
     "wget"
     "tmux"
+    "libomp5"
+    "libopenblas-dev"
     "nvidia-jetpack"
     "python3.8"
     "python3.8-venv"
