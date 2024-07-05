@@ -91,6 +91,10 @@ N_LAYERS_NODES = {
         22: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 6},
         32: {"N_LAYERS_START": 8, "N_LAYERS_SECONDARY": 12},
     },
+    5: {
+        22: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 5},
+        32: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 7},
+    },
 }
 
 HEADERLENGTH = 16  # Header length in chars
