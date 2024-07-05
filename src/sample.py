@@ -17,7 +17,7 @@ from pathlib import Path
 import torch
 
 from sub import GPT, PromptStyle, Tokenizer
-from sub.config import TEMPERATURE, TOP_K
+from sub.config import DTYPE_TORCH_MAPPING, TEMPERATURE, TOP_K
 from sub.prompts import get_user_prompt, has_prompt_style, load_prompt_style
 from sub.utils import find_eot, load_from_pt, plot_tokens_per_time
 
@@ -40,15 +40,25 @@ def main(args):
     using_huggingface = False
 
     dtype = (
-        "bfloat16"
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        else "float16"
+        (
+            "bfloat16"
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else "float16"
+        )
+        if args.dtype is None
+        else args.dtype
     )
-    ptdtype = {
-        "float32": torch.float32,
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-    }[dtype]
+    if dtype not in DTYPE_TORCH_MAPPING.keys():
+        raise ValueError(
+            f"Unknown dtype {dtype}, supported ones are: {DTYPE_TORCH_MAPPING.keys()}"
+        )
+    if dtype == "bfloat16" and (
+        not torch.cuda.is_available() or not torch.cuda.is_bf16_supported()
+    ):
+        raise ValueError(
+            "Specified bfloat16, but the host does not support this format"
+        )
+    ptdtype = DTYPE_TORCH_MAPPING[dtype]
 
     checkpoint_dir = Path(args.ckpt)
     model_type = checkpoint_dir.name
@@ -56,6 +66,7 @@ def main(args):
     if not checkpoint_path.is_file() and (
         (checkpoint_dir / "model.bin").is_file()
         or (checkpoint_dir / "pytorch_model.bin.index.json").is_file()
+        or (checkpoint_dir / "model.safetensors.index.json").is_file()
     ):
         # Weights are there but in wrong format
         from sub.utils.convert_hf_checkpoint import convert_hf_checkpoint
@@ -79,6 +90,7 @@ def main(args):
     if args.verb:
         print(f"Using {args.device}")
         print(f"Device type: {device_type}")
+        print(f"Dtype: {dtype}")
     ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
         nullcontext()
         if device_type == "mps" or not dtype == "bfloat16"
@@ -95,12 +107,15 @@ def main(args):
         print(f"Truncating model context size to {args.sequence_length}")
         model.max_seq_length = args.sequence_length
 
-    model_dtype = torch.float32
-    if all([v.dtype == torch.float16 for v in wt.values()]):
-        model_dtype = torch.float16
-    elif all([v.dtype == torch.bfloat16 for v in wt.values()]):
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-            model_dtype = torch.bfloat16
+    if args.dtype:
+        model_dtype = DTYPE_TORCH_MAPPING[args.dtype]
+    else:
+        model_dtype = torch.float32
+        if all([v.dtype == torch.float16 for v in wt.values()]):
+            model_dtype = torch.float16
+        elif all([v.dtype == torch.bfloat16 for v in wt.values()]):
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                model_dtype = torch.bfloat16
 
     if model_dtype in {torch.float16, torch.bfloat16}:
         model = model.to(model_dtype)
@@ -159,43 +174,43 @@ def main(args):
     # Run generation
     tok_time_all = []
     with ctx, torch.inference_mode():
+        if args.verb:
+            print("Beginning generation")
+        t_start = time.time()
+        for k in range(batch_size):
+            curr_tok_time = []
+            t_start_sample = time.time()
+            prompt = start[k]
             if args.verb:
-                print("Beginning generation")
-            t_start = time.time()
-            for k in range(batch_size):
-                curr_tok_time = []
-                t_start_sample = time.time()
-                prompt = start[k]
-                if args.verb:
-                    print(prompt)
-                start_ids = tokenizer.encode(prompt, device=torch_device)
-                # Ensure the desired amount of new tokens is generated
-                max_new_tokens = start_ids.size(0) + args.n_tokens
+                print(prompt)
+            start_ids = tokenizer.encode(prompt, device=torch_device)
+            # Ensure the desired amount of new tokens is generated
+            max_new_tokens = start_ids.size(0) + args.n_tokens
 
-                y = model.generate(
-                    start_ids,
-                    max_new_tokens,
-                    temperature=TEMPERATURE,
-                    top_k=TOP_K,
-                    tok_time=curr_tok_time,
+            y = model.generate(
+                start_ids,
+                max_new_tokens,
+                temperature=TEMPERATURE,
+                top_k=TOP_K,
+                tok_time=curr_tok_time,
+            )
+            tok_time_all.append(
+                [
+                    (x[0] + k * (args.n_tokens), x[1] + t_start_sample - t_start)
+                    for x in curr_tok_time
+                ]
+            )
+            truncated = find_eot(y, stop_tokens, len(start_ids))
+            if args.verb:
+                print(
+                    f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
                 )
-                tok_time_all.append(
-                    [
-                        (x[0] + k * max_new_tokens, x[1] + t_start_sample - t_start)
-                        for x in curr_tok_time
-                    ]
-                )
-                truncated = find_eot(y, stop_tokens, len(start_ids))
-                if args.verb:
-                    print(
-                        f"Output was truncated to {len(truncated.squeeze())}/{len(y.squeeze())} tokens"
-                    )
-                decoded_text = tokenizer.decode(truncated)
-                print(decoded_text)
-                print("---------------")
+            decoded_text = tokenizer.decode(truncated)
+            print(decoded_text)
+            print("---------------")
 
-                for block in model.transformer.h:
-                    block.attn.kv_cache.reset_parameters()
+            for block in model.transformer.h:
+                block.attn.kv_cache.reset_parameters()
 
     tot_gen_time = time.time() - t_start
     if args.verb:
@@ -328,7 +343,13 @@ if __name__ == "__main__":
         sequence length of the model, i.e., maximum span of the attention window;
         if not specified, it will use the default model sequence length;
         allows to reduce RAM usage, as with a shorter context less cache is created.
-        """
+        """,
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default=None,
+        help="""the model dtype (among float32, float16 and bfloat16 - if supported)""",
     )
     parser.add_argument("--seed", type=int, default=10137, help="set random seed")
 

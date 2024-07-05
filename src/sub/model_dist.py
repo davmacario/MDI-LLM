@@ -141,6 +141,7 @@ class GPTDistributed:
         ckpt_dir: Optional[FileType] = None,
         chunk_path: Optional[FileType] = None,
         device: Optional[str] = None,
+        dtype: Optional[str] = None,
         secondary_index: Optional[int] = None,
         model_seq_length: Optional[int] = None,
         **kwargs,
@@ -197,6 +198,7 @@ class GPTDistributed:
         PLOTS = False if "plots" not in kwargs else bool(kwargs["plots"])
 
         self.compile = False if "compile" not in kwargs else bool(kwargs["compile"])
+        self.dtype = dtype
 
         if self.ckpt_dir:
             self.full_model_name = self.ckpt_dir.name
@@ -270,6 +272,7 @@ class GPTDistributed:
                 chunk_path=self.chunk_path,
                 tokenizer_dir=self.ckpt_dir,
                 model_device=self.torch_device,
+                dtype=dtype,
                 **kwargs,
                 model_type=self.full_model_name,
                 model_seq_length=self.model_seq_length
@@ -328,6 +331,7 @@ class GPTDistributed:
                 model_config=self.model_config,
                 chunk_path=self.chunk_path,
                 model_device=self.torch_device,
+                dtype=dtype,
                 **kwargs,
             )
 
@@ -376,19 +380,22 @@ class GPTDistributed:
                     print(f"Sample {i + 1}:")
                     print(smpl, "\n")
                 print("-------------------------------------------------")
-                print(f"Total generation time: {time_gen}")
+                print(f"Total generation time: {time_gen[-1][1]}")
 
                 self.stop_nodes()
 
+                return time_gen
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
                 print("Node was stopped!")
+
         else:
             try:
                 cp.engine.block()  # Same as while True: time.sleep(...)
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
                 print("Node was stopped!")
+
 
     # ---------------------------------------------------------------------------------
 

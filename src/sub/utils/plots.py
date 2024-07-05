@@ -3,12 +3,15 @@ from typing import List, Tuple, Union
 
 import matplotlib.pyplot as plt
 
+from sub.typing import FileType
+
 file_dir = os.path.dirname(__file__)
 
+PlotPoints = Tuple[int, float]
 
 def plot_tokens_per_time(
-    tok_time: List[Union[Tuple, List[Tuple]]],
-    out_path: str = os.path.join(file_dir, "..", "img", "tokens_time.png"),
+    tok_time: List[Union[PlotPoints, List[PlotPoints]]],
+    out_path: FileType = os.path.join(file_dir, "..", "img", "tokens_time.png"),
     disp: bool = True,
 ):
     """

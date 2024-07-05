@@ -1,78 +1,77 @@
 # MDI-LLM
 
+![Static Badge](https://img.shields.io/badge/Python-3.8%2C%203.10%2C%203.11-blue?style=flat&logo=Python&logoColor=yellow)
+![Static Badge](https://img.shields.io/badge/PyTorch-1.12%2C_2.1.2%2C%202.2.2-red?style=flat&logo=PyTorch)
+
 Code for "A Model-Distributed Inference Approach for Large Language Models at
-the Edge"
+the Edge" -- M.S. Thesis (Summer 2024)
 
----
-
-> Implementation of Model-Distributed Inference for Large Language Models
-
-![Static Badge](https://img.shields.io/badge/Python-3.8%2C%203.10-blue?style=flat&logo=Python&logoColor=yellow)
-![Static Badge](https://img.shields.io/badge/PyTorch-1.12%2C_2.1.2-red?style=flat&logo=PyTorch)
-
-**Note:** this repository is a work in progress! Some information may be
-inaccurate or missing.
+> Implementation of Model-Distributed Inference for Large Language Models,
+> allowing to deploy state-of-the-art LLM families on a network of edge devices.
 
 ---
 
 This repository contains the implementation of Model-Distributed Inference for
-[nanoGPT](https://github.com/karpathy/nanoGPT),
-[GPT2](https://huggingface.co/openai-community/gpt2) and the
-[Llama](https://llama.meta.com/) architecture (implemented on top of the
-[litGPT](https://github.com/Lightning-AI/litgpt) framework).
+the [litGPT](https://github.com/Lightning-AI/litgpt) framework.
 
-This framework allows to run these 2 LLMs over a network of computers
-("_nodes_").
-With no changes to the code, it is also possible to run the "nodes" on the same
-computer, allowing for distributing inference efforts over multiple GPUs on the
-same system.
+The approach is to create "nodes" (software entities) running on the different
+network devices, and which get assigned a portion of the model layers.
+Inference will then be carried out by transmitting the intermediate activation
+vectors of the model between different nodes.
 
 This approach was designed to allow large models to run over multiple devices
-with limited VRAM.
+with limited capabilities.
 
-This framework also allows for pipelining the inference process to minimize the
-idle time of each node.
-Pipelining achieves a good performance in terms of generation time when the
-number of _samples_ (i.e., independent output pieces of text of the LLM) is at
-least as great as the number of nodes, as it allows the nodes to always be
-processing a different sample at all times.
+With no changes to the code, it is possible to run the "nodes" on the same
+computer, allowing for distributing inference efforts over multiple GPUs on the
+same system or even static offloading of the parameters in the RAM.
+
+The advantage of this framework is the implementation of "recurrent" pipeline
+parallelism, which is a technique introduced to improve the efficiency of the
+system when dealing with at least as many samples (i.e., processed pieces of
+text) as the number of nodes by avoiding idle nodes at all times and achieve
+parallel processing.
 
 This repository contains the entire work that started with implementing MDI for
-NanoGPT, followed by the porting of the GPT-2 architecture, leading to the final
-version, which consists of the implementation of
+NanoGPT, followed by the porting of the GPT-2 architecture (see [old](./old)),
+leading to the final version, which consists of the implementation of
 [litGPT](https://github.com/Lightning-AI/litgpt), specifically for the Llama
 architecture.
 
 This repository also contains the code for training/finetuning and running
-single-device inference of GPT-2 models (and all possible variants obtained by
-handpicking the configuration parameters) based on the NanoGPT code (with minor
-adaptations).
+single-device inference of LitGPT models (and all possible variants obtained by
+handpicking the configuration parameters), providing a simplified implementation
+compared to the original one.
 
 ## Quickstart
 
-### TinyLlama over 3 devices
+### Llama over 3 devices
 
-To run Llama 2 on a network of 3 devices, follow these steps.
+To run Llama 3 on a network of 3 devices, follow these steps.
 
 Having cloned this repository and installed the [requirements](requirements.txt)
 on each host device, modify or create your own configuration file using as a
 reference the [existing ones](src/llama/settings_distributed/configuration.json).
 Make sure the devices can "see" each other over the network.\
-**Note** that the program will use the GPU by default, if available, but it is
+**Note:** the program will use the GPU by default, if available, but it is
 possible to specify a different torch device as a command line argument.
 It is also possible to select the device for each node through the
-configuration file (JSON) by adding the `"device"` key to the node information.
+configuration file (JSON) by adding the `"device"` key to the node information.\
+**Note (2):** the data type used will be bfloat16 when available, else float16,
+but can be overridden from the command line (`--dtype`).
 
-First, download the model and convert it to the litGPT format:
+First, download the model and convert it to the litGPT format (note: to access
+the weights, it is required to accept the license agreement on HF and provide
+your personal access token to the `prepare_model.py` script):
 
 ```bash
-./src/llama/prepare_model.py TinyLlama/TinyLlama-1.1B-Chat-v0.1
+./src/prepare_model.py meta-llama/Meta-Llama-3-8B-Instruct --n-nodes 3 --hf-token "<your huggingface token>"
 ```
 
 On the starter node, run:
 
 ```bash
-./src/llama/starter.py --ckpt ./src/llama/checkpoints/TinyLlama/TinyLlama-1.1B-Chat-v0.1 -v --nodes-config ./src/llama/settings-distr/config.json --n-samples 3 --n-tokens 500 --prompt "Who are you?"
+./src/starter.py --ckpt ./src/checkpoints/meta-llama/Meta-Llama-3-8B-Instruct -v --nodes-config ./src/settings-distr/config.json --n-samples 3 --n-tokens 500 --prompt "Who are you?" --block-size 500
 ```
 
 This will make the node partition the model in chunks, and send them to the other
@@ -82,21 +81,20 @@ model beforehand.
 On the first worker node, run:
 
 ```bash
-./src/llama/secondary.py -v --nodes-config ./src/llama/settings-distr/config.json 0
+./src/secondary.py -v --nodes-config ./src/settings-distr/config.json 0
 ```
 
 On the second worker node, run:
 
 ```bash
-./src/llama/secondary.py -v --nodes-config ./src/llama/settings-distr/config.json 1
+./src/secondary.py -v --nodes-config ./src/settings-distr/config.json 1
 ```
 
 **Note:** the above commands assume that the configuration JSON file is the same
 on all the devices.
 The `--nodes-config` flag requires two arguments in secondary nodes: the
 configuration file and the positional index of the node configuration parameters
-in the "secondary" list of the JSON file.\
-In secondary nodes, it is also possible to pass a partial config file, such as:
+in the "secondary" list of the JSON file.
 
 ```json
 {
@@ -116,13 +114,15 @@ In secondary nodes, it is also possible to pass a partial config file, such as:
 The file above will work as long as the same address and ports are specified on
 the main configuration file passed to the starter node.
 
-### Llama 2 on multi-GPU system
+### Llama 3 on multi-GPU system
 
-To run Llama 2 7B over 2 GPUs of the same system, instead, just run the
+To run Llama 3 over 2 GPUs of the same system, instead, just run the
 [src/llama/starter.py](src/llama/starter.py) and
 [src/llama/secondary.py](src/llama/secondary.py) programs on the same host, using
 the following as node configuration file (see
-[src/llama/settings_distr/config_2gpus.json](src/llama/settings_distr/config_2gpus.json)):
+[src/llama/settings_distr/config_2gpus.json](src/llama/settings_distr/config_2gpus.json)),
+or just specify different devices when launching the program from the CLI
+(`--device` flag):
 
 ```json
 {
@@ -156,24 +156,23 @@ the following as node configuration file (see
 }
 ```
 
-First, download the weights and split them (notice that, due to the licensing of
-the weights, you need to request access to the model on Huggingface in order to
-download it):
+First, prepare the model (splitting the 2 chunks) -- if the model was already
+downloaded, you should not need the Huggingface token:
 
 ```bash
-./src/llama/prepare_model.py meta-llama/Llama-2-7b-hf --n-nodes 2 --hf-token "<your huggingface token>
+./src/prepare_model.py meta-llama/Meta-Llama-3-8B-Instruct --n-nodes 2 --hf-token "<your huggingface token>"
 ```
 
 Starter node:
 
 ```bash
-./src/llama/starter.py --ckpt ./src/llama/checkpoints/meta-llama/Llama-2-7b-hf -v --nodes-config ./src/llama/settings-distr/config_2gpus.json --n-samples 2 --n-tokens 500 --prompt "What is the recipe for pizza?"
+./src/starter.py --ckpt ./src/checkpoints/meta-llama/Meta-Llama-3-8B-Instruct -v --nodes-config ./src/settings-distr/config_2gpus.json --n-samples 2 --n-tokens 500 --prompt "What is the recipe for pizza?" --block-size 500
 ```
 
 Worker node:
 
 ```bash
-./src/llama2/secondary.py -v --chunk ./src/llama/checkpoints/meta-llama/Llama-2-7b-hf/chunks/2nodes/model_secondary0.pth --nodes-config src/llama/settings_distr/config_2gpus.json 0
+./src/llama2/secondary.py -v --chunk ./src/llama/checkpoints/meta-llama/Meta-Llama-3-8B-Instruct/chunks/2nodes/model_secondary0.pth --nodes-config src/settings_distr/config_2gpus.json 0
 ```
 
 ## Rationale
@@ -185,10 +184,10 @@ one, who will use them as inputs for its own model chunk, forming a
 communication chain between the devices.
 
 This can solve the memory limitations of resource-limited devices and also
-result in lower inference times when paired with _recurrent pipeline parallelism_.
+result in lower inference times when paired with _"recurrent" pipeline parallelism_.
 
-Recurrent pipeline parallelism is a technique introduced in this scenario to prevent idle
-nodes in the network during inference.
+Recurrent pipeline parallelism is a technique introduced to prevent idle nodes
+in the network during inference.
 Given the autoregressive nature of a decoder-only transformer model, where the
 generated output is appended to the inputs and fed back to the model input to
 evaluate the next output token if generating a single piece of text, this would
@@ -201,10 +200,23 @@ This way, at each step, it is possible to make each of the nodes process a
 different sample, without having to wait for the same sample to be fed back for
 the next iteration.
 
-> <center><img src="assets/msg_transmission_out_q.svg" alt="message transmission
+Message transmission is handled through input and output queues to provide a
+buffer whenever the processing time for each node is not exactly the same for
+all.
+Indeed, while it is necessary to ensure no device acts as the bottleneck for
+the generation speed by choosing the most suitable model partition scheme, it
+is not possible to avoid slight changes in transmission delays due to
+unpredictable network conditions.
+
+> <center><img src="assets/recurrent-pipelining-out-q.png" alt="message transmission
 > with pipelining" width="600"/>
 >
-> Message transmission with _recurrent pipeline parallelism_</center>
+> Message transmission </center>
+
+> <center><img src="assets/recurrent-pipelining-idea.png" alt="message transmission
+> with pipelining" width="600"/>
+>
+> _Recurrent pipeline parallelism_</center>
 
 The network is actually a closed loop, as the outputs of the last node in the
 chain are then transmitted back to the starter node.
@@ -303,11 +315,12 @@ The multi-GPU case has been tested on a workstation using 2x Nvidia GTX 1080 Ti
     - Context length: 1024 tokens
     - Vocabulary size: 50257 (GPT2 tokenizer, from `tiktoken` library).
 
-- Llama architecture (TinyLlama, Llama 2, [Llama 3]) - based on the
+- Llama architecture (NanoLlama, TinyLlama, Llama 2, [Llama 3]) - based on the
   [litgpt](https://github.com/Lightning-AI/litgpt) implementation.
   - Specs:
     | Model | N. layers | Embedding dim. | N. attention heads | N. parameters | Context Len. | Vocab. size |
     |-------|-----------|----------------|--------------------|---------------|-------------|--------------|
+    | NanoLlama | 12 | 1024 | 16 | 304 M | 2048 | 32000 |
     | TinyLlama | 22 | 2048 | 32 | 1.1 B | 2048 | 32000 |
     | Llama 2 | 32 | 4096 | 32 | 7 B | 4096 | 32000 |
     | Llama 3 | 32 | 4096 | 32 | 8B | 8192 | 128000 |
@@ -374,7 +387,7 @@ split it in at least 3 chunks.
 
 ---
 
-Time vs. number of tokens, NanoLlama 300M.
+Time vs. number of tokens, NanoLlama 304M.
 This toy model is based on the Llama 2 architecture and it can run on a single
 Nvidia Jetson.
 

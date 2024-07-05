@@ -35,7 +35,8 @@ import cherrypy as cp
 import torch
 
 from sub.config import DEVICE as DEFAULT_DEVICE
-from sub.config import DTYPE, N_LAYERS_NODES, TEMPERATURE, TOP_K
+from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
+                        TEMPERATURE, TOP_K)
 from sub.connections import InputNodeConnection, OutputNodeConnection
 from sub.model import Config, KVCache, sample
 from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
@@ -43,8 +44,9 @@ from sub.prompts import (PromptStyle, get_user_prompt, has_prompt_style,
 from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.typing import FileType
-from sub.utils import (count_transformer_blocks, find_eot, load_sd,
-                       loading_bar, plot_tokens_per_time)
+from sub.utils import (catch_loop_errors, count_transformer_blocks,
+                       detect_stop_tokens, find_eot, load_sd,
+                       plot_tokens_per_time, waiting_animation)
 
 # -------------------------------------------------------------------------------------
 
@@ -71,16 +73,38 @@ class GPTServer:
     prev_node: Optional[Dict] = None
     model_params: Optional[Dict] = None
     model_config: Optional[Config] = None
-    n_samples: Optional[int] = None
     model_type = None
 
-    # True iff the model has been initialized and it is ready to perform inference.
-    running: bool = False
+    # Number of samples that have been requested so far in the current run:
+    n_samples: int = 0
+    # Map sample ID to n. of iteration - initialized to 0 when new sample is created
+    iter_ind: Dict[int, int] = {}
+
+    T_i: Dict[int, int] = {}  # Contains size of context of each prompt
+    # Will contain the input pos. of all samples:
+    input_pos: Dict[int, torch.Tensor] = {}
+    kvcaches: Dict[int, List[KVCache]] = {}
+
+    # Set iff the model has been initialized and it is ready to perform inference.
+    running = threading.Event()
+    running.clear()
 
     # Connections
     conn_to_next: Optional[OutputNodeConnection] = None
     conn_to_prev: Optional[InputNodeConnection] = None
 
+    """
+    Message format:
+    - Sample index: unique ID of the sample; used to select correct cache
+    - Data: activation - tensor
+    - stop: flag; if set to True, it is used to advertise the end of generation for the
+        current sample (by ID)
+
+    NOTE: if set to True, DO NOT PROCESS DATA (should be empty);
+
+    This logic allows to delete caches for completed samples and make samples
+    independent.
+    """
     msg_format = {"sample_index": 0, "data": None, "stop": False}
 
     # Input message queue
@@ -91,6 +115,13 @@ class GPTServer:
     out_message_queue = deque([])
     out_queue_not_empty = threading.Event()
     out_queue_not_empty.clear()
+
+    # Response queue - used to pass generated responses from loop to HTTP server
+    resp_msg_template = {}  # TODO: use Ollama's syntax
+    resp: Mapping[int, Dict] = {}  # Will contain the generated message for each sample
+    resp_finished: Mapping[int, threading.Event] = (
+        {}
+    )  # Used to advertise generation end and make server look for message in self.resp
 
     # Some model configs:
     top_k = TOP_K
@@ -113,6 +144,7 @@ class GPTServer:
         chunk_path: Optional[FileType] = None,
         tokenizer_dir: Optional[FileType] = None,
         model_device: Optional[str] = None,
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -163,6 +195,15 @@ class GPTServer:
             self.max_seq_length = None
 
         self.compile = False if "compile" not in kwargs else kwargs["compile"]
+        self.use_default_dtype = dtype is None
+        self.dtype = dtype if dtype else DTYPE  # Default
+        self.ptdtype = DTYPE_TORCH_MAPPING[self.dtype]
+        if self.dtype == "bfloat16" and (
+            not torch.cuda.is_available() or not torch.cuda.is_bf16_supported()
+        ):
+            raise ValueError(
+                "Specified bfloat16, but the host does not support this format"
+            )
 
         self.node_type = node_type
         self.node_config = node_config
@@ -238,6 +279,10 @@ class GPTServer:
             # Initialize tokenizer
             self._load_tokenizer(self.tokenizer_dir)
 
+            # Standalone:
+            if self.n_nodes == 1:
+                self.out_message_queue = self.in_message_queue
+                self.out_queue_not_empty = self.in_queue_not_empty
         else:
             # model_config and chunk_path may be absent!
             self.model_config = model_config  # May be None
@@ -319,7 +364,7 @@ class GPTServer:
 
     def launch_starter(
         self, n_samples: int, max_tokens: int, prompt: Optional[str] = None
-    ) -> Tuple[List[str], int]:
+    ) -> Tuple[List[str], List[Tuple[int, float]]]:
         """
         Launch processing thread in starter node.
 
@@ -407,7 +452,7 @@ class GPTServer:
             assert max_new_tokens is not None
 
             self.n_samples = n_samples
-            self.running = True
+            self.running.set()
             self._launch_queue_threads()
 
             if VERB:
@@ -416,7 +461,9 @@ class GPTServer:
                 )
             logger_wp.info("Starting generation loop")
 
-            out_text, gen_time = self._starter_loop(n_samples, max_new_tokens, prompt)
+            out_text, gen_time = self._starter_loop(
+                n_samples, prompt, max_new_tokens=max_new_tokens
+            )
 
             if metrics is not None:
                 # NOTE: this allows to return values even if this method is on a
@@ -426,7 +473,7 @@ class GPTServer:
         else:
             assert self.next_node is not None and self.prev_node is not None
             # Secondary node
-            self.running = True
+            self.running.set()
             self._launch_queue_threads()
             if VERB:
                 print("[INFO] Starting generation loop")
@@ -436,17 +483,17 @@ class GPTServer:
     def stop_generation(self) -> int:
         try:
             time.sleep(2)
-            self.running = False  # Redundant, but ok
+            self.running.clear()  # Redundant, but ok
             if "starter" not in self.role:
                 if VERB:
                     print("Stopping main thread")
                 self.inference_thread.join()
-            if self.n_nodes > 1:
+            if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
                 if VERB:
                     print("Stopping input queue thread")
                 self.conn_to_prev.shutdown()
                 if VERB:
-                    print("Stopping input queue thread")
+                    print("Stopping output queue thread")
                 self.conn_to_next.shutdown()
             return 1
         except:
@@ -597,9 +644,16 @@ class GPTServer:
             if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
                 model_dtype = torch.bfloat16
 
+        if self.use_default_dtype:
+            self.ptdtype = model_dtype
+        elif self.ptdtype != model_dtype:
+            # Here if user provided dtype and it does not match
+            warnings.warn(f"Casting model from {model_dtype} to {self.ptdtype}")
+            model_dtype = self.ptdtype
+
         if VERB:
             print("Initializing local model")
-            print(f"Using {model_dtype}")
+            print(f"Using dtype {model_dtype}")
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         self.model = Model_class(self.model_config, n_transf_layers)
@@ -665,17 +719,51 @@ class GPTServer:
         if VERB:
             print("Tokenizer and prompt style have been loaded!")
 
+    def _init_sample_caches(self, id, idx):
+        """
+        Initialize the model cache for the new sample `idx` with ID: `id`, using a
+        specified dtype.
+
+        Args:
+            id: sample ID
+            idx: new sample (encoded prompt)
+            dtype: desired dtype for the KV caches
+
+        Returns:
+            Cache length (T_i)
+            Input position tensor (input_pos)
+            KV cache for the sumbodel (kvcaches)
+        """
+        assert self.model is not None
+
+        self.T_i[id] = idx.size(1)
+        self.input_pos[id] = torch.arange(
+            0, self.T_i[id], device=self.torch_model_device
+        )
+        kvc_sublist: List[KVCache] = []
+        for _, block in enumerate(self.model.transformer.h):
+            # Build kv cache individually for each attn layer
+            kvc_sublist.append(
+                block.attn.build_kv_cache(
+                    batch_size=1,
+                    max_seq_length=self.model.max_seq_length,
+                    rope_cache_length=self.model.cos.size(-1),
+                    device=self.torch_model_device,
+                    dtype=self.ptdtype,
+                )
+            )
+        self.kvcaches[id] = kvc_sublist
+
+    # ---- Main Loops -----------------------------------------------------------------
+
     def _starter_loop(
-        self, n_samples: int, max_new_tokens: int, prompt: Optional[str] = None
-    ) -> Tuple[List[str], float]:
+        self, n_samples: int, prompt: Optional[str] = None, **kwargs
+    ) -> Tuple[List[str], List[Tuple[int, float]]]:
         """
         Generation loop for the starter node only.
-        This loop has a finite duration, as the starter knows what is the length of the
-        samples to be generated.
 
         Args:
             n_samples: number of produced samples
-            max_new_tokens: maximum number of tokens
             prompt: either the prompt itself or a string of the type "FILE:<prompt.txt>"
                 containing each prompt as a separate paragraph
 
@@ -686,6 +774,16 @@ class GPTServer:
         assert self.model_config is not None and self.model is not None
         assert self.model_device is not None
 
+        #
+        # TODO
+        # Starter loop should become agnostic of n_samples (it will work on-demand
+        #
+        # The prompt will need to be processed "outside", e.g., by the POST
+        #
+        # Will probably be able to "unify" this part of code before the actual loop for
+        # both types of nodes - then _starter_loop and _secondary_loop could be
+        # streamlined to just contain what's inside the "while"
+        #
         if n_samples < 1:
             raise ValueError("Cannot generate less than 1 sample!")
         elif n_samples < self.n_nodes:
@@ -700,17 +798,14 @@ class GPTServer:
             device_type = "mps"
         else:
             device_type = "cpu"
-        ptdtype = {
-            "float32": torch.float32,
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-        }[DTYPE]
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=self.ptdtype)
         )
 
+        # <<<< TODO: replace - analogous operations to be executed in POST from user
+        # The POST should
         # Encode starting sequence - with prompt support
         if prompt is None:
             start = ["\n"] * n_samples
@@ -726,170 +821,170 @@ class GPTServer:
             self.tok.encode(txt, device=self.torch_model_device).view(1, -1)
             for txt in start_styled
         ]
-        prompt_lengths = {i: len(id.squeeze()) for i, id in enumerate(idx)}
+        # >>>>
 
         # Initialize RoPE cache and attention mask
         self.model.init_rope_mask(device=self.torch_model_device)
-        # Prompt size T and input_pos are now lists of n_samples elements
-        T_i: Mapping[int, int] = {}  # Contains size of context of each prompt
-        input_pos: Mapping[int, torch.Tensor] = (
-            {}
-        )  # Will contain the input pos. of all samples
-        kvcaches: Mapping[int, List[KVCache]] = {}
         self.model.eval()
 
+        # Starter Only
+        self.samples: Dict[int, torch.Tensor] = {}
+        self.prompt_lengths: Dict[int, int] = {}
+
+        # >>>> TODO: remove - will be done in POST
+        for i, samp in enumerate(idx):
+            self.in_message_queue.append(self._build_msg(samp, i))
+            self.prompt_lengths[i] = len(samp.squeeze())  # Length in tokens
+            self.iter_ind[i] = 0
+        self.in_queue_not_empty.set()
+
+        if "max_new_tokens" in kwargs:
+            # NOTE: can override the max. n. of tokens - must ensure
+            self.max_new_tokens = {
+                i: kwargs["max_new_tokens"] for i in range(len(self.prompt_lengths))
+            }
+            # Check max_new_tokens won't cause errors later
+            if not all(
+                [
+                    self.max_new_tokens[i] + self.prompt_lengths[i]
+                    <= self.model.max_seq_length
+                    for i in range(n_samples)
+                ]
+            ):
+                raise ValueError(
+                    f"Cannot generate {kwargs['max_new_tokens']} tokens - would exceed block size!"
+                )
+        else:
+            # The maximum number of tokens is the model's sequence length - prompt length
+            self.max_new_tokens = {
+                i: (self.model.max_seq_length - p_l)
+                for i, p_l in self.prompt_lengths.items()
+            }
+            assert all(
+                max_tok > 0 for max_tok in self.max_new_tokens.values()
+            ), "Some prompt is longer than the context length of the model"
+        # <<<<
+
+        event_stop = threading.Event()
+        loading_thread = threading.Thread(
+            target=waiting_animation, args=("Processing samples", event_stop)
+        )
+
         start_time = time.time()
+        n_tokens = 0
         if PLOTS:
             self.tok_time.append((0, 0))
-        with torch.no_grad():
-            with ctx:
-                total_iters = max_new_tokens * n_samples
-                first_glob_iter = True
-                for k in range(total_iters):
-                    logger_wp.info(f"Iter {k}")
-                    print(
-                        f"Generating: {loading_bar(k, total_iters, 20)} ({k}/{total_iters})",
-                        end="\r",
-                    )
-                    if PLOTS:
-                        self.tok_time.append((k, time.time() - start_time))
-                    # Identify sample
-                    sample_id = k % n_samples
 
-                    if k >= n_samples:
-                        first_glob_iter = False
-                        # We are not in the first iteration (k starts from 0)
-                        # can start processing messages from last secondary node
+        print("[INFO] Launching processing loop")
+        loading_thread.start()
+        with torch.inference_mode(), ctx, catch_loop_errors(
+            running_event=self.running, event_to_be_set=[event_stop]
+        ):
+            while self.running.is_set():
+                # Wait for queue to contain msg -- timeout allows to handle shutdown
+                if self.in_queue_not_empty.wait(timeout=2):
+                    in_msg = self.in_message_queue.popleft()
+                    if len(self.in_message_queue) < 1:
+                        self.in_queue_not_empty.clear()
 
-                        # Wait for queue to contain msg
-                        assert self.in_queue_not_empty.wait()
-
-                        in_msg = self.in_message_queue.popleft()
-                        if len(self.in_message_queue) < 1:
-                            self.in_queue_not_empty.clear()
-                        sample_in = in_msg["sample_index"]
-
-                        # Check correct order
-                        assert (
-                            sample_in == sample_id
-                        ), f"> ITER [{k}] - Received sample ID: {sample_in}, expected ID: {sample_id}"
-
-                        idx_from_fin = in_msg["data"].to(self.model_device)
-
-                        # NOTE: no KV caching here - no need to pass input_pos
-                        logits = self.model(idx_from_fin, first_pass=False)
-                        idx_next = sample(
-                            logits, temperature=self.temperature, top_k=self.top_k
-                        )
-                        idx_next = idx_next.view(1, -1)
-                        idx[sample_id] = torch.cat((idx[sample_id], idx_next), dim=1)
-                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
+                    if in_msg["stop"]:
+                        # The stopping message made the whole loop
+                        self.running.clear()  # TODO: remove
                     else:
-                        # First iter for this sample, init KV cache!
-                        T_i[k] = idx[sample_id].size(1)
-                        input_pos[k] = torch.arange(
-                            0, T_i[sample_id], device=self.torch_model_device
-                        )
+                        sample_id = in_msg["sample_index"]
+                        idx = in_msg["data"].to(self.model_device)
+                        stopping_detected = False
 
-                        if VERB:
-                            print(
-                                f"Initializing model cache - sample {sample_id}      "
+                        # Keep variable iter_ind[i] for each sample i
+                        if self.iter_ind[sample_id] >= 1:
+                            # We are not in the first iteration for this sample
+                            # --> Can start processing messages from last secondary node
+                            logits = self.model(idx, first_pass=False)
+                            idx_next = sample(
+                                logits,
+                                temperature=self.temperature,
+                                top_k=self.top_k,
                             )
-
-                        kvc_sublist: List[KVCache] = []
-                        for _, block in enumerate(self.model.transformer.h):
-                            # Build kv cache individually for each attn layer
-                            kvc_sublist.append(
-                                block.attn.build_kv_cache(
-                                    batch_size=1,
-                                    max_seq_length=self.model.max_seq_length,
-                                    rope_cache_length=self.model.cos.size(-1),
-                                    device=self.torch_model_device,
-                                    dtype=ptdtype,
-                                )
+                            idx_next = idx_next.view(1, -1)
+                            self.samples[sample_id] = torch.cat(
+                                (self.samples[sample_id], idx_next), dim=1
                             )
-                        kvcaches[k] = kvc_sublist
+                            # Detect stopping token sequence and possibly interrupt gen for current sample
+                            stopping_detected = detect_stop_tokens(
+                                self.samples[sample_id], self.stop_tokens
+                            )
+                            # Update input pos (will be used in next pass)
+                            self.input_pos[sample_id] = self.input_pos[sample_id][
+                                -1:
+                            ].add_(1)
 
-                    # Send to next iff not at the last token
-                    if k < (n_samples * (max_new_tokens - 1)):
-                        # NOTE: no support for ctx > block_size
-                        # idx_cond should be equal to idx_next if after 1st global iter
-                        idx_cond = (
-                            idx[sample_id]
-                            if first_glob_iter
-                            else idx[sample_id][:, -1].view(1, -1)
-                        )
+                            # Only add new token after it has been generated
+                            n_tokens += 1
+                            if PLOTS:
+                                self.tok_time.append((n_tokens, time.time() - start_time))
 
-                        # NOTE: Swap KVCache for correct sample
-                        curr_kvcache = kvcaches[sample_id]
-                        for ind_b, block in enumerate(self.model.transformer.h):
-                            block.attn.kv_cache = curr_kvcache[ind_b]
-
-                        # Forward in local model (first piece)
-                        idx_cond = self.model(idx_cond, input_pos[sample_id])
-
-                        # Send message
-                        out_msg = self._build_msg(idx_cond, sample_id)
-                        if self.conn_to_next and self.n_nodes > 1:
-                            self.out_message_queue.append(out_msg)
-                            self.out_queue_not_empty.set()
                         else:
-                            # Single-node scenario
-                            self.in_message_queue.append(out_msg)
-                            self.in_queue_not_empty.set()
+                            # First iteration for the current sample!
+                            # Begin list of samples
+                            self.samples[sample_id] = idx.view(1, -1)
+                            # First iter for this sample, init KV cache!
+                            self._init_sample_caches(sample_id, self.samples[sample_id])
 
-        tot_time = time.time() - start_time
-        if PLOTS:
-            self.tok_time.append((total_iters, tot_time))
-            # Store plotted points as csv file
-            os.makedirs(os.path.join(script_dir, "..", "logs"), exist_ok=True)
-            points_file_path = os.path.join(
-                script_dir,
-                "..",
-                "logs",
-                f"tokens_time_samples_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.csv",
-            )
-            if not os.path.exists(os.path.dirname(points_file_path)):
-                os.makedirs(os.path.dirname(points_file_path), exist_ok=True)
-            with open(points_file_path, "w") as f:
-                times = [x[1] for x in self.tok_time]
-                n_tok = [x[0] for x in self.tok_time]
-                for i in range(len(times)):
-                    f.write(f"{times[i]},{n_tok[i]}\n")
+                        # Send to next iff not at the last token
+                        if self.iter_ind[sample_id] < self.max_new_tokens[sample_id]:
+                            # Only propagate last token (KV cache) - OR all initial prompt if
+                            # 1st iter
+                            idx_cond = (
+                                self.samples[sample_id]
+                                if self.iter_ind[sample_id] == 0
+                                else self.samples[sample_id][:, -1].view(1, -1)
+                            )
 
-            plot_tokens_per_time(
-                self.tok_time,
-                out_path=os.path.join(
-                    script_dir,
-                    "..",
-                    "img",
-                    f"tokens_time_{self.n_nodes}nodes_{self.model_type}_{n_samples}samples.png",
-                ),
-            )
+                            # NOTE: Swap KVCache for correct sample
+                            curr_kvcache = self.kvcaches[sample_id]
+                            for ind_b, block in enumerate(self.model.transformer.h):
+                                block.attn.kv_cache = curr_kvcache[ind_b]
 
-        # Send stop message to the next (no queue used)
-        if VERB:
-            print("[INFO] Sending stopping message over socket  ")
-        self.out_message_queue.append(self._build_msg("", -1, stop=True))
-        self.out_queue_not_empty.set()
-        self.running = False
+                            # Forward in local model (first piece)
+                            idx_cond = self.model(idx_cond, self.input_pos[sample_id])
+
+                            # Send message
+                            out_msg = self._build_msg(idx_cond, sample_id)
+                        else:
+                            # Generation finished
+                            print(f"[DEBUG] Finished sample {sample_id}")
+                            # TODO: decode and place msg in self.resp
+                            # Also set resp_queue_not_empty to advertise sample
+
+                            # Transmit msg with 'stop': true for this sample ID
+                            out_msg = self._build_msg(
+                                data="", sample_index=sample_id, stop=True
+                            )
+
+                        # UPDATE ITERATION COUNT FOR SAMPLE
+                        self.iter_ind[sample_id] += 1
+
+                        # NOTE: message queues will be the same if running in standalone!
+                        self.out_message_queue.append(out_msg)
+                        self.out_queue_not_empty.set()
+
         if VERB:
             print("[INFO] Generation completed!                          ")
         logger_wp.info("Generation completed")
 
         out_truncated = [
-            find_eot(smp, self.stop_tokens, prompt_lengths[i])
-            for i, smp in enumerate(idx)
+            find_eot(smp, self.stop_tokens, self.prompt_lengths[i])
+            for i, smp in self.samples.items()
         ]
         if VERB:
             print("Truncated samples:")
             for i, smp in enumerate(out_truncated):
                 print(
-                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(idx[i].squeeze())}"
+                    f"- Sample {i} truncated to {len(smp.squeeze())}/{len(self.samples[i].squeeze())}"
                 )
         out_samples = [self.tok.decode(smp) for smp in out_truncated]
 
-        return out_samples, tot_time
+        return out_samples, self.tok_time
 
     def _secondary_loop(self):
         """
@@ -910,82 +1005,63 @@ class GPTServer:
             device_type = "mps"
         else:
             device_type = "cpu"
-        ptdtype = {
-            "float32": torch.float32,
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-        }[DTYPE]
         ctx = (  # Use autocast if on cuda or cpu (MPS not supported yet)
             nullcontext()
             if device_type == "mps"
-            else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+            else torch.amp.autocast(device_type=device_type, dtype=self.ptdtype)
         )
 
         # Allow node to be 100% agnostic of the system! If it receives a sample with a
         # new ID, it will initialize the caches for that sample on the fly!
         self.model.init_rope_mask(device=self.torch_model_device)
-        kvcaches: Mapping[int, List[KVCache]] = {}
-        T_i: Mapping[int, int] = {}  # Contains size of context of each prompt
-        input_pos: Mapping[int, torch.Tensor] = {}
-
         self.model.eval()
 
-        loopsigns = ["|", "/", "-", "\\"]
+        event_stop = threading.Event()
+        loading_thread = threading.Thread(
+            target=waiting_animation, args=("Processing samples", event_stop)
+        )
         iter = 0
         first_glob_iter = True  # True for the first n_samples iters
-        with torch.no_grad():
-            with ctx:
-                while self.running:
-                    logger_wp.info(f"Iter {iter}")
 
-                    assert self.in_queue_not_empty.wait()
-
+        print("[INFO] Launching processing loop")
+        loading_thread.start()
+        with ctx, torch.inference_mode(), catch_loop_errors(
+            running_event=self.running, event_to_be_set=[event_stop]
+        ):
+            while self.running.is_set():
+                if self.in_queue_not_empty.wait(timeout=2):
                     # Extract message from queue
                     in_msg = self.in_message_queue.popleft()
                     if len(self.in_message_queue) <= 0:
                         self.in_queue_not_empty.clear()
 
-                    if "stop" in in_msg and in_msg["stop"]:
-                        print("[DEBUG] Received stopping message over socket")
-                        self.running = False  # Redundant
+                    sample_id = in_msg["sample_index"]
 
-                    if self.running:
-                        sample_id = in_msg["sample_index"]
+                    if "stop" in in_msg and in_msg["stop"]:
+                        print(f"[DEBUG] Finished sample {sample_id}")
+                        # TODO: delete variables for sample id
+
+                        self.out_message_queue.append(in_msg)
+                        self.out_queue_not_empty.set()
+                    else:
                         if iter >= self.n_samples:
                             first_glob_iter = False
 
                         idx = in_msg["data"].to(self.torch_model_device)
-                        if sample_id not in T_i:
+                        if sample_id not in self.T_i:
                             assert (
                                 first_glob_iter
                             ), "Should have seen this sample already..."
                             # Initialization of the input_pos
-                            T_i[sample_id] = idx.size(1)
-                            input_pos[sample_id] = torch.arange(
-                                0, T_i[sample_id], device=self.torch_model_device
-                            )
-                            kvc_sublist: List[KVCache] = []
-                            for block in self.model.transformer.h:
-                                # Build kv cache individually for each attn layer
-                                kvc_sublist.append(
-                                    block.attn.build_kv_cache(
-                                        batch_size=1,
-                                        max_seq_length=self.model.max_seq_length,
-                                        rope_cache_length=self.model.cos.size(-1),
-                                        device=self.torch_model_device,
-                                        dtype=ptdtype,
-                                    )
-                                )
-                            kvcaches[sample_id] = kvc_sublist
+                            self._init_sample_caches(sample_id, idx)
 
-                        print(f"> Generating {loopsigns[iter % 4]}", end="\r")
                         # Swap KVCache
-                        curr_kvcache = kvcaches[sample_id]
+                        curr_kvcache = self.kvcaches[sample_id]
                         for ind_b, block in enumerate(self.model.transformer.h):
                             block.attn.kv_cache = curr_kvcache[ind_b]
 
                         # Forward pass
-                        outs = self.model(idx, input_pos=input_pos[sample_id])
+                        outs = self.model(idx, input_pos=self.input_pos[sample_id])
 
                         # Build msg
                         out_msg = self._build_msg(outs, sample_id)
@@ -993,15 +1069,10 @@ class GPTServer:
                         self.out_message_queue.append(out_msg)
                         self.out_queue_not_empty.set()
 
-                        input_pos[sample_id] = input_pos[sample_id][-1:].add_(1)
-                        iter += 1
-                    else:
-                        print("> Generation completed!")
-                        self.out_message_queue.append(
-                            self._build_msg("", -1, stop=True)
+                        self.input_pos[sample_id] = self.input_pos[sample_id][-1:].add_(
+                            1
                         )
-                        self.out_queue_not_empty.set()
-                        self.running = False
+                        iter += 1
 
         if VERB:
             print("Node inference loop stopped")
@@ -1038,7 +1109,7 @@ class GPTServer:
             self.node_type is None or "secondary" in self.node_type
         ) and self.model is None:  # Only for non-init nodes
             if len(path) > 0 and path[0] == "init":
-                assert not self.running
+                assert not self.running.is_set()
                 init_msg = pickle.loads(cp.request.body.read())
                 if self.node_type is None:
                     self.node_type = init_msg["role"]
@@ -1121,7 +1192,7 @@ class GPTServer:
                 self._end_thr.start()
                 # self._end_thr.join()  # cannot wait, since thread stops server
                 if VERB:
-                    print("[INFO] Node stopped!")
+                    print("[INFO] Node stopped through PUT request!")
                 logger_wp.info("Received stopping directive")
                 cp.response.status = 200
             else:

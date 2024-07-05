@@ -1,5 +1,6 @@
 import os
 import pickle
+import signal
 import socket
 import threading
 import time
@@ -169,12 +170,15 @@ class InputNodeConnection(NodeConnection):
         """
         full_msg = b""
         while self.running.is_set() and len(full_msg) < size:
-            msg = self.sock_to_prev_properties[0].recv(size - len(full_msg))
-            if not msg:
-                # Prev node shut connection down (error)
-                print("[THR] Connection was terminated unexpectedly!")
+            try:
+                msg = self.sock_to_prev_properties[0].recv(size - len(full_msg))
+                if not msg:
+                    # Prev node shut connection down (error)
+                    print("[THR] Connection was terminated unexpectedly!")
+                    self.running.clear()
+                full_msg += msg
+            except OSError:
                 self.running.clear()
-            full_msg += msg
             if not self.running.is_set():
                 break
         return full_msg
@@ -190,7 +194,11 @@ class InputNodeConnection(NodeConnection):
             msg = self.recv_msg(HEADERLENGTH)
 
             # Extract message length from the header
-            msg_len = int(msg[:HEADERLENGTH])
+            try:
+                msg_len = int(msg[:HEADERLENGTH])
+            except ValueError:
+                self.running.clear()
+                break
             _n_recv_msg += 1
 
             # Read payload (exact size - this is important)
@@ -202,25 +210,15 @@ class InputNodeConnection(NodeConnection):
                 # FIXME: maybe trigger shutdown by clearing self.running?
                 pass
             else:
-                # Look for stopping msg
-                if "stop" in data and data["stop"] == True:
-                    # Stopping sequence
-                    if self.verb:
-                        print("[THR] Stopping message received! Generation complete!")
-                    self.message_queue.append(data)
-                    self.queue_not_empty.set()
-                    # FIXME - APP: shouldn't interrupt loop - stop is only for the specific sample
-                    self.running.clear()
-                else:  # Not here if stopping message is received
-                    self.message_queue.append(data)
-                    self.queue_not_empty.set()
+                self.message_queue.append(data)
+                self.queue_not_empty.set()
 
         if self.verb:
             print("[THR] Input queue thread stopped")
 
     def shutdown(self):
         self.running.clear()
-        self.running_thread.join()
+        self.running_thread.join(timeout=3)
         if self.verb:
             print("[THR] Closing input socket")
         try:
@@ -345,19 +343,13 @@ class OutputNodeConnection(NodeConnection):
 
     def run(self):
         while self.running.is_set():
-            assert self.queue_not_empty.wait()
+            # Adding a timeout prevents total blocking and makes shutdown easier
+            # if it times out without rx msg, it will check again the while condition
+            if self.queue_not_empty.wait(timeout=2):
+                tx_msg = self.message_queue.popleft()
+                if len(self.message_queue) < 1:
+                    self.queue_not_empty.clear()
 
-            tx_msg = self.message_queue.popleft()
-            if len(self.message_queue) < 1:
-                self.queue_not_empty.clear()
-
-            if "stop" in tx_msg and tx_msg["stop"]:
-                if self.verb:
-                    print("[THR] Transmitting stopping message")
-                self.send_msg(tx_msg)
-                # FIXME - APP: should not stop everything
-                self.running.clear()
-            else:
                 self.send_msg(tx_msg)
 
         if self.verb:

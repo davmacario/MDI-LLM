@@ -185,18 +185,15 @@ class StarterNode(NodePrototype):
         if not self.params_init:
             raise ValueError("The model parameters have not been initialized!")
 
-        T = idx.size(1)
-        if self.max_seq_length < T:
-            raise ValueError(
-                f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}."
-            )
-
         if first_pass:
-            _, t = idx.shape  # Batch x (Time dimension)
-            if t > self.config.block_size:
+            B, T = idx.shape  # Batch x (Time dimension)
+            if T > self.config.block_size:
                 raise ValueError(
-                    f"Cannot forward sequence of length {t}, as block size (context length) is {self.config.block_size}"
+                    f"Cannot forward sequence of length {T}, as block size (context length) is {self.config.block_size}"
                 )
+
+            if B > 1:
+                raise NotImplementedError("Currently supporting batch sizes = 1 only")
 
             if input_pos is not None:  # use the kv cache
                 cos = self.cos.index_select(0, input_pos)
