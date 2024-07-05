@@ -87,6 +87,10 @@ N_LAYERS_NODES = {
         36: {"N_LAYERS_START": 10, "N_LAYERS_SECONDARY": 13},  # gpt2-large
         48: {"N_LAYERS_START": 14, "N_LAYERS_SECONDARY": 17},  # gpt2-xl
     },
+    4: {
+        22: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 6},
+        32: {"N_LAYERS_START": 8, "N_LAYERS_SECONDARY": 12},
+    },
 }
 
 HEADERLENGTH = 16  # Header length in chars

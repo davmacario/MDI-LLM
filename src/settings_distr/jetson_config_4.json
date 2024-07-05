@@ -1,0 +1,53 @@
+{
+  "nodes": {
+    "starter": {
+      "addr": "10.7.48.46",
+      "communication": {
+        "port": 8088
+      },
+      "inference": {
+        "port_in": 5088,
+        "port_out": 5089
+      },
+      "device": "cuda"
+    },
+    "secondary": [
+      {
+        "addr": "10.7.48.12",
+        "communication": {
+          "starter_addr": "10.7.48.46",
+          "port": 8089
+        },
+        "inference": {
+          "port_in": 5090,
+          "port_out": 5091
+        },
+        "device": "cuda"
+      },
+      {
+        "addr": "10.7.48.88",
+        "communication": {
+          "starter_addr": "10.7.48.46",
+          "port": 8090
+        },
+        "inference": {
+          "port_in": 5092,
+          "port_out": 5093
+        },
+        "device": "cuda"
+      },
+      {
+        "addr": "10.7.48.53",
+        "communication": {
+          "starter_addr": "10.7.48.46",
+          "port": 8090
+        },
+        "inference": {
+          "port_in": 5092,
+          "port_out": 5093
+        },
+        "device": "cuda"
+      }
+    ]
+  }
+}
