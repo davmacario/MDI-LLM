@@ -89,7 +89,7 @@ N_LAYERS_NODES = {
     },
     4: {
         22: {"N_LAYERS_START": 4, "N_LAYERS_SECONDARY": 6},
-        32: {"N_LAYERS_START": 8, "N_LAYERS_SECONDARY": 12},
+        32: {"N_LAYERS_START": 5, "N_LAYERS_SECONDARY": 9},
     },
     5: {
         22: {"N_LAYERS_START": 2, "N_LAYERS_SECONDARY": 5},
