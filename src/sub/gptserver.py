@@ -653,7 +653,8 @@ class GPTServer:
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         # self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
-        self.model = Model_class(self.model_config, n_transf_layers).to("meta")
+        with torch.device("meta"):
+            self.model = Model_class(self.model_config, n_transf_layers)
 
         if VERB:
             print("Loading parameters")
