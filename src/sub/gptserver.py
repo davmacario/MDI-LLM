@@ -652,16 +652,17 @@ class GPTServer:
             print("Initializing empty local model")
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
-        # self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
-        with torch.device("meta"):
-            self.model = Model_class(self.model_config, n_transf_layers)
+        try:
+            self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
+        except:
+            self.model = Model_class(self.model_config, n_transf_layers).to("meta")
 
         if VERB:
             print("Loading parameters")
 
         if model_path:
             # By default, use cpu
-            model_parameters = load_sd(model_path)
+            model_parameters = load_sd(model_path, mmap=True)
         assert model_parameters is not None
 
         # Check n. of detected parameters are consistent with chunk (count_transformer_blocks)
