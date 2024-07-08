@@ -18,12 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Any, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 
 from sub.model import Block, Config, build_mask_cache, build_rope_cache
+from .utils import init_from_state_dict
 
 """
 This file contains the definitions of the different nodes in the MDI architecture.
@@ -157,9 +158,10 @@ class StarterNode(NodePrototype):
         )
         self.max_seq_length = self.config.block_size
 
-    def load_weights(self, params: Mapping[str, Any]) -> int:
+    def load_weights(self, params: Dict[str, Any], **kwargs) -> int:
         """Load sub-model weights"""
-        self.load_state_dict(params)
+        # self.load_state_dict(params, **kwargs)
+        init_from_state_dict(self, params)
         self.params_init = True
         if self.verb:
             print(f"Weights loaded!")
@@ -248,9 +250,10 @@ class SecondaryNode(NodePrototype):
         )
         self.max_seq_length = self.config.block_size
 
-    def load_weights(self, params: Mapping[str, Any]) -> int:
+    def load_weights(self, params: Dict[str, Any], **kwargs) -> int:
         """Load weights"""
-        self.load_state_dict(params)
+        # self.load_state_dict(params, **kwargs)
+        init_from_state_dict(self, params)
         self.params_init = True
         if self.verb:
             print(f"Weights loaded!")

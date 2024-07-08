@@ -510,7 +510,7 @@ def load_sd(
     try:
         sd = torch.load(model_path, map_location=device)
     except Exception as e:
-        if 'out of memory' in str(e):
+        if "out of memory" in str(e):
             if device != "cpu":
                 warnings.warn(
                     f"Unable to fit model ckpt in {device} memory! Retrying with cpu"
@@ -609,3 +609,54 @@ def save_config(config: "Config", checkpoint_dir: Path) -> None:
     config_dict = asdict(config)
     with open(checkpoint_dir / "model_config.yaml", "w", encoding="utf-8") as fp:
         yaml.dump(config_dict, fp)
+
+
+def init_from_state_dict(model: nn.Module, state_dict: Dict[str, Any]) -> nn.Module:
+    """
+    This method is used to fill up a model (`torch.nn.Module`) that is currently loaded
+    as "meta" (i.e., empty) with the parameters and buffers stored in `state_dict`.
+
+    Args:
+        model: empty model (stored in "meta")
+        state_dict
+        device (optional): if missing will be the same as the device of state_dict
+    """
+    if not next(model.parameters()).device == torch.device("meta"):
+        raise RuntimeError("The model is not on 'meta' - it is using memory space")
+
+    keys_to_submodule = get_keys_to_submodule(model)
+    for key, submodule in keys_to_submodule.items():
+        # get the value from the state_dict
+        val = state_dict[key]
+        # The key is composed of <name>.<subname>.<subsubname>
+        # The actual submodule's parameter is stored inside the last subname.
+        # E.g., if key is `in_proj.weight`, the correct field if `weight`
+        param_name = key.split('.')[-1]
+        # Keep the dtype of the state dict
+        val = val
+        # Create a new parameter
+        new_val = torch.nn.Parameter(val, requires_grad=False)
+        setattr(submodule, param_name, new_val)
+
+    return model
+
+
+def get_keys_to_submodule(model: nn.Module) -> Dict[str, nn.Module]:
+    keys_to_submodule = {}
+    # iterate all submodules
+    for submodule_name, submodule in model.named_modules():
+        # iterate all paramters in each submobule
+        for param_name, param in submodule.named_parameters():
+            # param_name is organized as <name>.<subname>.<subsubname> ...
+            # the more we go deep in the model, the less "subname"s we have
+            splitted_param_name = param_name.split('.')
+            # if we have only one subname, then it means that we reach a "leaf" submodule, 
+            # we cannot go inside it anymore. This is the actual parameter
+            is_leaf_param = len(splitted_param_name) == 1
+            if is_leaf_param:
+                # we recreate the correct key
+                key = f"{submodule_name}.{param_name}"
+                # we associate this key with this submodule
+                keys_to_submodule[key] = submodule
+                
+    return keys_to_submodule

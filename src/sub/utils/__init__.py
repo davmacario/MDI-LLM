@@ -9,7 +9,7 @@ from .utils import (count_transformer_blocks, deserialize_params,
                     detect_stop_tokens, estimate_loss, find_eot, get_lr,
                     get_obj_size, load_from_hf, load_from_pt, load_sd,
                     loading_bar, remove_prefix, serialize_params,
-                    split_and_store, split_parameters, waiting_animation)
+                    split_and_store, split_parameters, waiting_animation, init_from_state_dict)
 from .context_managers import catch_loop_errors
 
 __all__ = [
@@ -38,4 +38,5 @@ __all__ = [
     "detect_stop_tokens",
     "waiting_animation",
     "catch_loop_errors",
+    "init_from_state_dict",
 ]

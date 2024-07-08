@@ -261,20 +261,10 @@ class GPTServer:
                 ]
             )
             # Load chunk
-            model_params = load_sd(self.model_path)
-            # Check n. of detected parameters are consistent with chunk (count_transformer_blocks)
-            n_layers_detect = count_transformer_blocks(model_params)
-            if self.n_layers_local != n_layers_detect:
-                raise ValueError(
-                    f"The number of detected transformer blocks ({n_layers_detect}) is "
-                    f"different from the expected one {self.n_layers_local}; please "
-                    "re-run the model partition or check the configuration!"
-                )
-            self._init_model(model_params, self.n_layers_local)
-            # Clear memory of model_params
-            del model_params
-            model_params = None
-            gc.collect()
+            self._init_model(
+                self.n_layers_local,
+                model_path=self.model_path,
+            )
 
             # Initialize tokenizer
             self._load_tokenizer(self.tokenizer_dir)
@@ -623,7 +613,13 @@ class GPTServer:
         if VERB:
             print(f"Using device: {self.model_device}")
 
-    def _init_model(self, model_parameters: Dict[str, Any], n_transf_layers: int):
+    def _init_model(
+        self,
+        n_transf_layers: int,
+        *,
+        model_path: Optional[Path] = None,
+        model_parameters: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize the node's model chunk and move it to the target device
         (self.model_device).
@@ -632,42 +628,77 @@ class GPTServer:
             model_parameters: state dict containing the weights - will be emptied
             n_transf_layers: number of transformer layers of the local model; required
                 for initializing the submodel.
+            *
+            model_path: if present, it is the path in the local file system where
+                the model chunk is found
+            model_parameters: alternatively, the model parameters may already be present in
+                memory (e.g., loaded previously or received by starter node)
         """
         assert self.model_config is not None, "No model configuration was found!"
         assert self.model is None, "The model was already initialized!"
         assert self.model_device is not None, "No device was specified"
 
-        model_dtype = torch.float32
-        if all([v.dtype == torch.float16 for v in model_parameters.values()]):
-            model_dtype = torch.float16
-        elif all([v.dtype == torch.bfloat16 for v in model_parameters.values()]):
-            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-                model_dtype = torch.bfloat16
+        if not (model_path or model_parameters):
+            raise ValueError(
+                "At least one between model_path and model_parameters must be nonempty"
+            )
+
+        # TODO:
+        # 1. load empty model
+        # 2. load weights from disk
+        # 3. if the dtype was overridden, cast weights
+        # 4. load parameters to model
+        if VERB:
+            print("Initializing empty local model")
+
+        Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
+        # self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
+        self.model = Model_class(self.model_config, n_transf_layers).to("meta")
+
+        if VERB:
+            print("Loading parameters")
+
+        if model_path:
+            # By default, use cpu
+            model_parameters = load_sd(model_path)
+        assert model_parameters is not None
+
+        # Check n. of detected parameters are consistent with chunk (count_transformer_blocks)
+        n_layers_detect = count_transformer_blocks(model_parameters)
+        if n_transf_layers != n_layers_detect:
+            raise ValueError(
+                f"The number of detected transformer blocks ({n_layers_detect}) is "
+                f"different from the expected one {n_transf_layers}; please "
+                "re-run the model partition or check the configuration!"
+            )
 
         if self.use_default_dtype:
-            self.ptdtype = model_dtype
-        elif self.ptdtype != model_dtype:
-            # Here if user provided dtype and it does not match
-            warnings.warn(f"Casting model params from {model_dtype} to {self.ptdtype}")
-            model_dtype = self.ptdtype
-        
+            self.ptdtype = torch.float32
+            if all([v.dtype == torch.float16 for v in model_parameters.values()]):
+                self.ptdtype = torch.float16
+            elif all([v.dtype == torch.bfloat16 for v in model_parameters.values()]):
+                if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                    self.ptdtype = torch.bfloat16
+
+        model_dtype = self.ptdtype
+
         model_parameters = {k: v.to(model_dtype) for k, v in model_parameters.items()}
 
         if VERB:
-            print("Initializing local model")
             print(f"Using dtype {model_dtype}")
 
-        Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
-        self.model = Model_class(self.model_config, n_transf_layers)
-        self.model = self.model.to(model_dtype)
-        self.model.load_weights(model_parameters)
+        self.model.load_weights(model_parameters, assign=True)
         if self.max_seq_length:
             print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
             self.model.max_seq_length = self.max_seq_length
         else:
             # Use default value
             self.max_seq_length = self.model.max_seq_length
-        self.model = self.model.to(self.torch_model_device)
+
+        self.model = self.model.to(model_dtype).to(self.torch_model_device)  # Probably useless
+        print(self.model.state_dict())
+        # self.model = self.model.to_empty(device=self.torch_model_device)
+        # print(self.model.state_dict())
 
         if self.compile and hasattr(torch, "compile"):
             if VERB:
@@ -684,6 +715,10 @@ class GPTServer:
             warnings.warn(
                 f"Installed torch version ({version('torch')}) does not support compiling models"
             )
+
+        del model_parameters
+        model_parameters = None
+        gc.collect()
 
     def _load_tokenizer(self, tokenizer_dir: FileType):
         """
@@ -898,6 +933,7 @@ class GPTServer:
 
                         # Keep variable iter_ind[i] for each sample i
                         if self.iter_ind[sample_id] >= 1:
+                            print("OUTPUT")
                             # We are not in the first iteration for this sample
                             # --> Can start processing messages from last secondary node
                             logits = self.model(idx, first_pass=False)
@@ -922,7 +958,9 @@ class GPTServer:
                             # Only add new token after it has been generated
                             n_tokens += 1
                             if PLOTS:
-                                self.tok_time.append((n_tokens, time.time() - start_time))
+                                self.tok_time.append(
+                                    (n_tokens, time.time() - start_time)
+                                )
 
                         else:
                             # First iteration for the current sample!
@@ -1113,7 +1151,7 @@ class GPTServer:
                 assert not self.running.is_set()
                 init_msg = pickle.loads(cp.request.body.read())
                 if self.node_type is None:
-                    self.node_type = init_msg["role"]
+                    self.role = self.node_type = init_msg["role"]
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
                 # Assume model config is not initialized
@@ -1129,7 +1167,13 @@ class GPTServer:
                 if "params" in init_msg:
                     if VERB:
                         print("Received parameters from starter")
-                    chunk_sd = init_msg["params"]
+                    self._init_model(
+                        self.n_layers_local, model_parameters=init_msg["params"]
+                    )
+                    # Clear memory of model_params
+                    del init_msg["params"]
+                    init_msg["params"] = None
+                    gc.collect()
                 else:
                     if self.model_path is None:
                         raise RuntimeError(
@@ -1139,22 +1183,7 @@ class GPTServer:
                         )
                     if VERB:
                         print("Loading parameters from disk")
-                    chunk_sd = load_sd(self.model_path)
-
-                # Check
-                n_layers_detect = count_transformer_blocks(chunk_sd)
-                if self.n_layers_local != n_layers_detect:
-                    raise ValueError(
-                        f"The number of detected transformer blocks ({n_layers_detect}) is "
-                        f"different from the expected one {self.n_layers_local}; please "
-                        "re-run the model partition or check the configuration!"
-                    )
-
-                self._init_model(chunk_sd, self.n_layers_local)
-                # Clear memory of model_params
-                del chunk_sd
-                chunk_sd = None
-                gc.collect()
+                    self._init_model(self.n_layers_local, model_path=self.model_path)
 
                 self.n_samples = init_msg["n_samples"]
 
