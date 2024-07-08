@@ -686,6 +686,7 @@ class GPTServer:
 
         if VERB:
             print(f"Using dtype {model_dtype}")
+            print("Loading weights")
 
         self.model.load_weights(model_parameters, assign=True)
         if self.max_seq_length:
@@ -695,7 +696,9 @@ class GPTServer:
             # Use default value
             self.max_seq_length = self.model.max_seq_length
 
-        self.model = self.model.to(model_dtype).to(self.torch_model_device)  # Probably useless
+        if VERB:
+            print(f"Moving model to {self.torch_model_device}")
+        self.model = self.model.to(model_dtype).to(self.torch_model_device)
         print(self.model.state_dict())
         # self.model = self.model.to_empty(device=self.torch_model_device)
         # print(self.model.state_dict())
