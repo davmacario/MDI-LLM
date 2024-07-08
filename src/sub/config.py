@@ -110,6 +110,7 @@ DTYPE_TORCH_MAPPING = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
+    "int8": torch.int8,
 }
 DTYPE_TORCH = DTYPE_TORCH_MAPPING[DTYPE]
 COMPILE = False  # use PyTorch 2.0 to compile the model to be faster

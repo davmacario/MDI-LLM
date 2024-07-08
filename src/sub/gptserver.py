@@ -648,8 +648,10 @@ class GPTServer:
             self.ptdtype = model_dtype
         elif self.ptdtype != model_dtype:
             # Here if user provided dtype and it does not match
-            warnings.warn(f"Casting model from {model_dtype} to {self.ptdtype}")
+            warnings.warn(f"Casting model params from {model_dtype} to {self.ptdtype}")
             model_dtype = self.ptdtype
+        
+        model_parameters = {k: v.to(model_dtype) for k, v in model_parameters.items()}
 
         if VERB:
             print("Initializing local model")
@@ -657,8 +659,7 @@ class GPTServer:
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         self.model = Model_class(self.model_config, n_transf_layers)
-        if model_dtype in {torch.float16, torch.bfloat16}:
-            self.model = self.model.to(model_dtype)
+        self.model = self.model.to(model_dtype)
         self.model.load_weights(model_parameters)
         if self.max_seq_length:
             print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
