@@ -492,8 +492,8 @@ def count_transformer_blocks(
     return len(layers_unique)
 
 
-def load_sd(
-    model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"
+def load_sd( 
+    model_path: Path, device: Optional[Union[torch.device, str]] = "cpu", **kwargs
 ) -> Dict[str, Any]:
     """
     Load a state dictionary (model parameters).
@@ -508,7 +508,7 @@ def load_sd(
             the method `nn.Module.load_state_dict()`.
     """
     try:
-        sd = torch.load(model_path, map_location=device)
+        sd = torch.load(model_path, map_location=device, **kwargs)
     except Exception as e:
         if "out of memory" in str(e):
             if device != "cpu":
