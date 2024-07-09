@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import cherrypy as cp
 import torch
+import accelerate
 
 from sub.config import DEVICE as DEFAULT_DEVICE
 from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
@@ -655,7 +656,8 @@ class GPTServer:
         try:
             self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
         except:
-            self.model = Model_class(self.model_config, n_transf_layers).to("meta")
+            with accelerate.init_empty_weights():
+                self.model = Model_class(self.model_config, n_transf_layers).to("meta")
 
         if VERB:
             print("Loading parameters")
@@ -690,6 +692,7 @@ class GPTServer:
             print(f"Using dtype {model_dtype}")
             print("Loading weights")
 
+        self.model = accelerate.load_checkpoint_and_dispatch()
         self.model.load_weights(model_parameters, assign=True)
         if self.max_seq_length:
             print(f"[DEBUG] Truncating context length to {self.max_seq_length}")

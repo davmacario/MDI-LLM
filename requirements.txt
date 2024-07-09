@@ -13,3 +13,4 @@ psutil
 gputil
 sentencepiece
 tokenizers
+accelerate
