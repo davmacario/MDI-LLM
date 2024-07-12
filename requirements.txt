@@ -14,3 +14,4 @@ gputil
 sentencepiece
 tokenizers
 accelerate
+huggingface-hub >= 0.23.0
