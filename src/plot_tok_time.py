@@ -27,7 +27,7 @@ def main(args):
     fig = plt.figure(figsize=(6, 5))
     for log_file in sorted(logs_folder.iterdir()):
         fname = log_file.name
-        if model_name in fname:
+        if model_name in fname and f"{args.n_samples}samples" in fname:
             if "1nodes" in fname:
                 label = "1 Node"
                 style = "r"
@@ -37,6 +37,12 @@ def main(args):
             elif "3nodes" in fname:
                 label = "3 Nodes"
                 style = "b"
+            elif "4nodes" in fname:
+                label = "4 nodes"
+                style = "m"
+            elif "5nodes" in fname:
+                label = "5 nodes"
+                style = "y"
             else:
                 # Maybe add default style
                 raise FileNotFoundError
@@ -76,6 +82,12 @@ if __name__ == "__main__":
         "--no-title",
         action="store_true",
         help="if set, don't print the figure title"
+    )
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=3,
+        help="number of samples for the generation"
     )
     args = parser.parse_args()
     main(args)
