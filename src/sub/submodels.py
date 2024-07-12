@@ -184,9 +184,6 @@ class StarterNode(NodePrototype):
                 pass (embedding and transformer blocks), else it will pass the input
                 through the output layers of the LLM (`ln_f`, `lm_head`)
         """
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-
         if first_pass:
             B, T = idx.shape  # Batch x (Time dimension)
             if T > self.config.block_size:
@@ -263,9 +260,6 @@ class SecondaryNode(NodePrototype):
         self, idx: torch.Tensor, input_pos: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Forward pass - secondary node"""
-        if not self.params_init:
-            raise ValueError("The model parameters have not been initialized!")
-
         T = idx.size(1)
         if self.max_seq_length < T:
             raise ValueError(

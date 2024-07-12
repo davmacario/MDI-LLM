@@ -31,9 +31,9 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
+import accelerate
 import cherrypy as cp
 import torch
-import accelerate
 
 from sub.config import DEVICE as DEFAULT_DEVICE
 from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
@@ -199,6 +199,8 @@ class GPTServer:
         self.use_default_dtype = dtype is None
         self.dtype = dtype if dtype else DTYPE  # Default
         self.ptdtype = DTYPE_TORCH_MAPPING[self.dtype]
+        if not self.use_default_dtype:
+            print(f"Overriding dtype to: {self.dtype}")
         if self.dtype == "bfloat16" and (
             not torch.cuda.is_available() or not torch.cuda.is_bf16_supported()
         ):
@@ -654,46 +656,32 @@ class GPTServer:
 
         Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
         try:
-            self.model = Model_class(self.model_config, n_transf_layers).to_empty(device=self.model_device)
+            self.model = Model_class(self.model_config, n_transf_layers).to_empty(
+                device=self.model_device
+            )
         except:
             with accelerate.init_empty_weights():
                 self.model = Model_class(self.model_config, n_transf_layers).to("meta")
 
         if VERB:
             print("Loading parameters")
+            print(f"Using dtype {self.ptdtype}")
 
+        # TODO: switch to "empty" models (torch >= 2.0)
         if model_path:
-            # By default, use cpu
-            model_parameters = load_sd(model_path, mmap=True)
-        assert model_parameters is not None
-
-        # Check n. of detected parameters are consistent with chunk (count_transformer_blocks)
-        n_layers_detect = count_transformer_blocks(model_parameters)
-        if n_transf_layers != n_layers_detect:
-            raise ValueError(
-                f"The number of detected transformer blocks ({n_layers_detect}) is "
-                f"different from the expected one {n_transf_layers}; please "
-                "re-run the model partition or check the configuration!"
+            # NOTE: using accelerate to prevent memory usage spike at the beginning
+            # resulting from the need to load both the "empty" model and the weights
+            self.model = accelerate.load_checkpoint_and_dispatch(
+                self.model, str(model_path), dtype=self.ptdtype
             )
+        else:
+            # NOTE: if here, cannot use accelerate! Weights are already in memory...
+            model_parameters = {
+                k: v.to(self.ptdtype) for k, v in model_parameters.items()
+            }
+            self.model.load_weights(model_parameters)
+            self.model = self.model.to(self.ptdtype)
 
-        if self.use_default_dtype:
-            self.ptdtype = torch.float32
-            if all([v.dtype == torch.float16 for v in model_parameters.values()]):
-                self.ptdtype = torch.float16
-            elif all([v.dtype == torch.bfloat16 for v in model_parameters.values()]):
-                if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-                    self.ptdtype = torch.bfloat16
-
-        model_dtype = self.ptdtype
-
-        model_parameters = {k: v.to(model_dtype) for k, v in model_parameters.items()}
-
-        if VERB:
-            print(f"Using dtype {model_dtype}")
-            print("Loading weights")
-
-        self.model = accelerate.load_checkpoint_and_dispatch()
-        self.model.load_weights(model_parameters, assign=True)
         if self.max_seq_length:
             print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
             self.model.max_seq_length = self.max_seq_length
@@ -703,10 +691,7 @@ class GPTServer:
 
         if VERB:
             print(f"Moving model to {self.torch_model_device}")
-        self.model = self.model.to(model_dtype).to(self.torch_model_device)
-        print(self.model.state_dict())
-        # self.model = self.model.to_empty(device=self.torch_model_device)
-        # print(self.model.state_dict())
+        self.model = self.model.to(self.torch_model_device)
 
         if self.compile and hasattr(torch, "compile"):
             if VERB:
