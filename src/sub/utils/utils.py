@@ -493,6 +493,19 @@ def count_transformer_blocks(
     return len(layers_unique)
 
 
+def load_model_config(ckpt_dir: Path) -> Config:
+    """
+    Load the model config, stored in the yaml file inside the given ckpt directory.
+
+    Args:
+        ckpt_dir: checkpoint directory containing the `model_config.yaml` file.
+
+    Returns:
+        Loaded `Config` object.
+    """
+    return Config.from_file(ckpt_dir / "model_config.yaml")
+
+
 def load_sd(
     model_path: Path, device: Optional[Union[torch.device, str]] = "cpu"
 ) -> Dict[str, Any]:
@@ -552,7 +565,7 @@ def load_from_pt(
     if not model_dir.is_dir():
         raise NotADirectoryError(f"Unable to find model checkpoint at {model_dir}")
 
-    config = Config.from_file(model_dir / "model_config.yaml")
+    config = load_model_config(model_dir)
 
     if config_only:
         return config, None
@@ -637,7 +650,7 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
                 curr_chunk_dir = mod / "chunks"
                 if curr_chunk_dir.is_dir():
                     new_mod_dict["chunks"] = {}
-                    # First, look for chunks, then add info only if chunks have been found
+                    # First, look for chunks, then add info only if chunks are found
                     tmp_mod_dict = {}
                     for p in curr_chunk_dir.rglob("*"):
                         if not p.is_dir():
@@ -652,7 +665,7 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
                     for k, v in tmp_mod_dict.items():
                         if len(v):
                             new_mod_dict["chunks"][k] = v
-                    
+
                     # Only add the model info if some chunks have been found
                     if len(new_mod_dict["chunks"]):
                         out.append(new_mod_dict)

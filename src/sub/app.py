@@ -26,7 +26,7 @@ import time
 import warnings
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import cherrypy as cp
 import requests
@@ -34,7 +34,7 @@ import torch
 
 from sub.config import N_LAYERS_NODES
 from sub.gptserver import GPTServer
-from sub.utils import load_from_pt, split_and_store
+from sub.utils import load_from_pt, load_model_config, split_and_store
 from sub.utils.typing import FileType, JSONType
 
 docstring = """
@@ -51,20 +51,20 @@ This allows to reduce the memory usage for each node compared to the memory requ
 run the complete model on a single node, allowing to run larger models by increasing the
 number of network nodes.
 
-Parallelism is introduced by increasing the batch size, allowing to generate different
-independent samples.
+Computation parallelism is introduced by increasing the batch size, allowing to generate
+different independent samples.
 Due to the autoregressive nature of LLMs, to generate a new token in the sequence, it is
 required to feed back the new token to the model input, hence, if generating a single
 piece of text, the nodes that are not currently busy processing their local model chunk
 would be idle, waiting for the information to reach them.
-If we generate more than one sample, it is possible for different nodes to work on 
+If we generate more than one sample, it is possible for different nodes to work on
 different samples concurrently, improving efficiency.
 In particular, when the number of samples (batch size) is greater or equal than the
 number of nodes, it is possible to ensure every node is always working on a different
 sample.
-This mechanism, that we call, "recurrent pipelining", allows to achieve a generation
-rate (tokens/second) which is higher than sequential generation on a single device.
-With this work, we provide a proof of concept for the use of pipeline parallelism for 
+This mechanism, that we call "recurrent pipelining", allows to achieve a generation rate
+(tokens/second) which is higher than sequential generation on a single device.
+With this work, we provide a proof of concept for the use of pipeline parallelism for
 transformer architecture inference, resulting in an optimized implementation achieving
 competitive performances, with the added bonus of enabling LLM deployment on Edge
 devices (the testbed for this project was made up of Nvidia Jetson TX2 modules).
@@ -72,12 +72,13 @@ devices (the testbed for this project was made up of Nvidia Jetson TX2 modules).
 The application architecture is the following.
 We define 2 types of nodes: "starter" nodes and "secondary" nodes; unlike the name
 suggests, there is no "master-slave" relationship between the 2, the "starter" is just
-acting as the "entrypoint"/application interface with the "user".
+acting as the "entrypoint"/application interface with the user and actively participates
+in the computation.
 Starter nodes are used to initialize secondary nodes and contain the first and last
 layers of the model. They take the model input (prompt) and collect the output tokens.
 As a consequence, they are the ones that "know" the exact number of tokens (and
 iterations) to be performed in the current inference run.
-Secondary nodes are "activated" by the starting node, and just receive inputs to be 
+Secondary nodes are "activated" by the starting node, and just receive inputs to be
 passed through the local model chunk.
 For efficiency reasons, we assume the model chunks are already located on the devices
 themselves, but it is also possible to have the starter node split the model layers and
@@ -86,14 +87,14 @@ send them to the different devices.
 Communication happens over 2 channels.
 For coordination and initialization, each node acts as an HTTP server and messages are
 sent over HTTP.
-For the transmissions of intermediate activations, the nodes use bare Python sockets 
+For the transmissions of intermediate activations, the nodes use bare Python sockets
 running over TCP/IP. The lack of a fully-fledged application layer protocol allows for
 a faster message exchange.
 At the application layer, the message only contains a header of fixed length, specifying
 the exact message size in bytes, which allows to read the exact amount of bytes to
 prevent issues due to message truncation.
 Being message transmission a crucial part of the application, as it is necessary to
-ensure it does not slow down the overall operation, we implement it through input and 
+ensure it does not slow down the overall operation, we implement it through input and
 output message queues running on separate threads.
 Once a message is received, it is placed in the input queue, from where the processing
 thread (the one performing model forward passes) will extract it (in order), process it,
@@ -103,15 +104,16 @@ There, a separate thread will extract it and transmit it.
 The application is composed of the following modules:
 - App: entrypoint for initializing nodes of any type; for starter nodes, it
 provides methods used at initialization.
-- GPTServer: core of the application; it creates the HTTP server for coordination and 
+- GPTServer: core of the application; it creates the HTTP server for coordination and
 sets up the message transmission sockets. It contains the definition of all the
 application threads and the processing loop.
-- GPT: model definition, based on LitGPT (by Lightning AI, in turn based on NanoGPT).
+- GPTDistributed: model definition, based on LitGPT (by Lightning AI, in turn based on
+NanoGPT).
 The actual application uses submodels over with the same architecture (with the same
 building blocks).
 """
 
-script_dir = os.path.dirname(__file__)
+script_dir = Path(os.path.dirname(__file__))
 
 logger_wp = logging.getLogger("model_dist")
 logger_wp.setLevel(logging.ERROR)
@@ -134,16 +136,17 @@ class App:
 
     secondary_nodes_config: List[JSONType] = []
 
+    n_nodes: Optional[int] = None
+
     def __init__(
         self,
         node_type: str,
-        config_file: FileType,
+        node_config: FileType,
         *,
-        ckpt_dir: Optional[FileType] = None,
-        chunk_path: Optional[FileType] = None,
+        ckpt_dir: FileType = script_dir / ".." / "checkpoints",
+        model: Optional[FileType] = None,
         device: Optional[str] = None,
         dtype: Optional[str] = None,
-        secondary_index: Optional[int] = None,
         model_seq_length: Optional[int] = None,
         **kwargs,
     ):
@@ -152,72 +155,64 @@ class App:
         Model-Distributed Inference.
 
         Args:
-            node_type: role of the node - can be "starter", "secondary", "secondary:<n>"
-                if "secondary", make sure to specify `secondary_index`
-            config_file: configuration file for the node(s);
-                In starters: it is the configuration of the whole network (full config.json)
-                In secondary: it _can_ be the full config or the individual node config
+            node_type: role of the node - can be "starter" or "secondary".
+            node_config: path of the configuration file for the node OR dict containing
+                the configuration itself;
+                In starters: it is the configuration of the whole network (full
+                    config.json).
+                In secondary: it is the full config or the individual node config.
             *
-            ckpt_dir (optional):
-                For starter nodes: checkpoint directory containing the
-                model_config.yaml file and either the chunks/ folder or the .pth model.
-                In secondary nodes, one between ckpt_dir and chunk_path must be present.
-            chunk_path (optional): path of the model chunk for the current node.
-                In starters: it can be inferred from ckpt_dir.
-                In secondary: if missing, the chunk path will be inferred.
-                NOTE: chunk path will always be passed, i.e., the model will always be
-                    loaded from disk!
+            ckpt_dir: optional path containing all the models subdir; defaults to
+                `./../checkpoints`
+            model: (WILL BE REMOVED) [starter only] model directory path relative to
+                ckpt_dir; if not found, it will be downloaded.
             device (default: None): string indicating the device used to load and run
                 the model; if not specified, the application will try to get it from the
                 nodes configuration file.
-            secondary_index (optional): positional, zero-index of the secondary node;
-                not necessary if only 1 secondary node is present in the configuration.
-                Not used by starter nodes.
+            dtype: (optional) data type to be used; if missing, will use default one.
             model_seq_length (optional): maximum sequence length of the model; should be
                 less or equal than the one specified in the config (default value)
-            Keyword args (optional): allowing to specify verb=VERB and plots=PLOTS
+            Keyword args (optional): allowing to specify verb=self.verb and plots=PLOTS
                 (bool)
         """
-        if isinstance(ckpt_dir, str):
-            self.ckpt_dir = Path(ckpt_dir)
-        else:
-            self.ckpt_dir = ckpt_dir
-        if isinstance(chunk_path, str):
-            self.chunk_path = Path(chunk_path)
-        else:
-            # Includes None
-            self.chunk_path = chunk_path
-
-        if isinstance(config_file, str):
-            config_file = Path(config_file)
+        self.ckpt_dir = Path(ckpt_dir)
 
         self.torch_device = device if device else None
 
-        global VERB
-        VERB = False if "verb" not in kwargs else bool(kwargs["verb"])
-        global PLOTS
-        PLOTS = False if "plots" not in kwargs else bool(kwargs["plots"])
+        self.verb = False if "verb" not in kwargs else bool(kwargs["verb"])
+        self.plots = False if "plots" not in kwargs else bool(kwargs["plots"])
 
         self.compile = False if "compile" not in kwargs else bool(kwargs["compile"])
         self.dtype = dtype
 
-        if self.ckpt_dir:
-            self.full_model_name = self.ckpt_dir.name
-            if VERB:
-                print(f"Using model: {self.full_model_name}")
-
         self.node_type = node_type
-        with open(config_file, "r") as f:
-            self.node_config = json.load(f)
+        # NOTE: node_config can either be path or opened dict!!!
+        if isinstance(node_config, FileType):
+            self.config_file_path = Path(node_config)
+            with open(self.config_file_path, "r") as f:
+                self.node_config = json.load(f)
+        elif isinstance(node_config, dict):
+            self.config_file_path = None
+            self.node_config = node_config
 
-        if VERB:
+        if self.verb:
             print("Loaded nodes config file")
 
         if self.node_type == "starter":
-            assert self.ckpt_dir, "No model was specified!"
+            if not model:
+                # FIXME: in first version, only use model specified at initialization
+                # Next versions will request model on-demand (with POST, like Ollama)
+                raise ValueError("No model was specified!")
+
+            self.model_dir = self.ckpt_dir / model
+            if not self.model_dir.exists():
+                raise NotADirectoryError(f"Unable to find directory for model {model}")
+            if not len(os.listdir(self.model_dir)):
+                raise FileNotFoundError("Model directory is empty!")
+
             self.n_secondary = len(self.node_config["nodes"]["secondary"])
             self.n_nodes = 1 + self.n_secondary
-            if VERB and self.n_nodes == 1:
+            if self.verb and self.n_nodes == 1:
                 print("Running in standalone mode!")
             self.own_config = self.node_config["nodes"]["starter"]
             self.own_addr = self.own_config["addr"]
@@ -226,26 +221,19 @@ class App:
             self.own_inference_port_out = self.own_config["inference"]["port_out"]
 
             # TODO: add support for downloading model as well (extra)
-            # Load model config
-            if self.chunk_path:  # In standalone mode, chunk path is lit_model.pth
-                node_chunks_dir = self.chunk_path.resolve().parent
-                self.model_was_split = True
-            else:
-                node_chunks_dir = self.ckpt_dir / "chunks" / f"{self.n_nodes}nodes"
-                self.model_was_split = node_chunks_dir.is_dir()
 
-            if not self.model_was_split and self.n_nodes > 1:
-                # Load model, split it, store it; the chunks will then be transmitted
-                if VERB:
-                    print("Chunks not found! Splitting the model")
-                self.model_config, full_model = load_from_pt(self.ckpt_dir)
-                assert full_model is not None
-                node_chunks_dir = split_and_store(
-                    full_model, self.n_nodes, self.ckpt_dir
-                )
+            # Determine whether model was split or not
+            self.model_was_split = True
+            if self.n_nodes > 1:
+                node_chunks_dir = self.model_dir / f"{self.n_nodes}nodes"
+                self.chunk_path = node_chunks_dir / "model_starter.pth"
+                if not self.chunk_path.exists():
+                    self.model_was_split = False
             else:
-                # Here if either model was already split or running in standalone mode
-                self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
+                self.chunk_path = self.model_dir / "lit_model.pth"
+
+            # Load model config
+            self.model_config = load_model_config(self.model_dir)
 
             self.model_seq_length = None
             if model_seq_length and model_seq_length > self.model_config.block_size:
@@ -257,80 +245,29 @@ class App:
             else:
                 self.model_seq_length = model_seq_length
 
-            if not self.chunk_path:
-                if self.n_nodes > 1:
-                    self.chunk_path = node_chunks_dir / "model_starter.pth"
-                else:
-                    self.chunk_path = self.ckpt_dir / "lit_model.pth"
-
-            if (not self.chunk_path or not self.model_was_split) and self.n_nodes > 1:
-                self.chunk_path = node_chunks_dir / "model_starter.pth"
-
             self.gpt_serv = GPTServer(
                 node_config=self.node_config,
                 node_type=self.node_type,
-                model_config=self.model_config,
-                chunk_path=self.chunk_path,
-                tokenizer_dir=self.ckpt_dir,
+                ckpt_dir=self.ckpt_dir,
+                model_seq_length=self.model_seq_length,
                 model_device=self.torch_device,
                 dtype=dtype,
                 **kwargs,
-                model_type=self.full_model_name,
-                model_seq_length=self.model_seq_length,
             )
 
         elif "secondary" in self.node_type:
-            # FIXME: secondary node may be completely agnostic of the used model and
-            # receive the model config (and the chunk) at initialization
-            assert (
-                self.ckpt_dir or self.chunk_path
-            ), "Need to specify at least 1 between the chunk path and the checkpoint directory"
-
-            # Can either pass "secondary:ind" or secondary_index=ind
-            split_type = self.node_type.split(":")
-            self.secondary_index = (
-                secondary_index if len(split_type) < 2 else int(split_type[1])
-            )
-            assert self.secondary_index is not None
-
-            self.node_type = f"secondary:{self.secondary_index}"
-            self.n_nodes = None
+            # NOTE: the node_config should be the JSON spec of the node only
             # Initialize secondary node
-            if "nodes" in self.node_config:
-                # Full config received
-                self.own_config = self.node_config["nodes"]["secondary"][
-                    self.secondary_index
-                ]
-                self.n_nodes = 1 + len(self.node_config["nodes"]["secondary"])
-            else:
-                # Partial config found
-                self.own_config = self.node_config
+            self.own_config = self.node_config
             self.own_addr = self.own_config["addr"]
             self.own_comm_port = self.own_config["communication"]["port"]
             self.own_inference_port_in = self.own_config["inference"]["port_in"]
             self.own_inference_port_out = self.own_config["inference"]["port_out"]
 
-            # NOTE: ckpt path may not be present
-            if self.ckpt_dir and self.n_nodes and self.chunk_path is None:
-                node_chunks_dir = self.ckpt_dir / "chunks" / f"{self.n_nodes}nodes"
-                self.chunk_path = (
-                    node_chunks_dir / f"model_secondary{self.secondary_index}.pth"
-                )
-            elif not self.chunk_path and not self.n_nodes:
-                warnings.warn(
-                    "Missing info about total n. of nodes, cannot select correct chunk"
-                )
-
-            if self.ckpt_dir:
-                self.model_config, _ = load_from_pt(self.ckpt_dir, config_only=True)
-            else:
-                self.model_config = None
-
             self.gpt_serv = GPTServer(
                 node_config=self.node_config,
                 node_type=self.node_type,
-                model_config=self.model_config,
-                chunk_path=self.chunk_path,
+                ckpt_dir=self.ckpt_dir,
                 model_device=self.torch_device,
                 dtype=dtype,
                 **kwargs,
@@ -338,6 +275,9 @@ class App:
 
         # Here because if the 'device' arg is None, gpt_serv will infer it
         self.torch_device = self.gpt_serv.model_device
+
+        # Webserver started ASAP
+        self.gpt_serv.start_webserv()
 
     def start(self):
         """
@@ -349,6 +289,8 @@ class App:
         """
         if self.node_type == "starter":
             assert self.model_config
+            # Wait for node registration
+            self.gpt_serv.wait_for_nodes_registration()
             # Init. nodes, launch iterations
             if not self.configure_nodes():
                 raise RuntimeError("Unable to initialize network nodes!")
@@ -408,6 +350,8 @@ class App:
 
         self.get_nodes_info()
 
+        # TODO: implement algorithm to select best
+
         out = True  # Return code
         # Store the prev and next in a smart way
         prev = self.node_config["nodes"]["starter"]
@@ -421,7 +365,7 @@ class App:
 
         # Secondary nodes config
         for i, sec_node in enumerate(self.node_config["nodes"]["secondary"]):
-            if VERB:
+            if self.verb:
                 print(f"Initializing secondary node n.{i}")
 
             curr_msg = self.init_msg.copy()  # FIXME: maybe put before loop
@@ -456,12 +400,12 @@ class App:
             out = out and (self._request_to_node("post", addr, curr_msg) is not None)
 
             if not out:
-                if VERB:
+                if self.verb:
                     print("> Failed!")
                 logger_wp.error(f"Failed to initialize secondary node {i}!")
                 return out
 
-            if VERB:
+            if self.verb:
                 print("> Success!")
             logger_wp.info(f"Secondary node {i} was initialized successfully")
 
@@ -512,7 +456,7 @@ class App:
 
         ret = None
         n_ret = 0
-        if VERB:
+        if self.verb:
             print(f"Sending {req_type} request to {addr}")
             print(f"Payload: {len(pickle.dumps(content))} Bytes")
         try:
@@ -529,7 +473,7 @@ class App:
                 f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
             )
         except requests.exceptions.Timeout:
-            if VERB:
+            if self.verb:
                 print("Connection timed out!")
             logger_wp.warning(f"Request timed out!")
             n_ret += 1
@@ -537,9 +481,10 @@ class App:
             logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
             n_ret += 1
         while (ret is None or ret.status_code != 200) and n_ret < max_n_requests:
-            if VERB:
+            if self.verb:
                 print(
-                    f"Unable to reach node ({addr}) - retrying in 2s ({n_ret}/{max_n_requests})"
+                    f"""Unable to reach node ({addr}) - retrying in 2s
+                    ({n_ret}/{max_n_requests})"""
                 )
             time.sleep(2)
             try:
@@ -549,10 +494,11 @@ class App:
                     timeout=10000,
                 )
                 logger_wp.debug(
-                    f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
+                    f"""Successful {req_type} request sent to {addr} - code
+                    {ret.status_code}"""
                 )
             except requests.exceptions.Timeout:
-                if VERB:
+                if self.verb:
                     print("Connection timed out!")
                 logger_wp.warning(f"Request timed out!")
             except:
