@@ -21,21 +21,14 @@
 import json
 import logging
 import os
-import pickle
-import time
-import warnings
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional, Union
 
 import cherrypy as cp
-import requests
-import torch
 
-from sub.config import N_LAYERS_NODES
-from sub.gptserver import GPTServer
-from sub.utils import load_from_pt, load_model_config, split_and_store
-from sub.utils.typing import FileType, JSONType
+from sub.gptserver import SecondaryServer, StarterServer
+from sub.utils.typing import FileType
 
 docstring = """
 Distributed implementation of the Llama architecture using Model-Distributed Inference
@@ -124,24 +117,13 @@ CTX = nullcontext()
 
 class App:
     __doc__ = docstring
-    init_msg = {
-        "role": "",
-        "prev_node": {},
-        "next_node": {},
-        "model_config": {},
-        "n_nodes": 0,
-        "n_samples": 0,
-        "max_seq_length": None,
-    }
-
-    secondary_nodes_config: List[JSONType] = []
 
     n_nodes: Optional[int] = None
 
     def __init__(
         self,
         node_type: str,
-        node_config: FileType,
+        node_config: Union[Dict, FileType],
         *,
         ckpt_dir: FileType = script_dir / ".." / "checkpoints",
         model: Optional[FileType] = None,
@@ -185,7 +167,7 @@ class App:
         self.compile = False if "compile" not in kwargs else bool(kwargs["compile"])
         self.dtype = dtype
 
-        self.node_type = node_type
+        self.role = node_type
         # NOTE: node_config can either be path or opened dict!!!
         if isinstance(node_config, FileType):
             self.config_file_path = Path(node_config)
@@ -198,12 +180,13 @@ class App:
         if self.verb:
             print("Loaded nodes config file")
 
-        if self.node_type == "starter":
+        if self.role == "starter":
             if not model:
                 # FIXME: in first version, only use model specified at initialization
                 # Next versions will request model on-demand (with POST, like Ollama)
                 raise ValueError("No model was specified!")
 
+            self.model = model  # Format: organization/model_name
             self.model_dir = self.ckpt_dir / model
             if not self.model_dir.exists():
                 raise NotADirectoryError(f"Unable to find directory for model {model}")
@@ -220,42 +203,17 @@ class App:
             self.own_inference_port_in = self.own_config["inference"]["port_in"]
             self.own_inference_port_out = self.own_config["inference"]["port_out"]
 
-            # TODO: add support for downloading model as well (extra)
-
-            # Determine whether model was split or not
-            self.model_was_split = True
-            if self.n_nodes > 1:
-                node_chunks_dir = self.model_dir / f"{self.n_nodes}nodes"
-                self.chunk_path = node_chunks_dir / "model_starter.pth"
-                if not self.chunk_path.exists():
-                    self.model_was_split = False
-            else:
-                self.chunk_path = self.model_dir / "lit_model.pth"
-
-            # Load model config
-            self.model_config = load_model_config(self.model_dir)
-
-            self.model_seq_length = None
-            if model_seq_length and model_seq_length > self.model_config.block_size:
-                raise ValueError(
-                    f"The truncated sequence length {model_seq_length} should be lower "
-                    "or equal than the model's max sequence length "
-                    f"{self.model_config.block_size}"
-                )
-            else:
-                self.model_seq_length = model_seq_length
-
-            self.gpt_serv = GPTServer(
+            self.gpt_serv = StarterServer(
                 node_config=self.node_config,
-                node_type=self.node_type,
+                node_type=self.role,
                 ckpt_dir=self.ckpt_dir,
-                model_seq_length=self.model_seq_length,
+                max_seq_length=model_seq_length,
                 model_device=self.torch_device,
                 dtype=dtype,
                 **kwargs,
             )
 
-        elif "secondary" in self.node_type:
+        elif "secondary" in self.role:
             # NOTE: the node_config should be the JSON spec of the node only
             # Initialize secondary node
             self.own_config = self.node_config
@@ -264,9 +222,9 @@ class App:
             self.own_inference_port_in = self.own_config["inference"]["port_in"]
             self.own_inference_port_out = self.own_config["inference"]["port_out"]
 
-            self.gpt_serv = GPTServer(
+            self.gpt_serv = SecondaryServer(
                 node_config=self.node_config,
-                node_type=self.node_type,
+                node_type=self.role,
                 ckpt_dir=self.ckpt_dir,
                 model_device=self.torch_device,
                 dtype=dtype,
@@ -287,19 +245,22 @@ class App:
         For secondary nodes, this starts an infinite loop where the node will wait to be
         initialized and perform inference.
         """
-        if self.node_type == "starter":
-            assert self.model_config
+        if self.role == "starter":
+            assert isinstance(self.gpt_serv, StarterServer)
             # Wait for node registration
             self.gpt_serv.wait_for_nodes_registration()
             # Init. nodes, launch iterations
-            if not self.configure_nodes():
+            if not self.gpt_serv.configure_nodes():
                 raise RuntimeError("Unable to initialize network nodes!")
+            if not self.gpt_serv.init_model():
+                # TODO - expecting init_model to be similar to configure_nodes
+                raise RuntimeError("Unable to initialize starter node")
 
             try:
                 self.gpt_serv.launch_starter()
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
-                self.stop_nodes()
+                self.gpt_serv.stop_nodes()
                 print("Node was stopped!")
         else:
             try:
@@ -307,204 +268,3 @@ class App:
             except KeyboardInterrupt:
                 self.gpt_serv.shutdown()
                 print("Node was stopped!")
-
-    # ---------------------------------------------------------------------------------
-
-    def get_nodes_info(self):
-        """
-        Send GET to all nodes listed in the config JSON to obtain the information about
-        the nodes and the available models (and chunks).
-
-        TODO: design algorithm to look for a good node combination so that the nodes
-        contain all the model
-        """
-        for node in self.node_config["nodes"]["secondary"]:
-            addr = f"http://{node['addr']}:{node['communication']['port']}/"
-            self.secondary_nodes_config.append(
-                json.loads(self._request_to_node("get", addr))
-            )
-
-    def configure_nodes(self) -> bool:
-        """
-        Send POST requests to the other nodes to inform them of their role, the number
-        of samples, and including their chunk of model.
-
-        Information sent:
-            - Node role ("role")
-            - Model config (GPTConfig as dict) ("model_config")
-            - Model parameters ("params") - from pickle.dumps() - if not split before
-            - Previous node information - from json file ("prev_node")
-            - Next node information - from json ("next_node")
-
-        Returns:
-            1 if success
-            0 if at least 1 node fails
-        """
-        assert self.n_nodes is not None
-        assert self.chunk_path is not None
-        node_chunks_dir = self.chunk_path.parent
-        if self.node_type != "starter":
-            raise ValueError("This method can only be called on starter nodes!")
-        if not self.model_config:
-            raise ValueError("The model configuration was not loaded!")
-
-        self.get_nodes_info()
-
-        # TODO: implement algorithm to select best
-
-        out = True  # Return code
-        # Store the prev and next in a smart way
-        prev = self.node_config["nodes"]["starter"]
-        if self.n_secondary == 1:
-            next = self.node_config["nodes"]["starter"]
-        elif self.n_secondary > 1:
-            next = self.node_config["nodes"]["secondary"][1]
-        else:
-            warnings.warn("No secondary nodes found! Running standalone")
-            return out
-
-        # Secondary nodes config
-        for i, sec_node in enumerate(self.node_config["nodes"]["secondary"]):
-            if self.verb:
-                print(f"Initializing secondary node n.{i}")
-
-            curr_msg = self.init_msg.copy()  # FIXME: maybe put before loop
-            curr_msg["role"] = f"secondary:{i}"
-            curr_msg["model_config"] = self.model_config.asdict()
-            curr_msg["n_nodes"] = self.n_nodes
-            curr_msg["n_local_layers"] = N_LAYERS_NODES[self.n_nodes][
-                self.model_config.n_layer
-            ]["N_LAYERS_SECONDARY"]
-            curr_msg["prev_node"] = prev
-            curr_msg["next_node"] = next
-            curr_msg["max_seq_length"] = self.model_seq_length
-
-            if not self.model_was_split:
-                chunk_path = node_chunks_dir / f"model_secondary{i}.pth"
-                curr_msg["params"] = torch.load(chunk_path, device="cpu")
-
-            # Update next and prev for next iteration
-            prev = sec_node
-            if i == self.n_secondary - 1:  # Last iter in loop - finished
-                next = None
-            elif i == self.n_secondary - 2:  # Second to last iter
-                next = self.node_config["nodes"]["starter"]
-            else:
-                next = self.node_config["nodes"]["secondary"][i + 2]
-
-            # Send POST request
-            target_addr = sec_node["addr"]
-            target_port = sec_node["communication"]["port"]
-
-            addr = f"http://{target_addr}:{target_port}/init"
-            out = out and (self._request_to_node("post", addr, curr_msg) is not None)
-
-            if not out:
-                if self.verb:
-                    print("> Failed!")
-                logger_wp.error(f"Failed to initialize secondary node {i}!")
-                return out
-
-            if self.verb:
-                print("> Success!")
-            logger_wp.info(f"Secondary node {i} was initialized successfully")
-
-        return out
-
-    def stop_nodes(self) -> int:
-        """
-        Send a PUT request to all nodes triggering the application interruption.
-        """
-        out = 1
-        for sec_node in self.node_config["nodes"]["secondary"]:
-            target_addr = sec_node["addr"]
-            target_port = sec_node["communication"]["port"]
-
-            addr = f"http://{target_addr}:{target_port}/stop"
-            out *= self._request_to_node("put", addr, "")
-        return out
-
-    def _request_to_node(
-        self,
-        req_type: str,
-        addr: str,
-        content: Optional[Any] = None,
-        max_n_requests: int = 100,
-    ) -> Any:
-        """
-        Send an HTTP request containing a json-formatted string to a specified
-        target node.
-
-        Args:
-            req_type: type of HTTP request, can be "post" or "put"
-            addr: full address (http(s)://<ip>:<port>) of the target node
-            content: python dict containing the information
-            max_n_requests: maximum number of requests before failure
-
-        Returns:
-            1 if successful
-            0 if failed
-        """
-        if req_type.lower() == "get":
-            req_func = requests.get
-        elif req_type.lower() == "post":
-            req_func = requests.post
-        elif req_type.lower() == "put":
-            req_func = requests.put
-        else:
-            raise ValueError(f"Unsupported request type '{req_type}'")
-
-        ret = None
-        n_ret = 0
-        if self.verb:
-            print(f"Sending {req_type} request to {addr}")
-            print(f"Payload: {len(pickle.dumps(content))} Bytes")
-        try:
-            # Specify timeout
-            ret = req_func(
-                addr,
-                data=pickle.dumps(content) if content else None,
-                timeout=100,
-            )
-
-            if ret.status_code == 413:
-                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
-            logger_wp.debug(
-                f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
-            )
-        except requests.exceptions.Timeout:
-            if self.verb:
-                print("Connection timed out!")
-            logger_wp.warning(f"Request timed out!")
-            n_ret += 1
-        except:
-            logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
-            n_ret += 1
-        while (ret is None or ret.status_code != 200) and n_ret < max_n_requests:
-            if self.verb:
-                print(
-                    f"""Unable to reach node ({addr}) - retrying in 2s
-                    ({n_ret}/{max_n_requests})"""
-                )
-            time.sleep(2)
-            try:
-                ret = req_func(
-                    addr,
-                    data=pickle.dumps(content),
-                    timeout=10000,
-                )
-                logger_wp.debug(
-                    f"""Successful {req_type} request sent to {addr} - code
-                    {ret.status_code}"""
-                )
-            except requests.exceptions.Timeout:
-                if self.verb:
-                    print("Connection timed out!")
-                logger_wp.warning(f"Request timed out!")
-            except:
-                logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
-            n_ret += 1
-
-        if ret is not None and ret.status_code == 200:
-            return ret.text
-        return None

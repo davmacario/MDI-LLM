@@ -21,7 +21,7 @@ from sub.config import (EVAL_ITERS, LEARNING_RATE, LR_DECAY_ITERS, MIN_LR,
                         N_LAYERS_NODES, WARMUP_ITERS)
 from sub.model import Config
 from sub.utils.data_loader import get_batch
-from sub.utils.typing import JSONType
+from sub.utils.typing import FileType, JSONType
 
 VERB = False
 
@@ -619,6 +619,42 @@ def load_from_hf(
     return load_from_pt(model_path, device, config_only=config_only)
 
 
+def get_chunk_path(
+    ckpt_dir: Path,
+    model_name: FileType,
+    n_nodes: int,
+    node_type: str,
+    id: Optional[int] = None,
+):
+    """
+    Return desired chunk path.
+
+    Args:
+        ckpt_dir: checkpoint directory
+        model_name: name of the model in the format <org_name>/<name>
+        n_nodes: number of nodes in the network
+        node_type: "starter"/"secondary[:n]"
+        id: if secondary, provide node ID (not necessary if ":n" was specified in node
+            type)
+    """
+    if n_nodes == 1:
+        if node_type != "starter":
+            raise ValueError("No secondary nodes if only 1 node in the network")
+
+        return ckpt_dir / model_name / "model_starter.pth"
+
+    if "secondary" in node_type:
+        if ":" in node_type and id is None:
+            id = int(node_type.split(":")[1])
+        if id is None:
+            raise ValueError("Secondary node ID was not specified")
+        chunk_fname = f"model_secondary{id}.pth"
+    else:
+        chunk_fname = "model_starter.pth"
+
+    return ckpt_dir / model_name / "chunks" / f"{n_nodes}nodes" / chunk_fname
+
+
 def get_available_models(ckpt_dir: Path) -> List[JSONType]:
     """
     Provides a list of dicts containing the information of the models for which at least
@@ -626,7 +662,7 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
 
     Will return, for each of the subdirectories at 'ckpt_dir', a dict:
     {
-      "name": model name
+      "name": model name (org/name)
       "hf_config": {
         "org": organization name (e.g., mistralai),
         "name": actual model name
@@ -636,6 +672,8 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
         "<k>nodes": [...]
       }
     }
+
+    The dicts will be part of a list
     """
     # No recursion because (believe it or not) it's messier
     out = []
@@ -644,7 +682,7 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
             curr_org_name = org.name
             for mod in org.iterdir():
                 new_mod_dict = {}
-                new_mod_dict["name"] = mod.name
+                new_mod_dict["name"] = os.path.join(org.name, mod.name)
                 new_mod_dict["hf_config"] = dict(org=curr_org_name, name=mod.name)
 
                 curr_chunk_dir = mod / "chunks"
@@ -671,6 +709,35 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
                         out.append(new_mod_dict)
 
     return out
+
+
+def is_model_chunk_available_secondary(
+    model_name: str,
+    node_ind: int,
+    n_nodes: int,
+    node_capabilities: JSONType,
+) -> bool:
+    """
+    Returns True if the `i`-th chunk for model `model_name` split among `n_nodes` nodes
+    is available (secondary node). Else, return false.
+
+    Args:
+        model_name: name of the model in the <org>/<name> format
+        node_ind: index of the
+
+    Returns:
+        true: chunk is found
+        false: otherwise
+    """
+    available_models = node_capabilities["model"]["available"]
+    if not len(available_models):
+        return False
+    for model in available_models:
+        if model["name"] == model_name and "chunks" in model:
+            return (
+                f"model_secondary{node_ind}.pth" in model["chunks"][f"{n_nodes}nodes"]
+            )
+    return False
 
 
 def save_config(config: "Config", checkpoint_dir: Path) -> None:

@@ -32,12 +32,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
+import accelerate
 import cherrypy as cp
 import torch
+from torch.cuda import OutOfMemoryError
 
 from sub.config import DEVICE as DEFAULT_DEVICE
 from sub.config import (DTYPE, DTYPE_TORCH_MAPPING, N_LAYERS_NODES,
-                        TEMPERATURE, TOP_K)
+                        TEMPERATURE, TOP_K, VERB)
 from sub.connections import InputNodeConnection, OutputNodeConnection
 from sub.model import Config, KVCache, sample
 from sub.prompts import PromptStyle, has_prompt_style, load_prompt_style
@@ -61,7 +63,7 @@ class GPTDistributed:
     prev_node: Optional[Dict] = None
     model_params: Optional[Dict] = None
     model_config: Optional[Config] = None
-    model_type: Optional[str] = None
+    model_type: str = ""  # Active model - "" if no initialized model
 
     # Number of samples that have been requested so far in the current run:
     n_samples: int = 0
@@ -87,7 +89,6 @@ class GPTDistributed:
 
     # Set iff the model has been initialized and it is ready to perform inference.
     running = threading.Event()
-    running.clear()
 
     """
     Message format:
@@ -152,36 +153,25 @@ class GPTDistributed:
                 specified in the node_config (arg will override it!)
             dtype: string indicating the torch data type ("float16", "float32" or
                 "bfloat16")
-            [**kwargs: support for 'verb']
+            **kwargs: support for 'verb' and 'compile' (torch>=2.0)
         """
+        # Override global constants with kwargs
+        self.verb = VERB if "verb" not in kwargs else kwargs["verb"]
+        self.compile = False if "compile" not in kwargs else kwargs["compile"]
+
         self.node_config = node_config
         self.ckpt_dir = Path(ckpt_dir)
         self.role = node_type
 
-        self.max_seq_length = max_seq_length
+        self.max_seq_length = max_seq_length  # If None, will use model's default
 
         # Select device (fills self.model_device [str] and self.torch_device [torch])
         self._select_device(model_device)
-        assert isinstance(self.model_device, str)
+        assert isinstance(self.model_device, str) and self.torch_device
 
         # Dtype initialization - use default DTYPE if not given
-        self.use_default_dtype = dtype is None
-        self.dtype = dtype if dtype else DTYPE  # String
-        if self.dtype == "bfloat16" and (
-            not torch.cuda.is_available()
-            or not torch.cuda.is_bf16_supported()
-            or "cuda" not in self.model_device  # If using bfloat16, should use cuda
-        ):
-            raise ValueError(
-                "Specified bfloat16, but the host does not support this format"
-            )
-        self.ptdtype = DTYPE_TORCH_MAPPING[self.dtype]  # torch dtype
-
-        # Override global constants with kwargs
-        if "verb" in kwargs:
-            self.verb = bool(kwargs["verb"])
-
-        self.compile = False if "compile" not in kwargs else kwargs["compile"]
+        self._select_dtype(dtype)
+        assert isinstance(self.dtype, str) and self.ptdtype
 
         if "starter" in self.role:
             # The node_config for the starter is the WHOLE JSON! It should know the
@@ -199,10 +189,10 @@ class GPTDistributed:
                 self.out_message_queue = self.in_message_queue
                 self.out_queue_not_empty = self.in_queue_not_empty
 
+            # TODO: figure out where starter model is initialized
             # OLD: self._init_model()
         else:
-            # NOTE: index of secondary should be inferred from POST for initialization
-
+            # NOTE: index of secondary will be inferred from POST for initialization
             # NOTE: `node_config` for secondary node only contains its own info
             self.own_config = node_config
             self.starter_addr = self.own_config["communication"]["starter_addr"]
@@ -215,32 +205,21 @@ class GPTDistributed:
 
     # ---------------------------------------------------------------------------------
 
-    def process_user_prompt(self, http_msg_body: Dict[str, Any]):
-        """
-        Entrypoint for the user - will be called by POST
-        """
+    def create_new_sample(self, new_prompt):
         if not self.prompt_style:
             raise RuntimeError("Prompt style has not been initialized")
         if not self.tok:
             raise RuntimeError("Tokenizer has not been initialized")
         if not self.model:
             raise RuntimeError("Model has not been initialized")
-        if not self.role == "starter":
-            raise ValueError(
-                "The `process_user_prompt` method should only be called on starter"
-            )
         if not self.are_queues_init():
-            raise RuntimeError(
-                "Forgot to initialize the queues (i.e., provide callbacks)"
-            )
+            raise RuntimeError("Queues are not initialized!")
+        if not self.role == "starter":
+            raise ValueError("Cannot call method on secondary nodes")
 
+        # Keep track of time
         t_start_tot_ns = s_to_ns(time.time())
 
-        # NOTE: for now, ignore the keys that are not "prompt"
-        assert "model" in http_msg_body, "Missing 'model' key"
-        new_prompt = http_msg_body["prompt"]
-        if new_prompt == "":
-            new_prompt = "\n"
         start_styled = self.prompt_style.apply(new_prompt)
 
         # Create new sample by processing prompt
@@ -298,10 +277,9 @@ class GPTDistributed:
         # Clear starter's caches
         self._delete_starter_caches(new_id)
 
-        # Make sure to return something in here! (JSON resp)
-        return self._build_serv_resp(
+        # FIXME: choose better format
+        return (
             gen_text,
-            http_msg_body,
             new_id,
             t_tot_ns,
             t_load_ns,
@@ -347,83 +325,103 @@ class GPTDistributed:
             and self.out_queue_not_empty is not None
         )
 
-    def init_starter_node(self):
-        pass
-
-    def init_secondary_node(self):
-        pass
-
-    # ----- Private -------------------------------------------------------------------
-
-    def _select_device(self, device):
-        """
-        Select the torch device to be used to load and process the model.
-        Priority (high to low):
-            1. Command line arg (`--device`)
-            2. Config file
-            3. Default device
-        """
-        # Possibly get device info if found in config file
-        try:
-            self.model_device = device if device else self.own_config["device"]
-        except KeyError:
-            warnings.warn(f"Using default device {DEFAULT_DEVICE}")
-            self.model_device = DEFAULT_DEVICE
-        self.torch_device = torch.device(self.model_device)
-        if VERB:
-            print(f"Using device: {self.model_device}")
-
-    def _init_model(self, model_parameters: Dict[str, Any], n_transf_layers: int):
+    def init_model(
+        self,
+        n_transf_layers: int,
+        *,
+        model_path: Optional[Path] = None,
+        model_parameters: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize the node's model chunk and move it to the target device
         (self.model_device).
 
         Args:
-            model_parameters: state dict containing the weights - will be emptied
             n_transf_layers: number of transformer layers of the local model; required
                 for initializing the submodel.
+            *
+            model_path: if present, it is the path in the local file system where
+                the model chunk is found
+            model_parameters: alternatively, the model parameters may already be present
+                in memory (e.g., loaded previously or received by starter node)
         """
         assert self.model_config is not None, "No model configuration was found!"
         assert self.model is None, "The model was already initialized!"
         assert self.model_device is not None, "No device was specified"
 
-        model_dtype = torch.float32
-        if all([v.dtype == torch.float16 for v in model_parameters.values()]):
-            model_dtype = torch.float16
-        elif all([v.dtype == torch.bfloat16 for v in model_parameters.values()]):
-            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-                model_dtype = torch.bfloat16
+        if not (model_path or model_parameters):
+            raise ValueError(
+                "At least one between model_path and model_parameters must be nonempty"
+            )
 
-        if self.use_default_dtype:
-            self.ptdtype = model_dtype
-        elif self.ptdtype != model_dtype:
-            # Here if user provided dtype and it does not match
-            warnings.warn(f"Casting model from {model_dtype} to {self.ptdtype}")
-            model_dtype = self.ptdtype
+        # TODO:
+        # 1. load empty model
+        # 2. load weights from disk
+        # 3. if the dtype was overridden, cast weights
+        # 4. load parameters to model
+        if self.verb:
+            print("Initializing empty local model")
 
-        if VERB:
-            print("Initializing local model")
-            print(f"Using dtype {model_dtype}")
+        self.n_layers_local = n_transf_layers
+        Model_class = StarterNode if "starter" in self.role else SecondaryNode
+        try:
+            self.model = Model_class(self.model_config, n_transf_layers).to_empty(
+                device=self.model_device
+            )
+        except OutOfMemoryError:  # FIXME: may not be right error
+            with accelerate.init_empty_weights():
+                self.model = Model_class(self.model_config, n_transf_layers).to("meta")
 
-        Model_class = StarterNode if "starter" in self.node_type else SecondaryNode
-        self.model = Model_class(self.model_config, n_transf_layers)
-        if model_dtype in {torch.float16, torch.bfloat16}:
-            self.model = self.model.to(model_dtype)
-        self.model.load_weights(model_parameters)
+        assert self.model is not None
+
+        if self.verb:
+            print("Loading parameters")
+            print(f"Using dtype {self.ptdtype}")
+
+        # TODO: switch to "empty" models (torch >= 2.0)
+        if model_parameters:
+            # NOTE: if here, cannot use accelerate! Weights are already in memory...
+            model_parameters = {
+                k: v.to(self.ptdtype) for k, v in model_parameters.items()
+            }
+            # Check the model chunk contains the expected number of transformer layers
+            n_layers_detect = count_transformer_blocks(model_parameters)
+            if self.n_layers_local != n_layers_detect:
+                raise ValueError(
+                    f"The number of detected transformer blocks ({n_layers_detect}) is "
+                    f"different from the expected one {self.n_layers_local}; please "
+                    "re-run the model partition or check the configuration!"
+                )
+            self.model.load_weights(model_parameters)
+            self.model = self.model.to(self.ptdtype)
+        else:
+            assert model_path
+            # NOTE: using accelerate to prevent memory usage spike at the beginning
+            # resulting from the need to load both the "empty" model and the weights
+            self.model = accelerate.load_checkpoint_and_dispatch(
+                self.model, str(model_path), dtype=self.ptdtype
+            )
+            # FIXME: cannot do sanity check on number of model layers (model not in mem)
+
+        assert self.model, "The model was not correctly created"
+
         if self.max_seq_length:
             print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
             self.model.max_seq_length = self.max_seq_length
         else:
             # Use default value
             self.max_seq_length = self.model.max_seq_length
+
+        if self.verb:
+            print(f"Moving model to {self.torch_device}")
         self.model = self.model.to(self.torch_device)
 
         if self.compile and hasattr(torch, "compile"):
-            if VERB:
+            if self.verb:
                 print("Compiling local model - this may take a while", end="\r")
             try:
                 self.model = torch.compile(self.model)
-                if VERB:
+                if self.verb:
                     print("Model compiled!                                ")
             except RuntimeError as e:
                 warnings.warn(f"Unable to compile model! {e}")
@@ -431,10 +429,17 @@ class GPTDistributed:
             from importlib.metadata import version
 
             warnings.warn(
-                f"Installed torch version ({version('torch')}) does not support compiling models"
+                f"Installed torch version ({version('torch')}) does not support "
+                "compiling models"
             )
 
-    def _load_tokenizer(self, tokenizer_dir: FileType):
+        del model_parameters
+        gc.collect()
+
+        # Model is "ready" to be used - set running
+        self.running.set()
+
+    def load_tokenizer(self, tokenizer_dir: FileType):
         """
         Load the tokenizer information and prompt style definition from the specified
         path.
@@ -448,7 +453,8 @@ class GPTDistributed:
         """
         if self.verb:
             print("Loading tokenizer", end="")
-        # FIXME: this is just to give priority to HF; some tokenizer_config.json files (Llama 2) are broken...
+        # FIXME: this is just to give priority to HF; some tokenizer_config.json files
+        # (Llama 2) are broken...
         try:
             self.tok = Tokenizer(tokenizer_dir, force_backend="huggingface")
         except:
@@ -468,6 +474,52 @@ class GPTDistributed:
         self.stop_tokens = self.prompt_style.stop_tokens(self.tok)
         if self.verb:
             print("Tokenizer and prompt style have been loaded!")
+
+    # ----- Private -------------------------------------------------------------------
+
+    def _select_device(self, device):
+        """
+        Select the torch device to be used to load and process the model.
+        Priority (high to low):
+            1. Command line arg (`--device`)
+            2. Config file
+            3. Default device
+        """
+        # Possibly get device info if found in config file
+        try:
+            self.model_device = device if device else self.own_config["device"]
+        except KeyError:
+            warnings.warn(
+                f"Using default device {DEFAULT_DEVICE} - no device was "
+                "specified through CLI or config JSON file"
+            )
+            self.model_device = DEFAULT_DEVICE
+        self.torch_device = torch.device(self.model_device)
+        if self.verb:
+            print(f"Using device: {self.model_device}")
+
+    def _select_dtype(self, dtype):
+        """
+        Select model data type.
+        Priority:
+            1. CLI arg (`--dtype`)
+            2. Loaded model dtype
+            3. Default dtype
+
+        Important notice: the loaded model dtype will be found out at model
+        initialization.
+        """
+        self.use_default_dtype = dtype is None
+        self.dtype = dtype if dtype else DTYPE  # String
+        if self.dtype == "bfloat16" and (
+            not torch.cuda.is_available()
+            or not torch.cuda.is_bf16_supported()
+            or "cuda" not in self.model_device  # If using bfloat16, should use cuda
+        ):
+            raise ValueError(
+                "Specified bfloat16, but the host does not support this format"
+            )
+        self.ptdtype = DTYPE_TORCH_MAPPING[self.dtype]  # torch dtype
 
     def _build_msg(self, data: Any, sample_index: int, stop: bool = False) -> Dict:
         """
@@ -619,7 +671,8 @@ class GPTDistributed:
                             self.samples[sample_id] = torch.cat(
                                 (self.samples[sample_id], idx_next), dim=1
                             )
-                            # Detect stopping token sequence and possibly interrupt gen for current sample
+                            # Detect stopping token sequence and possibly interrupt gen
+                            # for current sample
                             stopping_detected = detect_stop_tokens(
                                 self.samples[sample_id], self.stop_tokens
                             )
