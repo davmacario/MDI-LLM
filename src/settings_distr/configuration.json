@@ -13,8 +13,11 @@
     "secondary": [
       {
         "addr": "127.0.0.1",
+        "starter_server": {
+          "addr": "127.0.0.1",
+          "port": 8088
+        },
         "communication": {
-          "starter_addr": "127.0.0.1",
           "port": 8089
         },
         "inference": {
@@ -24,8 +27,11 @@
       },
       {
         "addr": "127.0.0.1",
+        "starter_server": {
+          "addr": "127.0.0.1",
+          "port": 8088
+        },
         "communication": {
-          "starter_addr": "127.0.0.1",
           "port": 8090
         },
         "inference": {

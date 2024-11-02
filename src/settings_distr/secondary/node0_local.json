@@ -1,7 +1,7 @@
 {
-  "addr": "10.7.48.88",
-  "starter_sever": {
-    "addr": "10.7.48.46",
+  "addr": "127.0.0.1",
+  "starter_server": {
+    "addr": "127.0.0.1",
     "port": 8088
   },
   "communication": {
@@ -10,6 +10,5 @@
   "inference": {
     "port_in": 5092,
     "port_out": 5093
-  },
-  "device": "cuda"
+  }
 }

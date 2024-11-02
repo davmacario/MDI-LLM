@@ -14,8 +14,11 @@
     "secondary": [
       {
         "addr": "10.7.48.12",
+        "starter_sever": {
+          "addr": "10.7.48.46",
+          "port": 8088
+        },
         "communication": {
-          "starter_addr": "10.7.48.46",
           "port": 8089
         },
         "inference": {
@@ -26,8 +29,11 @@
       },
       {
         "addr": "10.7.48.88",
+        "starter_sever": {
+          "addr": "10.7.48.46",
+          "port": 8088
+        },
         "communication": {
-          "starter_addr": "10.7.48.46",
           "port": 8090
         },
         "inference": {
