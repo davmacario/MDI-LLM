@@ -224,7 +224,7 @@ def main(args):
         print("> Gradient Accumulation steps: ", train.gradient_accumulation_steps)
         print("> Max epochs: ", train.max_iters)
         print("> Checkpoint update interval: ", train.ckpt_interval)
-        print(f"> The model will {"not" if train.compile else ""} be compiled")
+        print(f"> The model will {'not' if train.compile else ''} be compiled")
         print("")
         print(f"Tokens per iteration will be: {tokens_per_iter:,}")
 
