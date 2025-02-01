@@ -45,7 +45,7 @@ from sub.utils import (catch_loop_errors, count_transformer_blocks,
 from sub.utils.typing import FileType, JSONObject, JSONType
 from sub.utils.utils import (get_chunk_path,
                              is_model_chunk_available_secondary, load_from_pt,
-                             load_model_config, split_and_store)
+                             load_model_config, log, split_and_store)
 
 # -------------------------------------------------------------------------------------
 
@@ -67,8 +67,19 @@ class GPTServer:
 
     exposed = True
 
+    n_nodes: int = -1
+
+    # Name of the ACTIVE model (<org>/<model_name>)
+    model: Optional[FileType] = None
+    # Name of the active chunk
+    chunk_path: Optional[Path] = None
+
     # Node info - returned in GET
-    node_capabilities: JSONType = dict(node_config={}, role="", model={}, last_update=0)
+    node_capabilities = dict(node_config={}, role="", model={}, last_update=0.0)
+
+    # Neighboring nodes TODO: clarify format
+    prev_node: Optional[Dict] = None
+    next_node: Optional[Dict] = None
 
     # Connections - None if not connected -- not passed to GPTDistr
     conn_to_next: Optional[OutputNodeConnection] = None
@@ -157,11 +168,10 @@ class GPTServer:
 
         # TODO: get node's capabilities
         self.node_capabilities = self._get_node_capabilities()
-        self.own_address = self.node_config["addr"]
-        self.own_comm_port = int(self.node_config["communication"]["port"])
-        # But need to use self.gptdistr.own_config and self.gptdistr.ckpt_dir
 
-        self.start_webserv()
+        if self.verb:
+            log("[INFO] Node capabilities:")
+            log(f"\t{self.node_capabilities}")
 
     # ---------------------------------------------------------------------------------
 
@@ -187,97 +197,93 @@ class GPTServer:
         cp.engine.stop()
         cp.engine.exit()
 
-    def start_inference(self):
+    def _request_to_node(
+        self,
+        req_type: str,
+        addr: str,
+        content: Optional[Any] = None,
+        *,
+        max_n_requests: int = 100,
+    ) -> Any:
         """
-        This method is meant to be ran as an independent thread.
+        Send an HTTP request containing a specific body to a specified target node.
+        NOTE: the body will be a Pickle.
 
-        Perform normal operation (open sockets, wait for communication from previous
-        node and forward activations to next one).
-        """
-        assert self.gptdistr.running.is_set()
-
-        if self.conn_to_next:
-            self.conn_to_next.shutdown()
-            self.conn_to_next = None
-        if self.conn_to_prev:
-            self.conn_to_prev.shutdown()
-            self.conn_to_prev = None
-
-        # Configuration for all nodes
-        self._create_sockets()
-
-        if VERB:
-            print("[INFO] Starting generation loop")
-        logger_wp.info("Starting generation loop")
-        self.running.set()
-
-        # Differentiate between different types - FIXME: needed?
-        if "starter" in self.role:
-            self._launch_queue_threads()
-            self.gptdistr.starter_loop()
-        else:
-            assert self.next_node is not None and self.prev_node is not None
-            # Secondary node
-            self._launch_queue_threads()
-            self.gptdistr.secondary_loop()
-
-    def stop_generation(self) -> bool:
-        """
-        Interrupt the current application run.
-
-        This method will:
-        1. Stop main loop (non-starters)
-        2. Stop connections (and queue threads)
-        3. Delete model
-
-        NOTE: this method does NOT turn the node off, it just un-initializes it; it will
-        leave the HTTP server UP, allowing to further initialization calls from any
-        starter node.
-        """
-        try:
-            self.running.clear()
-            if "starter" not in self.role:
-                if VERB:
-                    print("Stopping main thread")
-                self.inference_thread.join()
-            if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
-                if VERB:
-                    print("Stopping input queue thread")
-                self.conn_to_prev.shutdown()
-                self.conn_to_prev = None
-                if VERB:
-                    print("Stopping output queue thread")
-                self.conn_to_next.shutdown()
-                self.conn_to_next = None
-
-            # TODO: maybe delete some run-specific parameters (e.g., role)
-            # Clear node model
-            self.model = None
-            gc.collect()
-            return True
-        except:
-            return False
-
-    def shutdown(self) -> int:
-        """
-        Turn off the node - stop server, close sockets and stop thread.
+        Args:
+            req_type: type of HTTP request, can be "post" or "put"
+            addr: full address (http(s)://<ip>:<port>) of the target node
+            content: python dict containing the information
+            *
+            max_n_requests (default 100): maximum number of requests before failure
 
         Returns:
-            1 upon success, 0 otherwise (exception gets raised)
+            Response text (if successful - code in 200 range)
+            None if failed request
         """
-        if VERB:
-            print("[INFO] Shutting down")
+        if req_type.lower() == "get":
+            req_func = requests.get
+        elif req_type.lower() == "post":
+            req_func = requests.post
+        elif req_type.lower() == "put":
+            req_func = requests.put
+        else:
+            raise ValueError(f"Unsupported request type '{req_type}'")
 
+        ret = None
+        n_ret = 0
+        if self.verb:
+            log(f"[INFO] Sending {req_type} request to {addr}")
+            log(f"[INFO] Payload: {len(pickle.dumps(content))} Bytes")
         try:
-            assert self.stop_generation()
-            if VERB:
-                print("[INFO] Stopping HTTP server")
-            self.stop_webserv()
-            if VERB:
-                print("[INFO] Closing application")
-            return 1
-        except:
-            return 0
+            # Specify timeout
+            ret = req_func(
+                addr,
+                data=pickle.dumps(content),
+                timeout=1000,
+            )
+
+            if ret.status_code == 413:
+                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
+            logger_wp.debug(
+                f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
+            )
+        except requests.exceptions.Timeout:
+            if self.verb:
+                log("[INFO] Connection timed out!")
+            logger_wp.warning("Request timed out!")
+            n_ret += 1
+        except Exception:
+            logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
+            n_ret += 1
+
+        while (ret is None or ret.status_code != 200) and n_ret < max_n_requests:
+            if self.verb:
+                log(
+                    f"[INFO] Unable to reach node ({addr}) - retrying in 2s "
+                    f"({n_ret}/{max_n_requests})"
+                )
+            time.sleep(2)
+            try:
+                ret = req_func(
+                    addr,
+                    data=pickle.dumps(content),
+                    timeout=10000,
+                )
+                logger_wp.debug(
+                    f"""Successful {req_type} request sent to {addr} - code
+                    {ret.status_code}"""
+                )
+            except requests.exceptions.Timeout:
+                if self.verb:
+                    log("[INFO] Connection timed out!")
+                logger_wp.warning(f"Request timed out!")
+            except Exception:
+                logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
+            n_ret += 1
+
+        if ret is not None and 200 <= ret.status_code < 300:
+            return ret.text
+        return None
 
     def _launch_queue_threads(self):
         """
@@ -297,95 +303,12 @@ class GPTServer:
         if not start_only:
             assert self.conn_to_next and self.conn_to_prev
             if VERB:
-                print("[INFO] Starting queue threads")
+                log("[INFO] Starting queue threads")
 
             self.conn_to_prev.launch()
             self.conn_to_next.launch()
 
-    def _create_sockets(self):
-        """
-        Create sockets for communicating the intermediate results with the previous and
-        next nodes in the chain.
-
-        Starter nodes will open the connection towards the next node first, while all
-        other nodes will first connect to the previous ones (otherwise the application
-        would just wait indefinitely, as no node will connect with any other).
-        """
-        assert self.conn_to_prev is None and self.conn_to_next is None
-
-        if self.role != "starter" and (not self.prev_node or not self.next_node):
-            raise RuntimeError("Missing neighboring node info!")
-
-        if self.role == "starter":
-            # Only create socket if NOT in standalone mode
-            if self.next_node is not None and self.n_nodes != 1:
-                self.conn_to_next = OutputNodeConnection(
-                    self.node_config,
-                    next_node=self.next_node,
-                    queue=self.out_message_queue,
-                    event_callback=self.out_queue_not_empty,
-                    verb=VERB,
-                )
-        else:
-            assert self.next_node is not None and self.prev_node is not None
-
-        if self.prev_node is not None:
-            self.conn_to_prev = InputNodeConnection(
-                self.node_config,
-                prev_node=self.prev_node,
-                queue=self.in_message_queue,
-                event_callback=self.in_queue_not_empty,
-                verb=VERB,
-            )
-
-        if self.role != "starter":
-            self.conn_to_next = OutputNodeConnection(
-                self.node_config,
-                next_node=self.next_node,
-                queue=self.out_message_queue,
-                event_callback=self.out_queue_not_empty,
-                verb=VERB,
-            )
-
-    def _build_serv_resp(
-        self, in_msg: Dict[str, Any], distr_response: Tuple[Any, ...]
-    ) -> Dict[str, Any]:
-        """
-        Package the generated text as specified by the Ollama APIs.
-
-        All times should be expressed in NANOSECONDS.
-
-        Ref:
-        {
-          "model": "llama3",
-          "created_at": "2023-08-04T19:22:45.499127Z",
-          "response": "",
-          "done": true,
-          "context": [1, 2, 3],
-          "total_duration": 10706818083,
-          "load_duration": 6338219291,
-          "prompt_eval_count": 26,
-          "prompt_eval_duration": 130079000,
-          "eval_count": 259,
-          "eval_duration": 4232710000
-        }
-        """
-        out_msg = {}
-        out_msg["model"] = in_msg["model"]  # FIXME: use model type
-        out_msg["created_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-        out_msg["response"] = distr_response[0]
-        out_msg["done"] = True
-        out_msg["context"] = [distr_response[1]]
-        out_msg["total_duration"] = distr_response[2]
-        out_msg["load_duration"] = distr_response[3]
-        out_msg["prompt_eval_count"] = distr_response[4]
-        out_msg["prompt_eval_duration"] = distr_response[5]
-        out_msg["eval_count"] = distr_response[6]
-        out_msg["eval_duration"] = distr_response[7]
-
-        return out_msg
-
-    def _get_node_capabilities(self) -> JSONType:
+    def _get_node_capabilities(self) -> Dict:
         """
         Return the node capabilities to be sent as response of GET requests.
         The info is a JSON-serializable dict.
@@ -406,18 +329,18 @@ class GPTServer:
                 - active: "" if none, else HF name of the model, as rx at init
                 - available: list of available models, with the structure:
                     "available": [
-                      {
-                        "name": "model_name",  <-- from checkpoints dir (org/name)
-                        "hf_config": {
-                          "org": organization name (e.g., mistralai),
-                          "name": actual model name
+                        {
+                            "name": "model_name",  <-- from checkpoints dir (org/name)
+                            "hf_config": {
+                              "org": organization name (e.g., mistralai),
+                              "name": actual model name
+                            },
+                            "chunks": {
+                              "<n>nodes": [...],   <-- List of all the chunks (list dir)
+                              "<k>nodes": [...]
+                            }
                         },
-                        "chunks": {
-                          "<n>nodes": [...],   <-- List of all the chunks (list dir)
-                          "<k>nodes": [...]
-                        }
-                      },
-                      ...
+                        ...
                     ]
             - last_update: UNIX timestamp
             TODO
@@ -450,8 +373,9 @@ class StarterServer(GPTServer):
         "next_node": {},
         "model_config": {},
         "n_nodes": 0,
-        "n_samples": 0,
         "max_seq_length": None,
+        "n_local_layers": 0,
+        "model": "",
     }
 
     def __init__(
@@ -466,6 +390,7 @@ class StarterServer(GPTServer):
         dtype: Optional[str] = None,
         **kwargs,
     ):
+        self.all_nodes_config = node_config  # Must contain all nodes in the net
         super().__init__(
             node_config,
             node_type,
@@ -475,13 +400,25 @@ class StarterServer(GPTServer):
             dtype=dtype,
             **kwargs,
         )
+        self._config = self.all_nodes_config["nodes"]
+        self.own_config = self._config["starter"]
+        self.own_address = self.own_config["addr"]
+        self.own_comm_port = int(self.own_config["communication"]["port"])
 
-        self.own_config = self.node_config["nodes"]["starter"]
-        self.secondary_list = self.node_config["nodes"]["secondary"]
+        self.secondary_list = (
+            [] if "secondary" not in self._config else self._config["secondary"]
+        )
         self.n_secondary = len(self.secondary_list)
         self.nodes_registry = [{}] * self.n_secondary
         self.registered_secondaries = [False] * self.n_secondary
         self.n_nodes = 1 + self.n_secondary
+
+        self.start_webserv()
+
+        # TODO - FIXME: if implementing optimal secondary nodes selection, need to do
+        # this somewhere else - see configure_nodes comments
+        self.next_node = None if self.n_nodes == 1 else self.secondary_list[0]
+        self.prev_node = None if self.n_nodes == 1 else self.secondary_list[-1]
 
         if not model:
             raise ValueError("No model was specified!")
@@ -541,6 +478,80 @@ class StarterServer(GPTServer):
                 f"{self.model_config.block_size}"
             )
 
+    # ---------------------------------------------------------------------------------
+
+    def _create_sockets(self):
+        """
+        Create sockets for communicating the intermediate results with the previous and
+        next nodes in the chain.
+
+        Starter nodes open the connection towards the next node first.
+        """
+        assert self.conn_to_prev is None and self.conn_to_next is None
+
+        # FIXME: maybe not empty neighbors
+        if self.role != "starter" and (not self.prev_node or not self.next_node):
+            raise RuntimeError("Missing neighboring node info!")
+
+        # Only create socket if NOT in standalone mode
+        if self.next_node is not None and self.n_nodes != 1:
+            self.conn_to_next = OutputNodeConnection(
+                self.node_config,
+                next_node=self.next_node,
+                queue=self.out_message_queue,
+                event_callback=self.out_queue_not_empty,
+                verb=VERB,
+            )
+
+        if self.prev_node is not None:
+            self.conn_to_prev = InputNodeConnection(
+                self.node_config,
+                prev_node=self.prev_node,
+                queue=self.in_message_queue,
+                event_callback=self.in_queue_not_empty,
+                verb=VERB,
+            )
+
+    def _build_serv_resp(
+        self, in_msg: Dict[str, Any], distr_response: Tuple[Any, ...]
+    ) -> Dict[str, Any]:
+        """
+        Package the generated text as specified by the Ollama APIs.
+
+        All times should be expressed in NANOSECONDS.
+
+        Ref:
+        {
+          "model": "llama3",
+          "created_at": "2023-08-04T19:22:45.499127Z",
+          "response": "",
+          "done": true,
+          "context": [1, 2, 3],
+          "total_duration": 10706818083,
+          "load_duration": 6338219291,
+          "prompt_eval_count": 26,
+          "prompt_eval_duration": 130079000,
+          "eval_count": 259,
+          "eval_duration": 4232710000
+        }
+        """
+        out_msg = {}
+        out_msg["model"] = in_msg["model"]  # FIXME: use model type
+        out_msg["created_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+        out_msg["response"] = distr_response[0]
+        out_msg["done"] = True
+        out_msg["context"] = [distr_response[1]]
+        out_msg["total_duration"] = distr_response[2]
+        out_msg["load_duration"] = distr_response[3]
+        out_msg["prompt_eval_count"] = distr_response[4]
+        out_msg["prompt_eval_duration"] = distr_response[5]
+        out_msg["eval_count"] = distr_response[6]
+        out_msg["eval_duration"] = distr_response[7]
+
+        return out_msg
+
+    # ---------------------------------------------------------------------------------
+
     def node_registration(self, capabilities):
         """
         Given node info, see if it matches one of the secondary nodes in 'node_config',
@@ -586,11 +597,12 @@ class StarterServer(GPTServer):
         Returns true upon successful initialization.
         """
         try:
+            self.gptdistr.load_config(self.model_config)
             self.gptdistr.load_tokenizer(self.model_dir)
             self.gptdistr.init_model(self.n_local_layers, model_path=self.chunk_path)
             return True
         except Exception as e:
-            print(e)
+            log(e)
             return False
 
     def launch_starter(self):
@@ -667,9 +679,9 @@ class StarterServer(GPTServer):
         # Secondary nodes config
         for i, sec_node_cap in enumerate(self.nodes_registry):
             if self.verb:
-                print(f"Initializing secondary node n.{i}")
+                log(f"[INFO] Initializing secondary node n.{i}")
 
-            curr_msg = self.init_msg.copy()  # FIXME: maybe put before loop
+            curr_msg = self.init_msg.copy()
             curr_msg["role"] = f"secondary:{i}"
             curr_msg["model_config"] = self.model_config.asdict()
             curr_msg["n_nodes"] = self.n_nodes
@@ -679,14 +691,18 @@ class StarterServer(GPTServer):
             curr_msg["prev_node"] = prev
             curr_msg["next_node"] = next
             curr_msg["max_seq_length"] = self.model_seq_length
-            curr_msg["model_name"] = self.model_name
+            curr_msg["model"] = str(self.model)
 
-            # TODO: if secondary does not have model chunk, send it
+            # If secondary does not have model chunk, send it
             chunk_path = node_chunks_dir / f"model_secondary{i}.pth"
             if not is_model_chunk_available_secondary(
-                str(self.model_name), i, self.n_nodes, sec_node_cap
+                str(self.model), i, self.n_nodes, sec_node_cap
             ):
-                curr_msg["params"] = torch.load(chunk_path, device="cpu")
+                if self.verb:
+                    log(f"[INFO] Need to transmit chunk of {self.model} to node ", i)
+                curr_msg["params"] = torch.load(chunk_path, map_location="cpu")
+            elif self.verb:
+                log(f"[INFO] Node {i} has chunk of model {self.model}")
 
             # Update next and prev for next iteration
             prev = sec_node_cap
@@ -699,19 +715,19 @@ class StarterServer(GPTServer):
 
             # Send POST request
             target_addr = sec_node_cap["node_config"]["addr"]
-            target_port = sec_node_cap["addr"]["communication"]["port"]
+            target_port = sec_node_cap["node_config"]["communication"]["port"]
 
             addr = f"http://{target_addr}:{target_port}/init"
             out = out and (self._request_to_node("post", addr, curr_msg) is not None)
 
             if not out:
                 if self.verb:
-                    print("> Failed!")
+                    log("       > Failed!")
                 logger_wp.error(f"Failed to initialize secondary node {i}!")
                 return out
 
             if self.verb:
-                print("> Success!")
+                log("       > Success!")
             logger_wp.info(f"Secondary node {i} was initialized successfully")
 
         return out
@@ -729,96 +745,11 @@ class StarterServer(GPTServer):
             out *= self._request_to_node("put", addr, "")
         return out
 
-    def _request_to_node(
-        self,
-        req_type: str,
-        addr: str,
-        content: Optional[Any] = None,
-        max_n_requests: int = 100,
-    ) -> Any:
-        """
-        Send an HTTP request containing a json-formatted string to a specified
-        target node.
-
-        Args:
-            req_type: type of HTTP request, can be "post" or "put"
-            addr: full address (http(s)://<ip>:<port>) of the target node
-            content: python dict containing the information
-            max_n_requests: maximum number of requests before failure
-
-        Returns:
-            1 if successful
-            0 if failed
-        """
-        if req_type.lower() == "get":
-            req_func = requests.get
-        elif req_type.lower() == "post":
-            req_func = requests.post
-        elif req_type.lower() == "put":
-            req_func = requests.put
-        else:
-            raise ValueError(f"Unsupported request type '{req_type}'")
-
-        ret = None
-        n_ret = 0
-        if self.verb:
-            print(f"Sending {req_type} request to {addr}")
-            print(f"Payload: {len(pickle.dumps(content))} Bytes")
-        try:
-            # Specify timeout
-            ret = req_func(
-                addr,
-                data=pickle.dumps(content) if content else None,
-                timeout=100,
-            )
-
-            if ret.status_code == 413:
-                raise ConnectionError(f"Max payload for {req_type} was exceeded!")
-            logger_wp.debug(
-                f"Successful {req_type} request sent to {addr} - code {ret.status_code}"
-            )
-        except requests.exceptions.Timeout:
-            if self.verb:
-                print("Connection timed out!")
-            logger_wp.warning("Request timed out!")
-            n_ret += 1
-        except:
-            logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
-            n_ret += 1
-        while (ret is None or ret.status_code != 200) and n_ret < max_n_requests:
-            if self.verb:
-                print(
-                    f"""Unable to reach node ({addr}) - retrying in 2s
-                    ({n_ret}/{max_n_requests})"""
-                )
-            time.sleep(2)
-            try:
-                ret = req_func(
-                    addr,
-                    data=pickle.dumps(content),
-                    timeout=10000,
-                )
-                logger_wp.debug(
-                    f"""Successful {req_type} request sent to {addr} - code
-                    {ret.status_code}"""
-                )
-            except requests.exceptions.Timeout:
-                if self.verb:
-                    print("Connection timed out!")
-                logger_wp.warning(f"Request timed out!")
-            except:
-                logger_wp.warning(f"Unable to submit {req_type} request sent to {addr}")
-            n_ret += 1
-
-        if ret is not None and ret.status_code == 200:
-            return ret.text
-        return None
-
     def process_user_prompt(self, http_msg_body: Dict[str, Any]):
         """
         Entrypoint for the user - will be called by POST
         """
-        # NOTE: for now, ignore the keys that are not "prompt"
+        # NOTE: for now, ignore the keys that are not "prompt" or "model"
         assert "model" in http_msg_body, "Missing 'model' key"
         new_prompt = http_msg_body["prompt"]
         if new_prompt == "":
@@ -829,6 +760,87 @@ class StarterServer(GPTServer):
 
         # Make sure to return something in here! (JSON resp)
         return self._build_serv_resp(http_msg_body, distr_resp)
+
+    def start_inference(self):
+        """
+        This method is meant to be ran as an independent thread.
+
+        Perform normal operation (open sockets, wait for communication from previous
+        node and forward activations to next one).
+        """
+        assert self.gptdistr.running.is_set(), "Model has not been initialized"
+
+        if self.conn_to_next:
+            self.conn_to_next.shutdown()
+            self.conn_to_next = None
+        if self.conn_to_prev:
+            self.conn_to_prev.shutdown()
+            self.conn_to_prev = None
+
+        # Configuration for all nodes
+        self._create_sockets()
+
+        if VERB:
+            log("[INFO] Starting generation loop")
+        logger_wp.info("Starting generation loop")
+        self.running.set()
+
+        self._launch_queue_threads()
+        self.gptdistr.starter_loop()
+
+    def stop_generation(self) -> bool:
+        """
+        Interrupt the current application run.
+
+        This method will:
+        1. Stop main loop (non-starters)
+        2. Stop connections (and queue threads)
+        3. Delete model
+
+        NOTE: this method does NOT turn the node off, it just un-initializes it; it will
+        leave the HTTP server UP, allowing to further initialization calls from any
+        starter node.
+        """
+        try:
+            self.running.clear()
+            if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
+                if VERB:
+                    log("Stopping input queue thread")
+                self.conn_to_prev.shutdown()
+                self.conn_to_prev = None
+                if VERB:
+                    log("Stopping output queue thread")
+                self.conn_to_next.shutdown()
+                self.conn_to_next = None
+
+            # TODO: maybe delete some run-specific parameters (e.g., role)
+            # Clear node model
+            self.model = None
+            gc.collect()
+            return True
+        except Exception:
+            return False
+
+    def shutdown(self) -> int:
+        """
+        Turn off the node - stop server, close sockets and stop thread.
+
+        Returns:
+            1 upon success, 0 otherwise (exception gets raised)
+        """
+        if VERB:
+            log("[INFO] Shutting down")
+
+        try:
+            assert self.stop_generation()
+            if VERB:
+                log("[INFO] Stopping HTTP server")
+            self.stop_webserv()
+            if VERB:
+                log("[INFO] Closing application")
+            return 1
+        except Exception:
+            return 0
 
     # ------------ REST ---------------------------------------------------------------
 
@@ -873,11 +885,12 @@ class StarterServer(GPTServer):
         Interface for secondary node registration.
         """
         if path[0] == "register":
-            content_type = cp.request.headers["Content-Type"]
-            raw_body = cp.request.body.read().decode("utf-8")
-            if "application/json" not in content_type:
-                return "Unsupported Media Type", 415
-            body = json.loads(raw_body)  # Should be node_capabilities
+            log(cp.request.headers)
+            # content_type = cp.request.headers["Content-Type"]
+            # if "application/json" not in content_type:
+            #     return "Unsupported Media Type", 415
+            raw_body = cp.request.body.read()
+            body = pickle.loads(raw_body)  # Should be node_capabilities
             out = self.node_registration(body)
             # If all nodes have registered
             if len(self.nodes_registry) >= len(self.secondary_list):
@@ -920,18 +933,151 @@ class SecondaryServer(GPTServer):
         )
         self.secondary_index = -1  # Not init
 
+        self.own_config = self.node_config
+        self.own_address = self.own_config["addr"]
+        self.own_comm_port = int(self.own_config["communication"]["port"])
+
+        self.start_webserv()
+
     # ---------------------------------------------------------------------------------
 
-    def register_at_starter(self):
+    def _create_sockets(self):
         """
-        Send PUT request to starter node containing capabilities.
+        Create sockets for communicating the intermediate results with the previous and
+        next nodes in the chain.
+
+        Secondary nodes will first connect to the previous ones (otherwise the
+        application would just wait indefinitely, as no node will connect with any
+        other).
         """
-        if not self.role != "starter":
-            raise AttributeError(
-                "`register_at_starter` can only be called on secondary nodes"
+        assert self.conn_to_prev is None and self.conn_to_next is None
+        if not self.prev_node or not self.next_node:
+            raise RuntimeError("Missing neighboring node info!")
+
+        assert self.next_node is not None and self.prev_node is not None
+
+        if self.prev_node is not None:
+            self.conn_to_prev = InputNodeConnection(
+                self.node_config,
+                prev_node=self.prev_node,
+                queue=self.in_message_queue,
+                event_callback=self.in_queue_not_empty,
+                verb=VERB,
             )
-        # TODO
-        pass
+
+        self.conn_to_next = OutputNodeConnection(
+            self.node_config,
+            next_node=self.next_node,
+            queue=self.out_message_queue,
+            event_callback=self.out_queue_not_empty,
+            verb=VERB,
+        )
+
+    # ---------------------------------------------------------------------------------
+
+    def register_at_starter(self, max_n_requests: int = 10):
+        """
+        Send PUT request to starter node (/register) containing capabilities.
+        """
+        starter_address = self.own_config["starter_server"]["addr"]
+        starter_port = self.own_config["starter_server"]["port"]
+        address = f"http://{starter_address}:{starter_port}/register"
+
+        resp = self._request_to_node(
+            "PUT", address, self.node_capabilities, max_n_requests=max_n_requests
+        )
+        if resp is not None:
+            if self.verb:
+                log("[INFO] Registered at starter node!")
+            self.registered_at_starter = True
+        else:
+            raise ConnectionError("Unable to reach starter node")
+
+    def start_inference(self):
+        """
+        This method is meant to be ran as an independent thread.
+
+        Perform normal operation (open sockets, wait for communication from previous
+        node and forward activations to next one).
+        """
+        assert self.gptdistr.running.is_set(), "Model has not been initialized"
+
+        if self.conn_to_next:
+            self.conn_to_next.shutdown()
+            self.conn_to_next = None
+        if self.conn_to_prev:
+            self.conn_to_prev.shutdown()
+            self.conn_to_prev = None
+
+        # Configuration for all nodes
+        self._create_sockets()
+
+        if VERB:
+            log("[INFO] Starting generation loop")
+        logger_wp.info("Starting generation loop")
+        self.running.set()
+
+        assert self.next_node is not None and self.prev_node is not None
+
+        self._launch_queue_threads()
+        self.gptdistr.secondary_loop()
+
+    def stop_generation(self) -> bool:
+        """
+        Interrupt the current application run.
+
+        This method will:
+        1. Stop main loop (non-starters)
+        2. Stop connections (and queue threads)
+        3. Delete model
+
+        NOTE: this method does NOT turn the node off, it just un-initializes it; it will
+        leave the HTTP server UP, allowing to further initialization calls from any
+        starter node.
+        """
+        try:
+            self.running.clear()
+            if VERB:
+                log("Stopping main thread")
+            self.inference_thread.join()
+            if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
+                if VERB:
+                    log("Stopping input queue thread")
+                self.conn_to_prev.shutdown()
+                self.conn_to_prev = None
+                if VERB:
+                    log("Stopping output queue thread")
+                self.conn_to_next.shutdown()
+                self.conn_to_next = None
+
+            # TODO: maybe delete some run-specific parameters (e.g., role)
+            # Clear node model
+            self.model = None
+            gc.collect()
+            return True
+        except Exception:
+            return False
+
+    def shutdown(self) -> int:
+        """
+        Turn off the node - stop server, close sockets and stop thread.
+
+        Returns:
+            1 upon success, 0 otherwise (exception gets raised)
+        """
+        if VERB:
+            log("[INFO] Shutting down")
+
+        try:
+            assert self.stop_generation()
+            if VERB:
+                log("[INFO] Stopping HTTP server")
+            self.stop_webserv()
+            if VERB:
+                log("[INFO] Closing application")
+            return 1
+        except Exception:
+            return 0
 
     # ------------ REST ---------------------------------------------------------------
 
@@ -963,15 +1109,13 @@ class SecondaryServer(GPTServer):
             [params] (model parameters - needed if no chunk path was passed)
             n_samples (number of produced samples)
         """
-        if (
-            self.role is None or "secondary" in self.role
-        ) and self.model is None:  # Only for non-init nodes
+        # FIXME: allow message in POST to change configuration if not running
+        if (self.role is None or "secondary" in self.role) and self.model is None:
             if len(path) > 0 and path[0] == "init":
-                assert not self.running.is_set()
+                assert not self.running.is_set()  # FIXME: remove
                 init_msg = pickle.loads(cp.request.body.read())
-                if self.role is None:
-                    self.role = init_msg["role"]
-                    self.secondary_index = int(self.role.split(":")[1])
+                self.role = init_msg["role"]
+                self.secondary_index = int(self.role.split(":")[1])
                 self.prev_node = init_msg["prev_node"]
                 self.next_node = init_msg["next_node"]
                 # Assume model config is not initialized
@@ -985,25 +1129,27 @@ class SecondaryServer(GPTServer):
                 )
 
                 # TODO: Read model and role, and determine whether chunk is owned
-                # If not, make sure model chunk was sent
-                # NOTE: secondary node should not have self.model_path (only
-                # checkpoints directory)
-                self.model_name = init_msg["model_name"]
+                # If not, make sure model chunk was sent (double check)
+                self.model = Path(init_msg["model"])
                 self.node_capabilities = self._get_node_capabilities()  # Updates them
 
                 # Determine whether to expect the chunk from the starter or not
                 chunk_expected = not is_model_chunk_available_secondary(
-                    self.model_name,
+                    str(self.model),
                     self.secondary_index,
                     self.n_nodes,
                     self.node_capabilities,
                 )
+                if self.verb:
+                    log(
+                        f"[DEBUG] Received msg:\n{dict((k, v) for k, v in init_msg.items() if k != 'params')}"
+                    )
+                    if chunk_expected:
+                        log("[INFO] Expecting to find chunk in init message")
 
-                model_org, model_name = self.model_name.split("/").apply()
-                self.model_path = (
+                self.chunk_path = (
                     self.ckpt_dir
-                    / model_org
-                    / model_name
+                    / self.model
                     / "chunks"
                     / f"{self.n_nodes}nodes"
                     / f"model_secondary{self.secondary_index}.pth"
@@ -1013,27 +1159,29 @@ class SecondaryServer(GPTServer):
                         "params" in init_msg
                     ), "Missing model chunk parameters from starter node!"
                     if self.verb:
-                        print("Received parameters from starter")
+                        log("[INFO] Received parameters from starter")
                     chunk_sd = init_msg["params"]
                     # TODO: save chunk in local filesystem - handle lack of space
-                    n_layers_detect = count_transformer_blocks(chunk_sd)
+                    self.gptdistr.load_config(self.model_config)
                     self.gptdistr.init_model(
-                        self.n_layers_local, model_parameters=chunk_sd
+                        self.n_layers_local,
+                        model_parameters=chunk_sd,
                     )
-
                     # Free memory
                     del chunk_sd
                     chunk_sd = None
                     gc.collect()
                 else:
                     if self.verb:
-                        print("Loading parameters from disk")
+                        log("[INFO] Loading parameters from disk")
+                    self.gptdistr.load_config(self.model_config)
                     self.gptdistr.init_model(
-                        self.n_layers_local, model_path=self.model_path
+                        self.n_layers_local,
+                        model_path=self.chunk_path,
                     )
 
                 if VERB:
-                    print(f"[INFO] Starting operation - {self.role} node")
+                    log(f"[INFO] Starting operation - {self.role} node")
 
                 self.inference_thread = threading.Thread(
                     target=self.start_inference, daemon=True
@@ -1063,7 +1211,7 @@ class SecondaryServer(GPTServer):
                 self._end_thr.start()
                 # self._end_thr.join()  # cannot wait, since thread stops server
                 if self.verb:
-                    print("[INFO] Node stopped through PUT request!")
+                    log("[INFO] Node stopped through PUT request!")
                 logger_wp.info("Received stopping directive")
                 cp.response.status = 200
             else:

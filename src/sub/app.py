@@ -178,7 +178,7 @@ class App:
             self.node_config = node_config
 
         if self.verb:
-            print("Loaded nodes config file")
+            print("[INFO] Loaded nodes config file")
 
         if self.role == "starter":
             if not model:
@@ -196,7 +196,7 @@ class App:
             self.n_secondary = len(self.node_config["nodes"]["secondary"])
             self.n_nodes = 1 + self.n_secondary
             if self.verb and self.n_nodes == 1:
-                print("Running in standalone mode!")
+                print("[INFO] Running in standalone mode!")
             self.own_config = self.node_config["nodes"]["starter"]
             self.own_addr = self.own_config["addr"]
             self.own_comm_port = self.own_config["communication"]["port"]
@@ -206,6 +206,7 @@ class App:
             self.gpt_serv = StarterServer(
                 node_config=self.node_config,
                 node_type=self.role,
+                model=self.model,
                 ckpt_dir=self.ckpt_dir,
                 max_seq_length=model_seq_length,
                 model_device=self.torch_device,
@@ -215,7 +216,7 @@ class App:
 
         elif "secondary" in self.role:
             # NOTE: the node_config should be the JSON spec of the node only
-            # Initialize secondary node
+            # Initialize secondary node (we can't know in advance the index)
             self.own_config = self.node_config
             self.own_addr = self.own_config["addr"]
             self.own_comm_port = self.own_config["communication"]["port"]
@@ -263,6 +264,8 @@ class App:
                 self.gpt_serv.stop_nodes()
                 print("Node was stopped!")
         else:
+            assert isinstance(self.gpt_serv, SecondaryServer)
+            self.gpt_serv.register_at_starter()
             try:
                 cp.engine.block()  # Same as while True: time.sleep(...)
             except KeyboardInterrupt:

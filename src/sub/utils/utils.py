@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import datetime
 import gc
 import math
 import os
@@ -695,9 +696,9 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
                             # We have a chunk
                             if p.parent.name not in tmp_mod_dict:
                                 # Create list
-                                tmp_mod_dict["p.parent.name"] = []
+                                tmp_mod_dict[p.parent.name] = []
                             # Append chunk name
-                            tmp_mod_dict["p.parent.name"].append(p.name)
+                            tmp_mod_dict[p.parent.name].append(p.name)
 
                     # Only add keys with non-empty lists
                     for k, v in tmp_mod_dict.items():
@@ -712,10 +713,10 @@ def get_available_models(ckpt_dir: Path) -> List[JSONType]:
 
 
 def is_model_chunk_available_secondary(
-    model_name: str,
+    model_name: FileType,
     node_ind: int,
     n_nodes: int,
-    node_capabilities: JSONType,
+    node_capabilities: Dict,
 ) -> bool:
     """
     Returns True if the `i`-th chunk for model `model_name` split among `n_nodes` nodes
@@ -729,11 +730,13 @@ def is_model_chunk_available_secondary(
         true: chunk is found
         false: otherwise
     """
+    if str(model_name) == "":
+        raise ValueError("No model name provided!")
     available_models = node_capabilities["model"]["available"]
     if not len(available_models):
         return False
     for model in available_models:
-        if model["name"] == model_name and "chunks" in model:
+        if model["name"] == str(model_name) and "chunks" in model:
             return (
                 f"model_secondary{node_ind}.pth" in model["chunks"][f"{n_nodes}nodes"]
             )
@@ -748,3 +751,10 @@ def save_config(config: "Config", checkpoint_dir: Path) -> None:
 
 def s_to_ns(timestamp_s):
     return int(timestamp_s * 1e9)
+
+
+def log(*args, **kwargs):
+    """Prepend the timestamp. Drop-in replacement for `print` function."""
+    formatted_time = "[" + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "]"
+    new_args = tuple([formatted_time] + list(args))
+    print(*new_args, **kwargs)

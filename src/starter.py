@@ -44,11 +44,11 @@ def main(args):
         assert out_stats_file.parent.is_dir()
 
     # Init. distributed model, config file from parser
-    gpt_distr = App(
+    app = App(
         node_type="starter",
-        config_file=args.nodes_config,
+        node_config=args.nodes_config,
         ckpt_dir=args.ckpt,
-        chunk_path=args.chunk,
+        model=args.model,
         device=args.device,
         dtype=args.dtype,
         model_seq_length=args.sequence_length,
@@ -57,24 +57,7 @@ def main(args):
     )
 
     # Operation (start now includes loop)
-    gpt_distr.start()
-    # # Print the stats to file (we are sure directory exists)
-    # if out_stats_file is not None:
-    #     # Output csv
-    #     existed = True
-    #     if not os.path.exists(out_stats_file):
-    #         existed = False
-    #     with open(out_stats_file, "a") as f:
-    #         # Format: datetime - number of samples - model info - total time
-    #         curr_ts = datetime.now()
-    #         if not existed:
-    #             # header
-    #             f.write(csv_header_stats + "\n")
-    #         f.write(
-    #             f"{curr_ts.strftime('%Y-%m-%d %H:%M:%S')},{len(gen_samples)},{gpt_distr.n_layers_tot},{gpt_distr.model_config.block_size},{gen_time}\n"
-    #         )
-    #         f.close()
-    #         print("Stats written to ", out_stats_file)
+    app.start()
 
 
 if __name__ == "__main__":
@@ -95,11 +78,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt",
         type=Path,
-        default=script_dir / "checkpoint",
+        default=script_dir / "checkpoints",
         help="folder containing the model files",
     )
     parser.add_argument(
-        "--chunk", type=Path, default=None, help="path of the model chunk"
+        "--model",
+        type=str,
+        default="custom/NanoLlama",
+        help="model name (format: <org>/<name>)",
     )
     parser.add_argument(
         "--nodes-config",
@@ -125,7 +111,7 @@ if __name__ == "__main__":
         sequence length of the model, i.e., maximum span of the attention window;
         if not specified, it will use the default model sequence length;
         allows to reduce RAM usage, as with a shorter context less cache is created.
-        """
+        """,
     )
     parser.add_argument(
         "--dtype",
@@ -137,8 +123,8 @@ if __name__ == "__main__":
         "--time-run",
         default=None,
         type=Path,
-        help="""optional path of the file where to store the run information and generation
-        time""",
+        help="""optional path of the file where to store the run information and
+        generation time""",
     )
     parser.add_argument("--seed", type=int, default=10137, help="set random seed")
     args = parser.parse_args()

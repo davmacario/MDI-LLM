@@ -9,7 +9,7 @@ from .plots import plot_tokens_per_time
 from .utils import (count_transformer_blocks, deserialize_params,
                     detect_stop_tokens, estimate_loss, find_eot,
                     get_available_models, get_lr, get_obj_size, load_from_hf,
-                    load_from_pt, load_model_config, load_sd, loading_bar,
+                    load_from_pt, load_model_config, load_sd, loading_bar, log,
                     remove_prefix, s_to_ns, serialize_params, split_and_store,
                     split_parameters, waiting_animation)
 
@@ -43,4 +43,5 @@ __all__ = [
     "typing",
     "get_available_models",
     "load_model_config",
+    "log",
 ]

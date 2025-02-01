@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import torch
+
 from sub import App
 
 # -----------------------------------------------------------------------------
@@ -34,19 +35,17 @@ def main(args):
         fhdlr.setFormatter(formatter)
         log_wp.addHandler(fhdlr)
 
-    role = f"secondary:{args.nodes_config[1]}"
-    config_path = Path(args.nodes_config[0])
+    role = "secondary"
 
-    gpt_distr = App(
+    app = App(
         node_type=role,
-        config_file=config_path,
-        chunk_path=args.chunk,
+        node_config=args.node_config,
         device=args.device,
         dtype=args.dtype,
         verb=args.verb,
     )
 
-    gpt_distr.start()
+    app.start()
 
 
 if __name__ == "__main__":
@@ -61,23 +60,17 @@ if __name__ == "__main__":
         action="store_true",
         help="compile Torch module (only for Torch>=2.0.0)",
     )
-
     parser.add_argument(
-        "--chunk",
+        "--ckpt",
         type=Path,
-        default=None,
-        help="""optional path of the model chunk on disk - if not provided, need to ensure
-        the starter node will transmit the model chunk.""",
+        default=script_dir / "checkpoints",
+        help="""path of the checkpoints directory (where all models are placed).""",
     )
-    # The following achieves: (--nodes-config & IND) | --secondary-config
     parser.add_argument(
-        "--nodes-config",
-        type=str,
-        metavar=("CONFIG-PATH", "SECONDARY-INDEX"),
-        nargs=2,  # 2 args total
-        default=[os.path.join(script_dir, "settings_distr", "configuration.json"), 0],
-        help="""path to the JSON configuration file for the nodes followed by the
-        positional index of the intermediate node""",
+        "--node-config",
+        type=Path,
+        default=script_dir / "settings_distr" / "secondary" / "node0_local.json",
+        help="""path to the JSON configuration file for the secondary node.""",
     )
     parser.add_argument(
         "--device",

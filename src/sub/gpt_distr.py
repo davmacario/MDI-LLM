@@ -47,7 +47,7 @@ from sub.submodels import SecondaryNode, StarterNode
 from sub.tokenizer import Tokenizer
 from sub.utils import (catch_loop_errors, count_transformer_blocks,
                        detect_stop_tokens, find_eot, get_available_models,
-                       load_sd, s_to_ns, waiting_animation)
+                       load_sd, log, s_to_ns, waiting_animation)
 from sub.utils.typing import FileType, JSONObject, JSONType
 
 script_dir = Path(os.path.dirname(__file__))
@@ -195,7 +195,8 @@ class GPTDistributed:
             # NOTE: index of secondary will be inferred from POST for initialization
             # NOTE: `node_config` for secondary node only contains its own info
             self.own_config = node_config
-            self.starter_addr = self.own_config["communication"]["starter_addr"]
+            self.starter_addr = self.own_config["starter_server"]["addr"]
+            self.starter_port = self.own_config["starter_server"]["port"]
 
         # Init own info
         self.own_addr = self.own_config["addr"]
@@ -229,7 +230,7 @@ class GPTDistributed:
         new_id = self.n_samples
         self.n_samples += 1
         if self.verb:
-            print(f"Created new sample {new_id}")
+            log(f"[INFO] GPTDistr: Created new sample {new_id}")
 
         # NOTE: self.samples[new_id] will be initialized in the loop
         prompt_len = len(new_idx.squeeze())
@@ -262,8 +263,8 @@ class GPTDistributed:
         out_truncated_no_prompt = out_truncated[0][prompt_len:]
 
         if self.verb:
-            print(
-                f"Truncated sample {new_id} to {n_out_tokens}/"
+            log(
+                f"[INFO] GPTDistr: Truncated sample {new_id} to {n_out_tokens}/"
                 f"{len(out_sample_tensor.squeeze())}"
             )
         t_start_decode = s_to_ns(time.time())
@@ -325,9 +326,15 @@ class GPTDistributed:
             and self.out_queue_not_empty is not None
         )
 
+    def load_config(self, model_config: Config):
+        """
+        Load the model config as class attribute
+        """
+        self.model_config = model_config
+
     def init_model(
         self,
-        n_transf_layers: int,
+        n_local_layers: int,
         *,
         model_path: Optional[Path] = None,
         model_parameters: Optional[Dict[str, Any]] = None,
@@ -337,6 +344,7 @@ class GPTDistributed:
         (self.model_device).
 
         Args:
+            model_config: Config object for the used model
             n_transf_layers: number of transformer layers of the local model; required
                 for initializing the submodel.
             *
@@ -345,9 +353,14 @@ class GPTDistributed:
             model_parameters: alternatively, the model parameters may already be present
                 in memory (e.g., loaded previously or received by starter node)
         """
-        assert self.model_config is not None, "No model configuration was found!"
+        # FIXME: allow to redefine model (change chunk/config)
+        # This method can only be called if the node is "inactive", i.e., not running
+        # inference
         assert self.model is None, "The model was already initialized!"
         assert self.model_device is not None, "No device was specified"
+        assert (
+            self.model_config is not None
+        ), "The model config was not loaded! Need to call `load_config` first."
 
         if not (model_path or model_parameters):
             raise ValueError(
@@ -360,23 +373,23 @@ class GPTDistributed:
         # 3. if the dtype was overridden, cast weights
         # 4. load parameters to model
         if self.verb:
-            print("Initializing empty local model")
+            log("[INFO] GPTDistr: Initializing empty local model")
 
-        self.n_layers_local = n_transf_layers
+        self.n_layers_local = n_local_layers
         Model_class = StarterNode if "starter" in self.role else SecondaryNode
         try:
-            self.model = Model_class(self.model_config, n_transf_layers).to_empty(
+            self.model = Model_class(self.model_config, n_local_layers).to_empty(
                 device=self.model_device
             )
         except OutOfMemoryError:  # FIXME: may not be right error
             with accelerate.init_empty_weights():
-                self.model = Model_class(self.model_config, n_transf_layers).to("meta")
+                self.model = Model_class(self.model_config, n_local_layers).to("meta")
 
         assert self.model is not None
 
         if self.verb:
-            print("Loading parameters")
-            print(f"Using dtype {self.ptdtype}")
+            log("[INFO] GPTDistr: Loading parameters")
+            log(f"[INFO] GPTDistr: Using dtype {self.ptdtype}")
 
         # TODO: switch to "empty" models (torch >= 2.0)
         if model_parameters:
@@ -406,23 +419,28 @@ class GPTDistributed:
         assert self.model, "The model was not correctly created"
 
         if self.max_seq_length:
-            print(f"[DEBUG] Truncating context length to {self.max_seq_length}")
+            log(f"[DEBUG] Truncating context length to {self.max_seq_length}")
             self.model.max_seq_length = self.max_seq_length
         else:
             # Use default value
             self.max_seq_length = self.model.max_seq_length
 
         if self.verb:
-            print(f"Moving model to {self.torch_device}")
+            log(f"[INFO] GPTDistr: Moving model to {self.torch_device}")
         self.model = self.model.to(self.torch_device)
 
         if self.compile and hasattr(torch, "compile"):
             if self.verb:
-                print("Compiling local model - this may take a while", end="\r")
+                log(
+                    "[INFO] GPTDistr: Compiling local model - this may take a while",
+                    end="\r",
+                )
             try:
                 self.model = torch.compile(self.model)
                 if self.verb:
-                    print("Model compiled!                                ")
+                    log(
+                        "[INFO] GPTDistr: Model compiled!                                "
+                    )
             except RuntimeError as e:
                 warnings.warn(f"Unable to compile model! {e}")
         elif self.compile and not hasattr(torch, "compile"):
@@ -452,28 +470,34 @@ class GPTDistributed:
             True if the operation was successful
         """
         if self.verb:
-            print("Loading tokenizer", end="")
+            log("[INFO] GPTDistr: Loading tokenizer")
         # FIXME: this is just to give priority to HF; some tokenizer_config.json files
         # (Llama 2) are broken...
         try:
             self.tok = Tokenizer(tokenizer_dir, force_backend="huggingface")
+            log("[INFO] Using HF backend")
         except:
             self.tok = Tokenizer(tokenizer_dir)
+            log("[INFO] Using Sentencepiece backend")
         tok_dir_path = (
             Path(tokenizer_dir) if isinstance(tokenizer_dir, str) else tokenizer_dir
         )
         if not has_prompt_style(tok_dir_path):
-            assert self.model_config is not None
+            assert (
+                self.model_config is not None
+            ), "Model config is missing. Make sure to call the `load_config` method."
+            log("[INFO] Picking up prompt style from model config")
             self.prompt_style = PromptStyle.from_config(self.model_config)
         else:
+            log("[INFO] Loading prompt style from file")
             self.prompt_style = load_prompt_style(tok_dir_path)
 
         if self.verb:
-            print(f"Prompt style: {type(self.prompt_style)}")
+            log(f"[INFO] GPTDistr: Prompt style: {type(self.prompt_style)}")
 
         self.stop_tokens = self.prompt_style.stop_tokens(self.tok)
         if self.verb:
-            print("Tokenizer and prompt style have been loaded!")
+            log("[INFO] GPTDistr: Tokenizer and prompt style have been loaded!")
 
     # ----- Private -------------------------------------------------------------------
 
@@ -496,7 +520,7 @@ class GPTDistributed:
             self.model_device = DEFAULT_DEVICE
         self.torch_device = torch.device(self.model_device)
         if self.verb:
-            print(f"Using device: {self.model_device}")
+            log(f"[INFO] GPTDistr: Using device: {self.model_device}")
 
     def _select_dtype(self, dtype):
         """
@@ -571,7 +595,7 @@ class GPTDistributed:
             id: sample ID
         """
         if self.verb:
-            print("[DEBUG] Releasing caches")
+            log("[INFO] GPTDistr: Releasing caches")
         # FIXME: maybe try-except to prevent issues if key not found for some reason
         # Find a clean way, as try-except should be done for all vars
         del self.T_i[id]
@@ -636,7 +660,7 @@ class GPTDistributed:
         start_time = time.time()
 
         if self.verb:
-            print("[INFO] Launching processing loop")
+            log("[INFO] GPTDistr: Launching processing loop")
         loading_thread.start()
         with torch.inference_mode(), ctx, catch_loop_errors(
             running_event=self.running, event_to_be_set=[event_stop]
@@ -712,7 +736,7 @@ class GPTDistributed:
                             out_msg = self._build_msg(idx_cond, sample_id)
                         else:
                             # Generation finished
-                            print(
+                            log(
                                 f"[DEBUG] Finished sample {sample_id}"
                                 + f"{' - early detection' if stopping_detected else ''}"
                             )
@@ -734,7 +758,7 @@ class GPTDistributed:
                         self.out_queue_not_empty.set()
 
         if self.verb:
-            print("[INFO] Stopping main thread (starter)")
+            log("[INFO] GPTDistr: Stopping main thread (starter)")
 
     def secondary_loop(self) -> None:
         """
@@ -772,7 +796,7 @@ class GPTDistributed:
         )
         iter = 0
 
-        print("[INFO] Launching processing loop")
+        log("[INFO] Launching processing loop")
         loading_thread.start()
         with ctx, torch.inference_mode(), catch_loop_errors(
             running_event=self.running, event_to_be_set=[event_stop]
@@ -787,7 +811,7 @@ class GPTDistributed:
                     sample_id = in_msg["sample_index"]
 
                     if "stop" in in_msg and in_msg["stop"]:
-                        print(f"[DEBUG] Finished sample {sample_id}")
+                        log(f"[DEBUG] Finished sample {sample_id}")
                         # Delete cached variables for sample id
                         self._delete_sample_caches(sample_id)
 
@@ -819,4 +843,4 @@ class GPTDistributed:
                         iter += 1
 
         if self.verb:
-            print("Node inference loop stopped")
+            log("[INFO] GPTDistr: Node inference loop stopped")
