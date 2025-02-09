@@ -302,7 +302,7 @@ class GPTServer:
 
         if not start_only:
             assert self.conn_to_next and self.conn_to_prev
-            if VERB:
+            if self.verb:
                 log("[INFO] Starting queue threads")
 
             self.conn_to_prev.launch()
@@ -420,6 +420,7 @@ class StarterServer(GPTServer):
         self.next_node = None if self.n_nodes == 1 else self.secondary_list[0]
         self.prev_node = None if self.n_nodes == 1 else self.secondary_list[-1]
 
+        # TODO: allow selecting model after - using HTTP request
         if not model:
             raise ValueError("No model was specified!")
 
@@ -493,23 +494,25 @@ class StarterServer(GPTServer):
         if self.role != "starter" and (not self.prev_node or not self.next_node):
             raise RuntimeError("Missing neighboring node info!")
 
+        print(self.own_config)
+
         # Only create socket if NOT in standalone mode
         if self.next_node is not None and self.n_nodes != 1:
             self.conn_to_next = OutputNodeConnection(
-                self.node_config,
+                self.own_config,
                 next_node=self.next_node,
                 queue=self.out_message_queue,
                 event_callback=self.out_queue_not_empty,
-                verb=VERB,
+                verb=self.verb,
             )
 
         if self.prev_node is not None:
             self.conn_to_prev = InputNodeConnection(
-                self.node_config,
+                self.own_config,
                 prev_node=self.prev_node,
                 queue=self.in_message_queue,
                 event_callback=self.in_queue_not_empty,
-                verb=VERB,
+                verb=self.verb,
             )
 
     def _build_serv_resp(
@@ -780,7 +783,7 @@ class StarterServer(GPTServer):
         # Configuration for all nodes
         self._create_sockets()
 
-        if VERB:
+        if self.verb:
             log("[INFO] Starting generation loop")
         logger_wp.info("Starting generation loop")
         self.running.set()
@@ -804,11 +807,11 @@ class StarterServer(GPTServer):
         try:
             self.running.clear()
             if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
-                if VERB:
+                if self.verb:
                     log("Stopping input queue thread")
                 self.conn_to_prev.shutdown()
                 self.conn_to_prev = None
-                if VERB:
+                if self.verb:
                     log("Stopping output queue thread")
                 self.conn_to_next.shutdown()
                 self.conn_to_next = None
@@ -828,15 +831,15 @@ class StarterServer(GPTServer):
         Returns:
             1 upon success, 0 otherwise (exception gets raised)
         """
-        if VERB:
+        if self.verb:
             log("[INFO] Shutting down")
 
         try:
             assert self.stop_generation()
-            if VERB:
+            if self.verb:
                 log("[INFO] Stopping HTTP server")
             self.stop_webserv()
-            if VERB:
+            if self.verb:
                 log("[INFO] Closing application")
             return 1
         except Exception:
@@ -954,23 +957,20 @@ class SecondaryServer(GPTServer):
         if not self.prev_node or not self.next_node:
             raise RuntimeError("Missing neighboring node info!")
 
-        assert self.next_node is not None and self.prev_node is not None
-
-        if self.prev_node is not None:
-            self.conn_to_prev = InputNodeConnection(
-                self.node_config,
-                prev_node=self.prev_node,
-                queue=self.in_message_queue,
-                event_callback=self.in_queue_not_empty,
-                verb=VERB,
-            )
+        self.conn_to_prev = InputNodeConnection(
+            self.own_config,
+            prev_node=self.prev_node,
+            queue=self.in_message_queue,
+            event_callback=self.in_queue_not_empty,
+            verb=self.verb,
+        )
 
         self.conn_to_next = OutputNodeConnection(
-            self.node_config,
+            self.own_config,
             next_node=self.next_node,
             queue=self.out_message_queue,
             event_callback=self.out_queue_not_empty,
-            verb=VERB,
+            verb=self.verb,
         )
 
     # ---------------------------------------------------------------------------------
@@ -1012,7 +1012,7 @@ class SecondaryServer(GPTServer):
         # Configuration for all nodes
         self._create_sockets()
 
-        if VERB:
+        if self.verb:
             log("[INFO] Starting generation loop")
         logger_wp.info("Starting generation loop")
         self.running.set()
@@ -1037,15 +1037,15 @@ class SecondaryServer(GPTServer):
         """
         try:
             self.running.clear()
-            if VERB:
+            if self.verb:
                 log("Stopping main thread")
             self.inference_thread.join()
             if self.n_nodes > 1 and self.conn_to_prev and self.conn_to_next:
-                if VERB:
+                if self.verb:
                     log("Stopping input queue thread")
                 self.conn_to_prev.shutdown()
                 self.conn_to_prev = None
-                if VERB:
+                if self.verb:
                     log("Stopping output queue thread")
                 self.conn_to_next.shutdown()
                 self.conn_to_next = None
@@ -1065,15 +1065,15 @@ class SecondaryServer(GPTServer):
         Returns:
             1 upon success, 0 otherwise (exception gets raised)
         """
-        if VERB:
+        if self.verb:
             log("[INFO] Shutting down")
 
         try:
             assert self.stop_generation()
-            if VERB:
+            if self.verb:
                 log("[INFO] Stopping HTTP server")
             self.stop_webserv()
-            if VERB:
+            if self.verb:
                 log("[INFO] Closing application")
             return 1
         except Exception:
@@ -1180,7 +1180,7 @@ class SecondaryServer(GPTServer):
                         model_path=self.chunk_path,
                     )
 
-                if VERB:
+                if self.verb:
                     log(f"[INFO] Starting operation - {self.role} node")
 
                 self.inference_thread = threading.Thread(

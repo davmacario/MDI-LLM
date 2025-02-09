@@ -8,6 +8,7 @@ from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
 from .config import HEADERLENGTH
+from .utils import log
 
 loopsigns = ["|", "/", "-", "\\"]
 
@@ -37,7 +38,7 @@ class NodeConnection:
         Launch thread with 'run' as target.
         """
         if self.verb:
-            print(f"[INFO] Starting {self.name.replace('_', ' ')} thread")
+            log(f"[INFO] Starting {self.name.replace('_', ' ')} thread")
         self.running.set()
         self.running_thread = threading.Thread(
             target=self.run, name=self.name, daemon=True, kwargs=kwargs
@@ -99,9 +100,9 @@ class InputNodeConnection(NodeConnection):
                 connection
             **kwargs
         """
-        if not "addr" in config:
+        if "addr" not in config:
             raise ValueError("Missing IP address in configuration")
-        if not "inference" in config or not "port_in" in config["inference"]:
+        if "inference" not in config or "port_in" not in config["inference"]:
             raise ValueError("Missing input port in configuration")
 
         super().__init__(**kwargs)
@@ -116,17 +117,20 @@ class InputNodeConnection(NodeConnection):
         failing = True
         tries = 0
         if self.verb:
-            print("[INFO] Opening socket to previous node")
+            log("[INFO] Opening socket to previous node")
         while failing and tries < max_tries:
             try:
+                log(
+                    f"[DEBUG] Binding address {self.config['addr']}:{self.config['inference']['port_in']}"
+                )
                 self.sock_to_prev.bind(
                     (self.config["addr"], self.config["inference"]["port_in"])
                 )
             except Exception as e:
-                print(e)
+                log(e)
                 tries += 1
                 if self.verb:
-                    print(
+                    log(
                         "> Unable to bind socket address; retrying in 1s "
                         f"{loopsigns[tries % 4]}",
                         end="\r",
@@ -139,7 +143,7 @@ class InputNodeConnection(NodeConnection):
             raise ConnectionError("Unable to connect to previous node!")
 
         if self.verb:
-            print("[INFO] Connecting to previous node                      ")
+            log("[INFO] Connecting to previous node                      ")
 
         self.sock_to_prev.listen(1)
 
@@ -153,7 +157,7 @@ class InputNodeConnection(NodeConnection):
                 self.sock_to_prev_properties[0].close()
 
         if self.verb and connected:
-            print("> Connection with previous node established!                     ")
+            log("> Connection with previous node established!                     ")
 
     def recv_msg(self, size: int) -> bytes:
         """
@@ -174,7 +178,7 @@ class InputNodeConnection(NodeConnection):
                 msg = self.sock_to_prev_properties[0].recv(size - len(full_msg))
                 if not msg:
                     # Prev node shut connection down (error)
-                    print("[THR] Connection was terminated unexpectedly!")
+                    log("[THR] Connection was terminated unexpectedly!")
                     self.running.clear()
                 full_msg += msg
             except OSError:
@@ -214,13 +218,13 @@ class InputNodeConnection(NodeConnection):
                 self.queue_not_empty.set()
 
         if self.verb:
-            print("[THR] Input queue thread stopped")
+            log("[THR] Input queue thread stopped")
 
     def shutdown(self):
         self.running.clear()
         self.running_thread.join(timeout=3)
         if self.verb:
-            print("[THR] Closing input socket")
+            log("[THR] Closing input socket")
         try:
             self.sock_to_prev_properties[0].close()
         except:
@@ -284,7 +288,9 @@ class OutputNodeConnection(NodeConnection):
         connected = False
         tries = 0
         if self.verb:
-            print("[INFO] Opening socket to next node")
+            log(
+                f"[INFO] Opening socket to next node - {self.next_node_info['addr']}:{self.next_node_info['inference']['port_in']}"
+            )
         while not connected and tries < max_tries:
             try:
                 self.sock_to_next = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -302,12 +308,13 @@ class OutputNodeConnection(NodeConnection):
                     )
                 )
                 if self.verb:
-                    print("Connected to next node!")
-            except:
+                    log("Connected to next node!")
+            except Exception as e:
+                log(e)
                 # Can either fail when binding or when connecting
                 tries += 1
                 if self.verb:
-                    print(
+                    log(
                         "> Unable to connect; retrying in 1s "
                         f"{loopsigns[tries % 4]}",
                         end="\r",
@@ -317,10 +324,11 @@ class OutputNodeConnection(NodeConnection):
                 connected = True
 
         if not connected:
+            print("/n")
             raise ConnectionError("Unable to connect to next node!")
 
         if self.verb:
-            print("> Connection with next node established!               ")
+            log("> Connection with next node established!               ")
 
     def send_msg(self, data: Any):
         """
@@ -353,11 +361,11 @@ class OutputNodeConnection(NodeConnection):
                 self.send_msg(tx_msg)
 
         if self.verb:
-            print("[THR] Output queue thread stopped")
+            log("[THR] Output queue thread stopped")
 
     def shutdown(self):
         self.running.clear()
         self.running_thread.join()
         if self.verb:
-            print("[THR] Closing output socket")
+            log("[THR] Closing output socket")
         self.sock_to_next.close()
