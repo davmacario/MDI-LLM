@@ -11,6 +11,10 @@ the Edge" -- M.S. Thesis (Summer 2024)
 
 ---
 
+[Publication](https://arxiv.org/abs/2505.18164) - Winner of "Best Paper Award" @ IEEE LANMAN 2025
+
+---
+
 This repository contains the implementation of Model-Distributed Inference for
 the [litGPT](https://github.com/Lightning-AI/litgpt) framework.
 
